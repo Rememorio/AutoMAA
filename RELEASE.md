@@ -73,6 +73,7 @@ npm run docs:build
 ```bash
 swift test
 ./scripts/build-app.sh
+./scripts/test-updater.sh
 codesign --verify --deep --strict --verbose=2 .build/AutoMAA.app
 ```
 
@@ -130,6 +131,7 @@ hdiutil verify "dist/AutoMAA-X.Y.Z-macOS-arm64.dmg"
 - `Applications` 是指向 `/Applications` 的符号链接；
 - `codesign --verify --deep --strict` 通过；
 - App 和 `AutoMAARunner` 都是 arm64；
+- App 内包含可执行的 `AutoMAAUpdater`，并已通过隔离临时目录中的替换冒烟测试；
 - Info.plist 版本正确；
 - 从 DMG 中能够实际启动 App，退出后能够正常卸载镜像。
 
@@ -179,6 +181,8 @@ git ls-remote origin "refs/tags/vX.Y.Z"
 
 重新下载两个附件，在独立临时目录中执行 `.sha256` 校验，并与本地已验证的 DMG 做字节比较。最后从未登录状态打开 Release 页面，确认 README 徽章、下载链接、说明和附件均可访问。
 
+应用内更新依赖 Release 附件的固定命名和公开元数据。发布后还要确认 `releases/latest` 指向本次版本，DMG 与 `.sha256` 的名称、大小和下载地址均正确；不要静默替换已经公开的附件。
+
 ## 8. 发布后处理
 
 - 在支持的 macOS 版本上从 Release 下载并安装一次；
@@ -195,6 +199,7 @@ git ls-remote origin "refs/tags/vX.Y.Z"
 - [ ] 文档站构建通过，安装与常见问题页面已同步
 - [ ] 仓库不含用户配置、敏感信息或构建产物
 - [ ] `swift test` 通过
+- [ ] 更新器替换冒烟测试通过
 - [ ] Release App 构建和代码签名校验通过
 - [ ] 人工冒烟范围与未验证项已记录
 - [ ] DMG、挂载结构和 SHA-256 校验通过

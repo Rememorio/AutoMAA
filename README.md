@@ -31,6 +31,7 @@ MAA 很擅长完成单个客户端中的游戏任务；当日常扩展到多个�
 - 为每个账号独立配置理智作战、公开招募、基建和奖励领取。
 - 记录当天已经完成的步骤，失败后可以续跑，不重复消耗已完成任务。
 - 通过 macOS LaunchAgent 定时运行，也可以随时从图形界面手动启动或安全停止。
+- 自动检查正式 GitHub Release，下载并完成多重校验后可重启立即更新 AutoMAA。
 
 ## AutoMAA 与 MAA 的关系
 
@@ -102,7 +103,7 @@ maa version
 
 图文步骤、安全解释和校验命令见文档站的[下载与安装](https://rememorio.github.io/AutoMAA/guide/installation)；请勿全局关闭 Gatekeeper。
 
-安装完成后，AutoMAA 的更新与游戏包体更新相互独立：新版本 AutoMAA 请从 Releases 重新下载安装；MaaCore 与资源可在 AutoMAA 中更新，游戏的大版本更新仍需在游戏运行环境中手动完成。
+安装完成后，AutoMAA 的更新与游戏包体更新相互独立。`v0.1.1` 起，AutoMAA 会在启动时检查本项目的正式 GitHub Release，也可以在“全局设置”中手动检查；更新包通过附件大小、SHA-256、Bundle ID、版本、架构和代码签名校验后，可选择“重启并立即更新”。`v0.1.0` 需要先从 Releases 手动安装一次 `v0.1.1`。MaaCore 与资源仍由 `maa-cli` 管理，游戏大版本更新仍需在游戏运行环境中手动完成。
 
 ## 快速开始
 
@@ -129,6 +130,7 @@ AutoMAA 的用户数据保存在：
 ├── execution-state.json    # 当日断点
 ├── history.json            # 运行历史
 ├── Logs/                   # 日志
+├── Updates/                # 已下载、待安装的 AutoMAA 更新
 └── MAA/                    # 自动生成的 Profile 与任务文件
 ```
 
@@ -155,6 +157,12 @@ open .build/AutoMAA.app
 ```
 
 产物位于 `dist/`，并同时生成 SHA-256 校验文件。若修改了图标母图，可运行 `./scripts/build-icon.sh` 重新生成 `.icns`。
+
+在临时目录中验证更新辅助程序的替换、校验和结果回写：
+
+```bash
+./scripts/test-updater.sh
+```
 
 本地预览文档站：
 

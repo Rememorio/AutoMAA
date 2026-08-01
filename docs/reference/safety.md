@@ -10,6 +10,8 @@ AutoMAA 会启动和关闭游戏客户端，并调用 MAA 执行游戏内操作�
 - 调用本机 `maa-cli`；
 - 记录步骤结果与必要错误信息；
 - 安装用户主动启用的 LaunchAgent 定时任务。
+- 启动时向 GitHub Releases API 查询 AutoMAA 的最新正式版本；
+- 经用户确认后下载、校验并替换 AutoMAA.app。
 
 ## AutoMAA 不会做什么
 
@@ -20,7 +22,7 @@ AutoMAA 会启动和关闭游戏客户端，并调用 MAA 执行游戏内操作�
 - 将账号、日志或配置上传到 AutoMAA 服务端；
 - 静默启动两个客户端并行操作。
 
-AutoMAA 本身没有云端账号系统。GitHub Pages 文档站是静态站点，不接收 AutoMAA 配置或运行数据。
+AutoMAA 本身没有云端账号系统。版本检查只向 `api.github.com` 请求公开 Release 信息，下载只使用本项目 Release 的公开附件，不会附带账号、配置或日志。GitHub Pages 文档站是静态站点，不接收 AutoMAA 配置或运行数据。
 
 ## 日志分享
 
@@ -37,5 +39,7 @@ AutoMAA 本身没有云端账号系统。GitHub Pages 文档站是静态站点�
 ## 安装包信任
 
 当前临时签名版本会触发 macOS Gatekeeper 提示。只从官方 Release 下载、核验 SHA-256，并使用系统提供的单 App“仍要打开”流程。详见[下载与安装](../guide/installation)。
+
+应用内更新会再次校验 GitHub 记录的附件大小、Release 附带的 SHA-256、应用 Bundle ID、版本、arm64 架构和 macOS 代码签名。当前为临时代码签名，它能够检测下载或复制过程中的篡改，但不能替代未来的 Developer ID 签名与 Apple 公证。
 
 项目未来完成 Developer ID 签名与公证后，应以新的官方文档为准。

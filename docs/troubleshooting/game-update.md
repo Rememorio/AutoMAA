@@ -7,7 +7,7 @@
 | 游戏 App 包体 | 用户在当前游戏运行环境中手动更新 |
 | 游戏首次启动的数据下载与解压 | 游戏客户端，由用户等待和确认 |
 | MaaCore 与识别资源 | `maa-cli` / AutoMAA“立即更新资源” |
-| AutoMAA App | 从本项目 GitHub Releases 下载新版本 |
+| AutoMAA App | AutoMAA 应用内更新；必要时从本项目 GitHub Releases 手动安装 |
 
 AutoMAA 不会下载游戏包体，也不会绕过版本提示或未知更新界面。
 

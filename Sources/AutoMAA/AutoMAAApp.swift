@@ -13,6 +13,10 @@ struct AutoMAAApp: App {
         .defaultSize(width: 1_180, height: 780)
         .windowStyle(.hiddenTitleBar)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("检查更新…") { model.checkForApplicationUpdate() }
+                    .disabled(model.applicationUpdateState.isBusy)
+            }
             CommandGroup(after: .newItem) {
                 Button("运行全部任务") { model.runAll() }
                     .keyboardShortcut("r", modifiers: [.command])

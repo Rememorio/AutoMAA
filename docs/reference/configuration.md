@@ -7,7 +7,9 @@ AutoMAA 的用户数据保存在：
 ├── config.json
 ├── execution-state.json
 ├── history.json
+├── update-result.json       # 仅在更新后短暂存在
 ├── Logs/
+├── Updates/
 └── MAA/
     ├── profiles/
     └── tasks/
@@ -21,6 +23,8 @@ AutoMAA 的用户数据保存在：
 | `execution-state.json` | 当天已成功任务的断点 |
 | `history.json` | 图形界面最近运行记录 |
 | `Logs/` | LaunchAgent 与 Runner 输出 |
+| `Updates/` | 已下载并通过校验、等待安装的 AutoMAA 更新；下次准备更新时自动清理旧内容 |
+| `update-result.json` | 更新辅助程序写入的一次性结果；App 读取提示后删除 |
 | `MAA/profiles/` | AutoMAA 生成的独立 MAA Profile |
 | `MAA/tasks/` | AutoMAA 生成的账号任务文件 |
 

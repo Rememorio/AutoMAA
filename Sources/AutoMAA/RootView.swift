@@ -36,6 +36,9 @@ struct RootView: View {
         .onChange(of: model.configuration) { _, _ in
             model.scheduleSave()
         }
+        .task {
+            model.prepareApplication()
+        }
     }
 
     @ViewBuilder

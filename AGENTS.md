@@ -32,6 +32,7 @@ swift test
 ```bash
 swift test
 ./scripts/build-app.sh
+./scripts/test-updater.sh
 ./scripts/package-dmg.sh
 npm run docs:build
 ```
@@ -50,6 +51,7 @@ npm run docs:build
 | `Sources/AutoMAAKit/Stores.swift` | 配置、历史与当日执行状态的持久化 |
 | `Sources/AutoMAAKit/LaunchAgentManager.swift` | macOS LaunchAgent 定时任务 |
 | `Sources/AutoMAARunner/` | 无界面定时运行入口 |
+| `Sources/AutoMAAUpdater/` | 等待主 App 退出、原子替换、失败回滚和重新启动 |
 | `Tests/AutoMAAKitTests/` | 核心配置与工作流测试 |
 | `scripts/` | App、图标和 DMG 构建脚本 |
 | `docs/` | VitePress 用户与开发文档 |
@@ -69,6 +71,9 @@ npm run docs:build
 6. 不绕过登录、验证码、用户协议、维护、强制更新或未知弹窗，也不自动下载或安装游戏包体。
 7. 日志与错误信息应足以定位问题，但不得记录密码、完整手机号或其他凭据。
 8. 每个客户端使用独立的 MAA Profile；生成文件只能清理由 AutoMAA 清单或命名规则确认归属的文件。
+9. AutoMAA 本体更新只接受官方仓库固定命名的正式 Release；替换前必须校验大小、SHA-256、Bundle ID、版本、架构和代码签名，失败时保留或恢复旧 App。
+
+官方构建的更新仓库由 `scripts/Info.plist` 中的 `AutoMAAUpdateRepository` 指定。下游发行版可以在构建时改为自己的仓库，不要在界面或业务代码中另行写死维护者信息。
 
 任何削弱这些约束的改动都需要明确设计说明、相应测试和维护者审查。
 

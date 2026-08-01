@@ -11,6 +11,7 @@ let package = Package(
         .library(name: "AutoMAAKit", targets: ["AutoMAAKit"]),
         .executable(name: "AutoMAA", targets: ["AutoMAA"]),
         .executable(name: "AutoMAARunner", targets: ["AutoMAARunner"]),
+        .executable(name: "AutoMAAUpdater", targets: ["AutoMAAUpdater"]),
     ],
     targets: [
         .target(
@@ -26,6 +27,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "AutoMAARunner",
+            dependencies: ["AutoMAAKit"]
+        ),
+        .executableTarget(
+            name: "AutoMAAUpdater",
             dependencies: ["AutoMAAKit"]
         ),
         .testTarget(

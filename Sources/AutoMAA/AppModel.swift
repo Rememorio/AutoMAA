@@ -23,6 +23,24 @@ struct ReadinessIssue: Identifiable {
     let message: String
 }
 
+enum ApplicationUpdateState {
+    case idle
+    case checking
+    case upToDate
+    case available(SoftwareUpdateRelease)
+    case downloading(SoftwareUpdateRelease)
+    case ready(PreparedSoftwareUpdate)
+    case installing(SoftwareUpdateRelease)
+    case failed(String)
+
+    var isBusy: Bool {
+        switch self {
+        case .checking, .downloading, .installing: true
+        default: false
+        }
+    }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var configuration: AppConfiguration
@@ -35,14 +53,21 @@ final class AppModel: ObservableObject {
     @Published var bannerMessage: String?
     @Published var scheduleInstalled: Bool
     @Published var lastReport: WorkflowReport?
+    @Published private(set) var applicationUpdateState: ApplicationUpdateState = .idle
 
     let directories: AppDirectories
+    let currentApplicationVersion: String
+    let applicationUpdateRepository: String
     private let configurationStore: ConfigurationStore
     private let historyStore: HistoryStore
     private let executionStateStore: ExecutionStateStore
     private let launchAgentManager: LaunchAgentManager
+    private let softwareUpdateService: SoftwareUpdateService
+    private let softwareUpdateResultStore: SoftwareUpdateResultStore
     private var saveTask: Task<Void, Never>?
     private var workflowTask: Task<Void, Never>?
+    private var applicationUpdateTask: Task<Void, Never>?
+    private var didPrepareApplication = false
 
     init(directories: AppDirectories = .init()) {
         self.directories = directories
@@ -50,6 +75,15 @@ final class AppModel: ObservableObject {
         historyStore = HistoryStore(directories: directories)
         executionStateStore = ExecutionStateStore(directories: directories)
         launchAgentManager = LaunchAgentManager(directories: directories)
+        currentApplicationVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+            ?? "开发构建"
+        applicationUpdateRepository = Bundle.main.object(forInfoDictionaryKey: "AutoMAAUpdateRepository") as? String
+            ?? SoftwareUpdateService.defaultRepository
+        softwareUpdateService = SoftwareUpdateService(
+            currentVersion: currentApplicationVersion,
+            repository: applicationUpdateRepository
+        )
+        softwareUpdateResultStore = SoftwareUpdateResultStore(directories: directories)
         configuration = (try? configurationStore.load()) ?? .defaults
         logs = historyStore.load()
         scheduleInstalled = launchAgentManager.isInstalled
@@ -59,6 +93,7 @@ final class AppModel: ObservableObject {
     deinit {
         saveTask?.cancel()
         workflowTask?.cancel()
+        applicationUpdateTask?.cancel()
     }
 
     var activeClientCount: Int {
@@ -235,6 +270,112 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func prepareApplication() {
+        guard !didPrepareApplication else { return }
+        didPrepareApplication = true
+        if let result = softwareUpdateResultStore.loadAndClear() {
+            applicationUpdateState = result.status == .success ? .upToDate : .failed(result.message)
+            showBanner(result.message)
+            return
+        }
+        checkForApplicationUpdate(showResult: false)
+    }
+
+    func checkForApplicationUpdate(showResult: Bool = true) {
+        guard !applicationUpdateState.isBusy else { return }
+        applicationUpdateTask?.cancel()
+        applicationUpdateState = .checking
+        applicationUpdateTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                if let release = try await self.softwareUpdateService.check() {
+                    self.applicationUpdateState = .available(release)
+                    self.showBanner("发现 AutoMAA v\(release.version)，可在全局设置中更新")
+                } else {
+                    self.applicationUpdateState = .upToDate
+                    if showResult { self.showBanner("AutoMAA 已是最新版本") }
+                }
+            } catch is CancellationError {
+                self.applicationUpdateState = .idle
+            } catch {
+                self.applicationUpdateState = showResult ? .failed(error.localizedDescription) : .idle
+                if showResult { self.showBanner("检查更新失败：\(error.localizedDescription)") }
+            }
+            self.applicationUpdateTask = nil
+        }
+    }
+
+    func downloadApplicationUpdate(_ release: SoftwareUpdateRelease) {
+        guard !isRunning, !applicationUpdateState.isBusy else { return }
+        do {
+            try validateAutomaticUpdateAvailability()
+        } catch {
+            applicationUpdateState = .failed(error.localizedDescription)
+            showBanner(error.localizedDescription)
+            return
+        }
+        applicationUpdateState = .downloading(release)
+        applicationUpdateTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let prepared = try await self.softwareUpdateService.prepare(release, directories: self.directories)
+                self.applicationUpdateState = .ready(prepared)
+                self.showBanner("v\(release.version) 已下载并通过校验，可以重启更新")
+            } catch is CancellationError {
+                self.applicationUpdateState = .available(release)
+            } catch {
+                self.applicationUpdateState = .failed(error.localizedDescription)
+                self.showBanner("下载更新失败：\(error.localizedDescription)")
+            }
+            self.applicationUpdateTask = nil
+        }
+    }
+
+    func restartAndInstallApplicationUpdate(_ prepared: PreparedSoftwareUpdate) {
+        guard !isRunning, !applicationUpdateState.isBusy else { return }
+        do {
+            saveNow(showConfirmation: false)
+            try validateAutomaticUpdateAvailability()
+            let helperSource = bundledUpdaterURL
+            guard FileManager.default.isExecutableFile(atPath: helperSource.path) else {
+                throw SoftwareUpdateError.installerUnavailable
+            }
+            let helper = prepared.workingDirectory.appending(path: "AutoMAAUpdater")
+            if FileManager.default.fileExists(atPath: helper.path) {
+                try FileManager.default.removeItem(at: helper)
+            }
+            try FileManager.default.copyItem(at: helperSource, to: helper)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helper.path)
+
+            let logURL = prepared.workingDirectory.appending(path: "updater.log")
+            FileManager.default.createFile(atPath: logURL.path, contents: nil)
+            let logHandle = try FileHandle(forWritingTo: logURL)
+            let process = Process()
+            process.executableURL = helper
+            process.arguments = [
+                "--pid", String(ProcessInfo.processInfo.processIdentifier),
+                "--current-app", Bundle.main.bundleURL.path,
+                "--new-app", prepared.applicationURL.path,
+                "--expected-version", prepared.release.version.description,
+                "--result", softwareUpdateResultStore.url.path,
+            ]
+            process.standardOutput = logHandle
+            process.standardError = logHandle
+            do {
+                try process.run()
+            } catch {
+                try? logHandle.close()
+                throw SoftwareUpdateError.installerLaunchFailed(error.localizedDescription)
+            }
+            try? logHandle.close()
+            applicationUpdateState = .installing(prepared.release)
+            NSApplication.shared.terminate(nil)
+        } catch {
+            applicationUpdateState = .failed(error.localizedDescription)
+            showBanner("无法开始更新：\(error.localizedDescription)")
+        }
+    }
+
     func cancelRun() {
         guard isRunning, let workflowTask else { return }
         statusMessage = "正在安全停止并释放当前连接"
@@ -349,6 +490,23 @@ final class AppModel: ObservableObject {
             if FileManager.default.isExecutableFile(atPath: sibling.path) { return sibling }
         }
         return bundled
+    }
+
+    private var bundledUpdaterURL: URL {
+        let bundled = Bundle.main.bundleURL.appending(path: "Contents/MacOS/AutoMAAUpdater")
+        if FileManager.default.isExecutableFile(atPath: bundled.path) { return bundled }
+        if let executable = Bundle.main.executableURL {
+            let sibling = executable.deletingLastPathComponent().appending(path: "AutoMAAUpdater")
+            if FileManager.default.isExecutableFile(atPath: sibling.path) { return sibling }
+        }
+        return bundled
+    }
+
+    private func validateAutomaticUpdateAvailability() throws {
+        try SoftwareUpdateInstaller.validateInstallLocation(Bundle.main.bundleURL)
+        guard FileManager.default.isExecutableFile(atPath: bundledUpdaterURL.path) else {
+            throw SoftwareUpdateError.installerUnavailable
+        }
     }
 
     private func consume(_ event: RunnerEvent) {
