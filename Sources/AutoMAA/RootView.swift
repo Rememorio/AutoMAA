@@ -3,8 +3,6 @@ import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var statusPulse = false
 
     var body: some View {
         NavigationSplitView {
@@ -21,7 +19,6 @@ struct RootView: View {
                     )
                     .ignoresSafeArea()
                 }
-                .toolbar { toolbar }
         }
         .navigationSplitViewStyle(.balanced)
         .tint(.maaAccent)
@@ -63,72 +60,6 @@ struct RootView: View {
             LogsView()
         case .settings:
             SettingsView()
-        }
-    }
-
-    @ToolbarContentBuilder
-    private var toolbar: some ToolbarContent {
-        ToolbarItemGroup(placement: .primaryAction) {
-            if model.isRunning {
-                runningStatus
-                Button {
-                    model.cancelRun()
-                } label: {
-                    Label("安全停止", systemImage: "stop.fill")
-                }
-                .buttonStyle(.bordered)
-                .tint(.red)
-                .help("停止当前 MAA 命令，关闭客户端并释放连接")
-            } else {
-                Button {
-                    model.runAll()
-                } label: {
-                    Label("运行全部", systemImage: "play.fill")
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!model.canRun)
-                .help(model.canRun ? "按照侧边栏顺序执行所有客户端和账号" : "请先处理总览中的配置问题")
-            }
-        }
-    }
-
-    private var runningStatus: some View {
-        HStack(spacing: 7) {
-            ZStack {
-                Circle()
-                    .fill(model.phase.statusTint.opacity(0.13))
-                    .scaleEffect(reduceMotion ? 1 : (statusPulse ? 1.12 : 0.88))
-                    .opacity(reduceMotion ? 1 : (statusPulse ? 0.75 : 1))
-                Image(systemName: model.phase.statusSymbol)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(model.phase.statusTint)
-            }
-            .frame(width: 20, height: 20)
-
-            Text(model.phase.displayName)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.primary.opacity(0.82))
-                .lineLimit(1)
-        }
-        .frame(minWidth: 94, alignment: .leading)
-        .padding(.horizontal, 9)
-        .padding(.vertical, 4)
-        .background(model.phase.statusTint.opacity(0.075), in: Capsule())
-        .overlay {
-            Capsule()
-                .stroke(model.phase.statusTint.opacity(0.16), lineWidth: 1)
-        }
-        .fixedSize()
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("运行状态：\(model.phase.displayName)")
-        .onAppear {
-            guard !reduceMotion else { return }
-            withAnimation(.easeInOut(duration: 1.25).repeatForever(autoreverses: true)) {
-                statusPulse = true
-            }
-        }
-        .onDisappear {
-            statusPulse = false
         }
     }
 

@@ -21,38 +21,13 @@ struct DashboardView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 22) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(greeting)
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
-                Text(model.isRunning ? model.statusMessage : "按你的配置调度 MAA，依次完成每个客户端和账号的日常任务。")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-            Spacer()
-            VStack(alignment: .trailing, spacing: 8) {
-                Button {
-                    if model.isRunning {
-                        model.cancelRun()
-                    } else {
-                        model.runAll()
-                    }
-                } label: {
-                    Label(model.isRunning ? "安全停止" : "开始今日任务", systemImage: model.isRunning ? "stop.fill" : "play.fill")
-                        .font(.headline)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .tint(model.isRunning ? .red : .maaAccent)
-                .disabled(!model.isRunning && !model.canRun)
-                if model.isRunning {
-                    ProgressView(value: model.progress)
-                        .frame(width: 180)
-                }
-            }
+        VStack(alignment: .leading, spacing: 8) {
+            Text(greeting)
+                .font(.system(size: 28, weight: .bold, design: .rounded))
+            Text(model.isRunning ? model.statusMessage : "按你的配置调度 MAA，依次完成每个客户端和账号的日常任务。")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
         }
     }
 
