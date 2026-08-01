@@ -174,7 +174,7 @@ html {
   overflow: hidden;
   margin: 0;
   border: 1px solid color-mix(in srgb, var(--vp-c-divider) 78%, var(--vp-c-brand-1) 22%);
-  border-radius: 18px;
+  border-radius: 14px;
   background: var(--vp-c-bg-soft);
   box-shadow: 0 20px 64px rgba(7, 32, 31, 0.12);
 }
@@ -184,6 +184,18 @@ html {
   width: 100%;
   height: auto;
   border-bottom: 1px solid var(--vp-c-divider);
+}
+
+.theme-shot-dark {
+  display: none !important;
+}
+
+.dark .theme-shot-light {
+  display: none !important;
+}
+
+.dark .theme-shot-dark {
+  display: block !important;
 }
 
 .product-shot figcaption {
@@ -212,7 +224,7 @@ html {
   width: 100%;
   height: auto;
   border: 1px solid var(--vp-c-divider);
-  border-radius: 14px;
+  border-radius: 8px;
   box-shadow: 0 16px 44px rgba(7, 32, 31, 0.11);
 }
 

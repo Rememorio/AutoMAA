@@ -45,17 +45,20 @@ features:
   </div>
 
   <figure class="product-shot product-shot-wide">
-    <img src="./assets/screenshots/overview.jpg" width="1162" height="768" alt="AutoMAA 今日总览：展示国服与日服两个客户端、三个演示账号、十二个日常步骤和每天八点自动运行" />
+    <img class="theme-shot theme-shot-light" src="./assets/screenshots/overview-light.webp" width="2320" height="1520" alt="AutoMAA 今日总览：展示国服与日服两个客户端、三个演示账号、十二个日常步骤和每天八点自动运行" />
+    <img class="theme-shot theme-shot-dark" src="./assets/screenshots/overview-dark.webp" width="2320" height="1520" alt="AutoMAA 今日总览：展示国服与日服两个客户端、三个演示账号、十二个日常步骤和每天八点自动运行" />
     <figcaption><strong>今日总览</strong><span>先确认顺序与安全检查，再开始完整工作流。</span></figcaption>
   </figure>
 
   <div class="product-shot-grid">
     <figure class="product-shot">
-      <img src="./assets/screenshots/client-settings.jpg" width="1162" height="768" loading="lazy" alt="AutoMAA 客户端配置：服务器、应用、MaaTools、独立 Profile、账号队列和生命周期保护" />
+      <img class="theme-shot theme-shot-light" src="./assets/screenshots/client-settings-light.webp" width="2320" height="1520" loading="lazy" decoding="async" alt="AutoMAA 客户端配置：服务器、应用、MaaTools、独立 Profile、账号队列和生命周期保护" />
+      <img class="theme-shot theme-shot-dark" src="./assets/screenshots/client-settings-dark.webp" width="2320" height="1520" loading="lazy" decoding="async" alt="AutoMAA 客户端配置：服务器、应用、MaaTools、独立 Profile、账号队列和生命周期保护" />
       <figcaption><strong>客户端与账号队列</strong><span>每个客户端独立配置，顺序、连接与关闭边界都清晰可见。</span></figcaption>
     </figure>
     <figure class="product-shot">
-      <img src="./assets/screenshots/task-settings.jpg" width="1162" height="768" loading="lazy" alt="AutoMAA 任务配置：理智作战、公开招募、基建收菜和领取奖励可排序，并可分别启用自定义参数" />
+      <img class="theme-shot theme-shot-light" src="./assets/screenshots/task-settings-light.webp" width="2320" height="1520" loading="lazy" decoding="async" alt="AutoMAA 任务配置：理智作战、公开招募、基建收菜和领取奖励可排序，并可分别启用自定义参数" />
+      <img class="theme-shot theme-shot-dark" src="./assets/screenshots/task-settings-dark.webp" width="2320" height="1520" loading="lazy" decoding="async" alt="AutoMAA 任务配置：理智作战、公开招募、基建收菜和领取奖励可排序，并可分别启用自定义参数" />
       <figcaption><strong>熟悉的 MAA 任务参数</strong><span>需要时精细配置，不需要时关闭开关沿用 MAA 默认值。</span></figcaption>
     </figure>
   </div>
