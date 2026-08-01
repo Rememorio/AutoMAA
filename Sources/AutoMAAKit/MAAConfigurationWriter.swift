@@ -1,17 +1,11 @@
 import Foundation
 
 public enum MAAConfigurationWriterError: LocalizedError, Equatable {
-    case duplicateProfileName
-    case duplicateClientID
-    case duplicateAccountID
-    case duplicatePlanID
+    case invalidConfiguration(String)
 
     public var errorDescription: String? {
         switch self {
-        case .duplicateProfileName: "每个客户端必须使用不同的 MAA Profile 名称"
-        case .duplicateClientID: "客户端标识重复，请删除并重新添加重复项"
-        case .duplicateAccountID: "账号标识重复，请删除并重新添加重复项"
-        case .duplicatePlanID: "自动化方案标识重复，请删除并重新添加重复项"
+        case let .invalidConfiguration(message): message
         }
     }
 }
@@ -50,21 +44,10 @@ public struct MAAConfigurationWriter: Sendable {
     }
 
     private func validate(_ configuration: AppConfiguration) throws {
-        let profileNames = configuration.clients.map { safeName($0.profileName) }
-        guard Set(profileNames).count == profileNames.count else {
-            throw MAAConfigurationWriterError.duplicateProfileName
-        }
-        let clientIDs = configuration.clients.map(\.id)
-        guard Set(clientIDs).count == clientIDs.count else {
-            throw MAAConfigurationWriterError.duplicateClientID
-        }
-        let accountIDs = configuration.clients.flatMap { $0.accounts.map(\.id) }
-        guard Set(accountIDs).count == accountIDs.count else {
-            throw MAAConfigurationWriterError.duplicateAccountID
-        }
-        let planIDs = configuration.plans.map(\.id)
-        guard Set(planIDs).count == planIDs.count else {
-            throw MAAConfigurationWriterError.duplicatePlanID
+        if let problem = ConfigurationValidator.structuralProblems(in: configuration).first(where: {
+            $0.severity == .error
+        }) {
+            throw MAAConfigurationWriterError.invalidConfiguration(problem.message)
         }
     }
 
@@ -96,21 +79,19 @@ public struct MAAConfigurationWriter: Sendable {
         switch task {
         case .fight:
             var value: [String: Any] = [
-                "stage": plan.fight.usesCustomSettings
-                    ? plan.fight.stage.trimmingCharacters(in: .whitespacesAndNewlines)
-                    : "",
                 "server": client.kind.serverCode,
                 "client_type": client.kind.maaTaskClientType,
-                "DrGrandet": plan.fight.usesCustomSettings && plan.fight.drGrandet,
             ]
             if plan.fight.usesCustomSettings {
+                value["stage"] = plan.fight.stage.trimmingCharacters(in: .whitespacesAndNewlines)
                 if let medicine = plan.fight.medicine { value["medicine"] = medicine }
-                if let expiringMedicine = plan.fight.expiringMedicine {
-                    value["expiring_medicine"] = expiringMedicine
+                if let medicineExpireDays = plan.fight.medicineExpireDays {
+                    value["medicine_expire_days"] = medicineExpireDays
                 }
                 if let stone = plan.fight.stone { value["stone"] = stone }
                 if let times = plan.fight.times { value["times"] = times }
                 if let series = plan.fight.series { value["series"] = series }
+                value["DrGrandet"] = plan.fight.drGrandet
             }
             parameters = value
         case .recruit:
@@ -125,9 +106,14 @@ public struct MAAConfigurationWriter: Sendable {
                     "refresh": plan.recruit.refresh,
                     "select": [5, 4],
                     "confirm": confirm,
+                    "first_tags": plan.recruit.firstTags,
+                    "extra_tags_mode": plan.recruit.extraTagsMode.rawValue,
                     "times": plan.recruit.times,
+                    "set_time": true,
                     "expedite": plan.recruit.expedite,
-                    "skip_robot": plan.recruit.preserveRobot,
+                    "expedite_times": 999,
+                    "preserve_tags": plan.recruit.preserveTags,
+                    "recruitment_time": ["3": 540, "4": 540, "5": 540, "6": 540],
                     "server": client.kind.serverCode,
                 ]
             } else {
@@ -141,7 +127,7 @@ public struct MAAConfigurationWriter: Sendable {
                     "set_time": true,
                     "expedite": false,
                     "expedite_times": 999,
-                    "skip_robot": true,
+                    "preserve_tags": ["支援机械"],
                     "recruitment_time": ["3": 540, "4": 540, "5": 540, "6": 540],
                     "report_to_penguin": false,
                     "penguin_id": "",
@@ -164,8 +150,12 @@ public struct MAAConfigurationWriter: Sendable {
                     "reception_message_board": plan.infrast.receptionMessageBoard,
                     "reception_clue_exchange": plan.infrast.receptionClueExchange,
                     "reception_send_clue": plan.infrast.receptionSendClue,
-                    "filename": "",
-                    "plan_index": 0,
+                    "filename": plan.infrast.mode == .customSchedule
+                        ? plan.infrast.customSchedulePath.trimmingCharacters(in: .whitespacesAndNewlines)
+                        : "",
+                    "plan_index": plan.infrast.mode == .customSchedule
+                        ? plan.infrast.customSchedulePlanIndex
+                        : 0,
                 ]
             } else {
                 parameters = [
@@ -221,7 +211,7 @@ public struct MAAConfigurationWriter: Sendable {
                     "recruit": plan.award.freeRecruit,
                     "orundum": plan.award.orundum,
                     "mining": plan.award.mining,
-                    "specialaccess": false,
+                    "specialaccess": plan.award.specialAccess,
                 ]
             } else {
                 parameters = [
@@ -260,15 +250,23 @@ public struct MAAConfigurationWriter: Sendable {
     }
 
     private func safeName(_ value: String) -> String {
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
-        let result = value.unicodeScalars.map { allowed.contains($0) ? String($0) : "-" }.joined()
-        let trimmed = result.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-        return trimmed.isEmpty ? "default" : trimmed
+        MAAProfileName.normalize(value)
     }
 
     private func escaped(_ value: String) -> String {
-        value.replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
+        value.unicodeScalars.map { scalar in
+            switch scalar.value {
+            case 0x08: "\\b"
+            case 0x09: "\\t"
+            case 0x0A: "\\n"
+            case 0x0C: "\\f"
+            case 0x0D: "\\r"
+            case 0x22: "\\\""
+            case 0x5C: "\\\\"
+            case 0x00...0x1F, 0x7F: String(format: "\\u%04X", scalar.value)
+            default: String(scalar)
+            }
+        }.joined()
     }
 
     private func removeStaleGeneratedFiles(keeping generated: Set<String>) throws {

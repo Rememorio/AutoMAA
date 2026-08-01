@@ -66,6 +66,8 @@ struct RootView: View {
             LogsView()
         case .settings:
             SettingsView()
+        case .about:
+            AboutView()
         }
     }
 

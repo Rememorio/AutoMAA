@@ -6,9 +6,19 @@ public struct LaunchAgentManager: Sendable {
 
     private let commandRunner = CommandRunner()
     private let directories: AppDirectories
+    private let launchAgentsDirectory: URL
+    private let systemIntegrationEnabled: Bool
 
-    public init(directories: AppDirectories = .init()) {
+    public init(
+        directories: AppDirectories = .init(),
+        launchAgentsDirectory: URL? = nil,
+        systemIntegrationEnabled: Bool = true
+    ) {
         self.directories = directories
+        self.systemIntegrationEnabled = systemIntegrationEnabled
+        self.launchAgentsDirectory = launchAgentsDirectory
+            ?? FileManager.default.homeDirectoryForCurrentUser
+                .appending(path: "Library/LaunchAgents", directoryHint: .isDirectory)
     }
 
     public func label(planID: UUID) -> String {
@@ -29,6 +39,7 @@ public struct LaunchAgentManager: Sendable {
             options: 0
         )
         try data.write(to: plistURL, options: .atomic)
+        guard systemIntegrationEnabled else { return }
 
         let domain = "gui/\(getuid())"
         _ = try? await commandRunner.run(
@@ -42,6 +53,7 @@ public struct LaunchAgentManager: Sendable {
             timeout: 10
         )
         guard result.exitCode == 0 else {
+            try? FileManager.default.removeItem(at: plistURL)
             throw CommandRunnerError.launchFailed(result.combinedOutput)
         }
     }
@@ -73,7 +85,9 @@ public struct LaunchAgentManager: Sendable {
         }
         try await uninstallLegacyAgentIfNeeded()
         for plan in plans where plan.schedule.enabled {
-            try await install(runnerURL: runnerURL, plan: plan)
+            if !isCurrent(runnerURL: runnerURL, plan: plan) {
+                try await install(runnerURL: runnerURL, plan: plan)
+            }
         }
     }
 
@@ -104,9 +118,11 @@ public struct LaunchAgentManager: Sendable {
         return (hour, minute)
     }
 
-    private var launchAgentsDirectory: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appending(path: "Library/LaunchAgents", directoryHint: .isDirectory)
+    func isCurrent(runnerURL: URL, plan: AutomationPlan) -> Bool {
+        guard let data = try? Data(contentsOf: plistURL(planID: plan.id)),
+              let installed = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        else { return false }
+        return NSDictionary(dictionary: installed).isEqual(to: propertyList(runnerURL: runnerURL, plan: plan))
     }
 
     private func uninstallLegacyAgentIfNeeded() async throws {
@@ -116,12 +132,14 @@ public struct LaunchAgentManager: Sendable {
     }
 
     private func uninstall(plistURL: URL) async throws {
-        let domain = "gui/\(getuid())"
-        _ = try? await commandRunner.run(
-            executable: "/bin/launchctl",
-            arguments: ["bootout", domain, plistURL.path],
-            timeout: 10
-        )
+        if systemIntegrationEnabled {
+            let domain = "gui/\(getuid())"
+            _ = try? await commandRunner.run(
+                executable: "/bin/launchctl",
+                arguments: ["bootout", domain, plistURL.path],
+                timeout: 10
+            )
+        }
         if FileManager.default.fileExists(atPath: plistURL.path) {
             try FileManager.default.removeItem(at: plistURL)
         }

@@ -160,15 +160,31 @@ struct SettingsView: View {
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 390)
                 }
+                LabeledContent("环境版本") {
+                    if model.isCheckingMAAEnvironment {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Text(model.maaVersionSummary)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.trailing)
+                            .textSelection(.enabled)
+                    }
+                }
                 HStack {
-                    Text("资源与核心由本机 maa-cli 管理。")
+                    Text("稳定通道更新基础包；热更新只拉取可独立更新的识别资源。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
+                    Button("检测环境") { model.refreshMAAStatus(showResult: true) }
+                        .disabled(model.isRunning || model.isCheckingMAAEnvironment)
+                    Button("更新核心与基础资源") { model.updateMAACore() }
+                        .disabled(model.isRunning)
                     Button {
                         model.hotUpdate()
                     } label: {
-                        Label("立即更新资源", systemImage: "arrow.triangle.2.circlepath")
+                        Label("热更新识别资源", systemImage: "arrow.triangle.2.circlepath")
                     }
                     .disabled(model.isRunning)
                 }

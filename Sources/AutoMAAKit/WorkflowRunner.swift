@@ -39,6 +39,14 @@ public final class WorkflowRunner {
         }
         currentPlanID = plan.id
         defer { currentPlanID = nil }
+        if let problem = ConfigurationValidator.readinessProblems(
+            in: configuration,
+            planID: plan.id
+        ).first(where: { $0.severity == .error }) {
+            report.fatalError = problem.message
+            emit(.failed, problem.message, 0, .error)
+            return report
+        }
         guard !plan.enabledTasks.isEmpty else {
             report.fatalError = "「\(plan.name)」没有启用任何步骤"
             emit(.failed, report.fatalError ?? "方案没有任务", 0, .error)
@@ -468,10 +476,17 @@ public final class WorkflowRunner {
                 emit(.switchingAccount, "已进入 \(account.name)", 0, .success, client: client, account: account)
                 return
             }
-            emit(.switchingAccount, shortOutput(lastResult), 0, .warning, client: client, account: account)
+            emit(
+                .switchingAccount,
+                shortOutput(lastResult, sensitiveValues: [selector]),
+                0,
+                .warning,
+                client: client,
+                account: account
+            )
             if attempt < attempts { try? await Task.sleep(for: .seconds(2)) }
         }
-        let detail = shortOutput(lastResult)
+        let detail = shortOutput(lastResult, sensitiveValues: [selector])
         let diagnosis = StartupFailureClassifier.diagnose(
             output: detail,
             hasAccountSelector: !selector.isEmpty
@@ -519,7 +534,7 @@ public final class WorkflowRunner {
             if result.exitCode == 0, !result.timedOut { return true }
             emit(
                 .runningTask,
-                shortOutput(result),
+                shortOutput(result, sensitiveValues: client.accounts.map(\.accountSelector)),
                 0,
                 .warning,
                 client: client,
@@ -726,8 +741,11 @@ public final class WorkflowRunner {
         }
     }
 
-    private func shortOutput(_ result: CommandResult) -> String {
-        let output = result.combinedOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func shortOutput(_ result: CommandResult, sensitiveValues: [String] = []) -> String {
+        let output = SensitiveDataRedactor.redact(
+            result.combinedOutput.trimmingCharacters(in: .whitespacesAndNewlines),
+            sensitiveValues: sensitiveValues
+        )
         if result.timedOut {
             guard !output.isEmpty else { return "执行超时" }
             return "执行超时：\(String(output.suffix(1_480)))"

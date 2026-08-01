@@ -100,6 +100,8 @@ struct SidebarView: View {
                         .tag(SidebarSelection.logs)
                     Label("全局设置", systemImage: "gearshape.fill")
                         .tag(SidebarSelection.settings)
+                    Label("关于 AutoMAA", systemImage: "info.circle.fill")
+                        .tag(SidebarSelection.about)
                 }
             }
             .listStyle(.sidebar)
@@ -137,31 +139,44 @@ struct SidebarView: View {
                 ProgressView(value: model.progress)
                     .progressViewStyle(.linear)
 
-                Button {
-                    model.cancelRun()
-                } label: {
-                    Label("安全停止", systemImage: "stop.fill")
-                        .frame(maxWidth: .infinity)
+                Button { model.cancelRun() } label: {
+                    Label(
+                        model.runningPlanID == nil ? "停止更新" : "安全停止",
+                        systemImage: "stop.fill"
+                    )
+                    .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
                 .tint(.red)
-                .help("停止当前 MAA 命令，关闭客户端并释放连接")
+                .help(model.runningPlanID == nil
+                      ? "停止当前 MAA 维护命令"
+                      : "停止当前 MAA 命令，关闭客户端并释放连接")
             } else {
                 planPicker
 
-                Button {
-                    model.runSelectedPlan()
-                } label: {
-                    Label("运行这个方案", systemImage: "play.fill")
-                        .fontWeight(.semibold)
-                        .frame(maxWidth: .infinity)
+                if model.canRun {
+                    Button {
+                        model.runSelectedPlan()
+                    } label: {
+                        Label("运行这个方案", systemImage: "play.fill")
+                            .fontWeight(.semibold)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .tint(.maaAccent)
+                    .help("按当前方案依次执行客户端和账号")
+                } else {
+                    Button {} label: {
+                        Label("配置未完成", systemImage: "exclamationmark.circle")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                    .disabled(true)
+                    .help("请先处理当前方案的配置问题")
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .tint(.maaAccent)
-                .disabled(!model.canRun)
-                .help(model.canRun ? "按当前方案依次执行客户端和账号" : "请先处理当前方案的配置问题")
             }
         }
         .padding(14)

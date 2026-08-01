@@ -1,8 +1,24 @@
+import AutoMAAKit
 import SwiftUI
 
 @main
 struct AutoMAAApp: App {
-    @StateObject private var model = AppModel()
+    @StateObject private var model: AppModel
+
+    init() {
+        #if DEBUG
+        if let root = Self.developmentDataDirectory() {
+            _model = StateObject(wrappedValue: AppModel(
+                directories: AppDirectories(root: root),
+                launchAgentsDirectory: root.appending(path: "LaunchAgents", directoryHint: .isDirectory),
+                managesSystemLaunchAgents: false,
+                checksForUpdatesAutomatically: false
+            ))
+            return
+        }
+        #endif
+        _model = StateObject(wrappedValue: AppModel())
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -29,4 +45,18 @@ struct AutoMAAApp: App {
             }
         }
     }
+
+    #if DEBUG
+    private static func developmentDataDirectory() -> URL? {
+        if let value = ProcessInfo.processInfo.environment["AUTOMAA_DEVELOPMENT_DATA_DIRECTORY"],
+           !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return URL(filePath: value, directoryHint: .isDirectory).standardizedFileURL
+        }
+        let arguments = CommandLine.arguments
+        guard let index = arguments.firstIndex(of: "--data-directory"),
+              arguments.indices.contains(index + 1)
+        else { return nil }
+        return URL(filePath: arguments[index + 1], directoryHint: .isDirectory).standardizedFileURL
+    }
+    #endif
 }

@@ -11,18 +11,10 @@ enum SidebarSelection: Hashable {
     case account(UUID, UUID)
     case logs
     case settings
+    case about
 }
 
-struct ReadinessIssue: Identifiable {
-    enum Severity {
-        case warning
-        case error
-    }
-
-    let id = UUID()
-    let severity: Severity
-    let message: String
-}
+typealias ReadinessIssue = ConfigurationProblem
 
 enum ApplicationUpdateState {
     case idle
@@ -55,10 +47,13 @@ final class AppModel: ObservableObject {
     @Published var bannerMessage: String?
     @Published var installedPlanIDs: Set<UUID>
     @Published var lastReport: WorkflowReport?
+    @Published private(set) var maaVersionSummary = "尚未检测"
+    @Published private(set) var isCheckingMAAEnvironment = false
     @Published private(set) var applicationUpdateState: ApplicationUpdateState = .idle
 
     let directories: AppDirectories
     let currentApplicationVersion: String
+    let currentApplicationBuild: String
     let applicationUpdateRepository: String
     private let configurationStore: ConfigurationStore
     private let historyStore: HistoryStore
@@ -66,19 +61,34 @@ final class AppModel: ObservableObject {
     private let launchAgentManager: LaunchAgentManager
     private let softwareUpdateService: SoftwareUpdateService
     private let softwareUpdateResultStore: SoftwareUpdateResultStore
+    private let commandRunner = CommandRunner()
     private var saveTask: Task<Void, Never>?
     private var workflowTask: Task<Void, Never>?
     private var applicationUpdateTask: Task<Void, Never>?
     private var didPrepareApplication = false
+    private let startupNotice: String?
+    private let checksForUpdatesAutomatically: Bool
 
-    init(directories: AppDirectories = .init()) {
+    init(
+        directories: AppDirectories = .init(),
+        launchAgentsDirectory: URL? = nil,
+        managesSystemLaunchAgents: Bool = true,
+        checksForUpdatesAutomatically: Bool = true
+    ) {
         self.directories = directories
+        self.checksForUpdatesAutomatically = checksForUpdatesAutomatically
         configurationStore = ConfigurationStore(directories: directories)
         historyStore = HistoryStore(directories: directories)
         executionStateStore = ExecutionStateStore(directories: directories)
-        launchAgentManager = LaunchAgentManager(directories: directories)
+        launchAgentManager = LaunchAgentManager(
+            directories: directories,
+            launchAgentsDirectory: launchAgentsDirectory,
+            systemIntegrationEnabled: managesSystemLaunchAgents
+        )
         currentApplicationVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
             ?? "开发构建"
+        currentApplicationBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+            ?? "local"
         applicationUpdateRepository = Bundle.main.object(forInfoDictionaryKey: "AutoMAAUpdateRepository") as? String
             ?? SoftwareUpdateService.defaultRepository
         softwareUpdateService = SoftwareUpdateService(
@@ -86,7 +96,26 @@ final class AppModel: ObservableObject {
             repository: applicationUpdateRepository
         )
         softwareUpdateResultStore = SoftwareUpdateResultStore(directories: directories)
-        configuration = (try? configurationStore.load()) ?? .defaults
+        do {
+            configuration = try configurationStore.load()
+            startupNotice = nil
+        } catch ConfigurationStoreError.unsupportedSchema {
+            if let recovery = try? configurationStore.resetIncompatibleConfiguration() {
+                configuration = recovery.configuration
+                startupNotice = "配置协议已升级；旧配置已备份为 \(recovery.backupURL.lastPathComponent)"
+            } else {
+                configuration = .defaults
+                startupNotice = "旧配置与当前版本不兼容，且无法创建备份；当前使用空配置"
+            }
+        } catch {
+            if let recovery = try? configurationStore.resetIncompatibleConfiguration() {
+                configuration = recovery.configuration
+                startupNotice = "配置文件无法读取，已备份为 \(recovery.backupURL.lastPathComponent) 并恢复空配置"
+            } else {
+                configuration = .defaults
+                startupNotice = "读取配置失败：\(error.localizedDescription)"
+            }
+        }
         logs = historyStore.load()
         installedPlanIDs = launchAgentManager.installedPlanIDs
         try? MAAConfigurationWriter(directories: directories).prepare(configuration)
@@ -129,67 +158,7 @@ final class AppModel: ObservableObject {
     }
 
     func readinessIssues(for planID: UUID?) -> [ReadinessIssue] {
-        var result: [ReadinessIssue] = []
-        let clientIDs = configuration.clients.map(\.id)
-        let accountIDs = configuration.clients.flatMap { $0.accounts.map(\.id) }
-        let planIDs = configuration.plans.map(\.id)
-        if Set(clientIDs).count != clientIDs.count {
-            result.append(.init(severity: .error, message: "客户端标识重复，请删除并重新添加重复项"))
-        }
-        if Set(accountIDs).count != accountIDs.count {
-            result.append(.init(severity: .error, message: "账号标识重复，请删除并重新添加重复项"))
-        }
-        if Set(planIDs).count != planIDs.count {
-            result.append(.init(severity: .error, message: "自动化方案标识重复，请删除并重新添加重复项"))
-        }
-        if !FileManager.default.isExecutableFile(atPath: configuration.cliPath) {
-            result.append(.init(severity: .error, message: "找不到可执行的 maa-cli：\(configuration.cliPath)"))
-        }
-        guard let planID, let plan = configuration.plans.first(where: { $0.id == planID }) else {
-            result.append(.init(severity: .error, message: "至少需要创建一个自动化方案"))
-            return result
-        }
-        if plan.enabledTasks.isEmpty {
-            result.append(.init(severity: .error, message: "「\(plan.name)」没有启用任何步骤"))
-        }
-        let activeClients = configuration.clients.filter { client in
-            client.enabled && client.accounts.contains(where: plan.includes)
-        }
-        if activeClients.isEmpty {
-            result.append(.init(severity: .error, message: "「\(plan.name)」没有可执行的账号"))
-        }
-        for client in activeClients {
-            if !FileManager.default.fileExists(atPath: client.appPath) {
-                result.append(.init(severity: .warning, message: "\(client.name) 的应用路径不存在，运行时会跳过该客户端"))
-            }
-            if client.bundleIdentifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                result.append(.init(severity: .warning, message: "\(client.name) 缺少 Bundle Identifier，运行时会跳过该客户端"))
-            }
-            if (try? PortAddress(client.address)) == nil {
-                result.append(.init(severity: .warning, message: "\(client.name) 的 MaaTools 地址无效，运行时会跳过该客户端"))
-            }
-            let enabledAccounts = client.accounts.filter(\.enabled)
-            let targetAccounts = client.accounts.filter(plan.includes)
-            if targetAccounts.isEmpty {
-                result.append(.init(severity: .warning, message: "\(client.name) 没有启用的账号"))
-            }
-            if enabledAccounts.count > 1 {
-                for account in targetAccounts where account.accountSelector.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    result.append(.init(severity: .warning, message: "\(account.name) 缺少唯一账号片段，运行时会跳过该账号"))
-                }
-                let selectors = enabledAccounts
-                    .map { $0.accountSelector.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-                    .filter { !$0.isEmpty }
-                if Set(selectors).count != selectors.count {
-                    result.append(.init(severity: .error, message: "\(client.name) 的账号片段不能重复"))
-                }
-            }
-        }
-        let profileNames = configuration.clients.map { normalizedProfile($0.profileName) }
-        if Set(profileNames).count != profileNames.count {
-            result.append(.init(severity: .error, message: "每个客户端需要使用不同的 MAA Profile 名称"))
-        }
-        return result
+        ConfigurationValidator.readinessProblems(in: configuration, planID: planID)
     }
 
     var canRun: Bool {
@@ -270,7 +239,9 @@ final class AppModel: ObservableObject {
     @discardableResult
     func saveNow(showConfirmation: Bool = true) -> Bool {
         do {
-            try MAAConfigurationWriter(directories: directories).prepare(configuration)
+            if !isRunning {
+                try MAAConfigurationWriter(directories: directories).prepare(configuration)
+            }
             try configurationStore.save(configuration)
             if showConfirmation { showBanner("配置已保存") }
             return true
@@ -302,6 +273,7 @@ final class AppModel: ObservableObject {
             self.isRunning = false
             self.runningPlanID = nil
             self.workflowTask = nil
+            _ = self.saveNow(showConfirmation: false)
             if let fatalError = report.fatalError {
                 self.showBanner(fatalError)
             } else if report.cancelled {
@@ -344,12 +316,101 @@ final class AppModel: ObservableObject {
         guard !didPrepareApplication else { return }
         didPrepareApplication = true
         synchronizeSchedules()
+        if let startupNotice {
+            showBanner(startupNotice)
+        }
         if let result = softwareUpdateResultStore.loadAndClear() {
             applicationUpdateState = result.status == .success ? .upToDate : .failed(result.message)
             showBanner(result.message)
+            refreshMAAStatus()
             return
         }
-        checkForApplicationUpdate(showResult: false)
+        refreshMAAStatus()
+        if checksForUpdatesAutomatically {
+            checkForApplicationUpdate(showResult: false)
+        }
+    }
+
+    func refreshMAAStatus(showResult: Bool = false) {
+        guard !isCheckingMAAEnvironment else { return }
+        guard FileManager.default.isExecutableFile(atPath: configuration.cliPath) else {
+            maaVersionSummary = "未找到 maa-cli"
+            if showResult { showBanner("找不到可执行的 maa-cli") }
+            return
+        }
+        isCheckingMAAEnvironment = true
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await self.commandRunner.run(
+                    executable: self.configuration.cliPath,
+                    arguments: ["version", "--batch"],
+                    timeout: 20
+                )
+                let output = SensitiveDataRedactor.redact(result.combinedOutput)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                self.maaVersionSummary = result.exitCode == 0 && !output.isEmpty
+                    ? output
+                    : "检测失败：\(output.isEmpty ? "退出码 \(result.exitCode)" : output)"
+                if showResult {
+                    self.showBanner(result.exitCode == 0 ? "MAA 环境检测完成" : "MAA 环境检测失败")
+                }
+            } catch {
+                self.maaVersionSummary = "检测失败：\(error.localizedDescription)"
+                if showResult { self.showBanner("MAA 环境检测失败：\(error.localizedDescription)") }
+            }
+            self.isCheckingMAAEnvironment = false
+        }
+    }
+
+    func updateMAACore() {
+        guard !isRunning else { return }
+        guard FileManager.default.isExecutableFile(atPath: configuration.cliPath) else {
+            showBanner("找不到可执行的 maa-cli")
+            return
+        }
+        isRunning = true
+        phase = .updating
+        statusMessage = "正在更新 MAA 核心与基础资源"
+        progress = 0
+        workflowTask = Task { [weak self] in
+            guard let self else { return }
+            let result: CommandResult
+            do {
+                result = try await self.commandRunner.run(
+                    executable: self.configuration.cliPath,
+                    arguments: ["update", "stable", "--batch"],
+                    timeout: 900
+                )
+            } catch {
+                result = CommandResult(
+                    exitCode: -1,
+                    standardOutput: "",
+                    standardError: error.localizedDescription,
+                    timedOut: false,
+                    cancelled: Task.isCancelled
+                )
+            }
+            let output = SensitiveDataRedactor.redact(result.combinedOutput)
+            self.isRunning = false
+            self.workflowTask = nil
+            self.progress = 1
+            if result.cancelled || Task.isCancelled {
+                self.phase = .cancelled
+                self.statusMessage = "MAA 更新已停止"
+                self.showBanner("MAA 更新已停止")
+            } else if result.exitCode == 0, !result.timedOut {
+                self.phase = .completed
+                self.statusMessage = "MAA 核心与基础资源已更新"
+                self.showBanner("MAA 核心与基础资源已更新")
+            } else {
+                self.phase = .failed
+                self.statusMessage = "MAA 更新失败"
+                let detail = output.trimmingCharacters(in: .whitespacesAndNewlines)
+                self.showBanner("MAA 更新失败：\(String((detail.isEmpty ? "退出码 \(result.exitCode)" : detail).suffix(240)))")
+            }
+            self.refreshMAAStatus()
+        }
     }
 
     private func synchronizeSchedules() {
@@ -463,8 +524,12 @@ final class AppModel: ObservableObject {
 
     func cancelRun() {
         guard isRunning, let workflowTask else { return }
-        statusMessage = "正在安全停止并释放当前连接"
-        phase = .closing
+        if runningPlanID == nil {
+            statusMessage = "正在停止当前更新操作"
+        } else {
+            statusMessage = "正在安全停止并释放当前连接"
+            phase = .closing
+        }
         workflowTask.cancel()
     }
 
@@ -658,10 +723,7 @@ final class AppModel: ObservableObject {
     }
 
     private func normalizedProfile(_ value: String) -> String {
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
-        let result = value.unicodeScalars.map { allowed.contains($0) ? String($0) : "-" }.joined()
-        let trimmed = result.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-        return trimmed.isEmpty ? "default" : trimmed
+        MAAProfileName.normalize(value)
     }
 
     private func attentionBanner(_ messages: [String]) -> String {

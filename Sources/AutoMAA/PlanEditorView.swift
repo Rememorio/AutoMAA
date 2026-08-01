@@ -1,5 +1,7 @@
+import AppKit
 import AutoMAAKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct PlanEditorView: View {
     @EnvironmentObject private var model: AppModel
@@ -57,15 +59,23 @@ struct PlanEditorView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Button {
-                model.runPlan(plan.id)
-            } label: {
-                Label("立即运行", systemImage: "play.fill")
-                    .fontWeight(.semibold)
+            if model.canRun(planID: plan.id) {
+                Button {
+                    model.runPlan(plan.id)
+                } label: {
+                    Label("立即运行", systemImage: "play.fill")
+                        .fontWeight(.semibold)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+            } else {
+                Button {} label: {
+                    Label("配置未完成", systemImage: "exclamationmark.circle")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .disabled(true)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(!model.canRun(planID: plan.id))
         }
     }
 
@@ -206,17 +216,18 @@ struct PlanEditorView: View {
             Toggle("手动输入关卡名", isOn: customFightStage)
             Divider()
             optionalStepper("吃理智药", value: $plan.fight.medicine, defaultValue: 999, range: 0...999)
+            optionalStepper("使用临期理智药（天数）", value: $plan.fight.medicineExpireDays, defaultValue: 2, range: 1...365)
             optionalStepper("吃源石", value: $plan.fight.stone, defaultValue: 0, range: 0...99)
             optionalStepper("指定次数", value: $plan.fight.times, defaultValue: 5, range: 1...9_999)
             Picker("连战次数", selection: $plan.fight.series) {
-                Text("不使用").tag(Int?.none)
+                Text("保持当前").tag(Int?.none)
+                Text("关闭连战").tag(Int?.some(-1))
                 Text("AUTO").tag(Int?.some(0))
-                ForEach((1...6).reversed(), id: \.self) { value in
+                ForEach((1...10).reversed(), id: \.self) { value in
                     Text("\(value)").tag(Int?.some(value))
                 }
             }
             Divider()
-            Toggle("无限使用 48 小时内过期的理智药", isOn: optionalToggle($plan.fight.expiringMedicine, defaultValue: 999))
             Toggle("博朗台碎石模式", isOn: $plan.fight.drGrandet)
         }
     }
@@ -237,7 +248,21 @@ struct PlanEditorView: View {
                 Toggle("6★", isOn: $plan.recruit.autoConfirm6)
             }
             .toggleStyle(.checkbox)
-            Toggle("保留小车标签", isOn: $plan.recruit.preserveRobot)
+            Picker("额外标签策略", selection: $plan.recruit.extraTagsMode) {
+                ForEach(RecruitExtraTagsMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            LabeledContent("三星首选标签") {
+                TextField("可留空", text: stringList($plan.recruit.firstTags))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 210)
+            }
+            LabeledContent("保留并跳过") {
+                TextField("例如 支援机械", text: stringList($plan.recruit.preserveTags))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 210)
+            }
         }
     }
 
@@ -250,27 +275,40 @@ struct PlanEditorView: View {
             Text(plan.infrast.mode.detail)
                 .font(.caption)
                 .foregroundStyle(plan.infrast.mode == .collectOnly ? Color.maaAccent : Color.secondary)
-            Divider()
-            Text("处理设施")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 90))], alignment: .leading, spacing: 7) {
-                ForEach(InfrastFacility.allCases) { facility in
-                    Toggle(facility.title, isOn: facilityBinding(facility))
-                        .toggleStyle(.checkbox)
-                }
-            }
-            Picker("无人机用途", selection: $plan.infrast.drones) {
-                ForEach(DroneUsage.allCases) { usage in Text(usage.title).tag(usage) }
-            }
-            if plan.infrast.mode == .fullShift {
+            if plan.infrast.mode == .customSchedule {
                 Divider()
-                Text("换班心情阈值：\(Int(plan.infrast.threshold * 100))%")
-                Slider(value: $plan.infrast.threshold, in: 0...1, step: 0.05)
-                Toggle("宿舍空位补信赖未满干员", isOn: $plan.infrast.dormTrust)
-                Toggle("不将已进驻干员放入宿舍", isOn: $plan.infrast.dormNotStationed)
-                Toggle("源石碎片自动补货", isOn: $plan.infrast.replenish)
-                Toggle("训练完成后继续尝试专精", isOn: $plan.infrast.continueTraining)
+                Text("排班文件")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                HStack {
+                    TextField("MAA 基建排班 JSON", text: $plan.infrast.customSchedulePath)
+                        .textFieldStyle(.roundedBorder)
+                    Button("选择…") { chooseInfrastSchedule() }
+                }
+                Stepper("方案序号：\(plan.infrast.customSchedulePlanIndex)", value: $plan.infrast.customSchedulePlanIndex, in: 0...99)
+            } else {
+                Divider()
+                Text("处理设施")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 90))], alignment: .leading, spacing: 7) {
+                    ForEach(InfrastFacility.allCases) { facility in
+                        Toggle(facility.title, isOn: facilityBinding(facility))
+                            .toggleStyle(.checkbox)
+                    }
+                }
+                Picker("无人机用途", selection: $plan.infrast.drones) {
+                    ForEach(DroneUsage.allCases) { usage in Text(usage.title).tag(usage) }
+                }
+                if plan.infrast.mode == .fullShift {
+                    Divider()
+                    Text("换班心情阈值：\(Int(plan.infrast.threshold * 100))%")
+                    Slider(value: $plan.infrast.threshold, in: 0...1, step: 0.05)
+                    Toggle("宿舍空位补信赖未满干员", isOn: $plan.infrast.dormTrust)
+                    Toggle("不将已进驻干员放入宿舍", isOn: $plan.infrast.dormNotStationed)
+                    Toggle("源石碎片自动补货", isOn: $plan.infrast.replenish)
+                    Toggle("训练完成后继续尝试专精", isOn: $plan.infrast.continueTraining)
+                }
             }
             Divider()
             Toggle("领取会客室信息板信用", isOn: $plan.infrast.receptionMessageBoard)
@@ -317,6 +355,7 @@ struct PlanEditorView: View {
             Toggle("免费单抽", isOn: $plan.award.freeRecruit)
             Toggle("幸运墙 / 签到", isOn: $plan.award.orundum)
             Toggle("限时采矿", isOn: $plan.award.mining)
+            Toggle("活动专属赠送", isOn: $plan.award.specialAccess)
         }
     }
 
@@ -399,6 +438,19 @@ struct PlanEditorView: View {
                 .components(separatedBy: CharacterSet(charactersIn: "、,，;；"))
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
+        }
+    }
+
+    private func chooseInfrastSchedule() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.json]
+        if !plan.infrast.customSchedulePath.isEmpty {
+            panel.directoryURL = URL(filePath: plan.infrast.customSchedulePath).deletingLastPathComponent()
+        }
+        if panel.runModal() == .OK, let url = panel.url {
+            plan.infrast.customSchedulePath = url.path
         }
     }
 
@@ -508,11 +560,11 @@ private struct PlanTaskCard<Content: View>: View {
 
     private var defaultSummary: String {
         switch task {
-        case .fight: "MAA 默认：当前/上次关卡，不使用理智药或源石，不限制次数。"
-        case .recruit: "MAA 默认：4 次、不加急，自动确认 3★/4★/5★。"
-        case .infrast: "MAA 默认：对全部设施执行常规换班，不使用无人机。"
-        case .mall: "MAA 默认：访友领信用并购物，不设置优先购买与黑名单。"
-        case .award: "MAA 默认：只领取每日与每周任务奖励。"
+        case .fight: "MAA 推荐默认：当前/上次关卡，不使用理智药或源石，不限制次数。"
+        case .recruit: "MAA 推荐默认：4 次、不加急，自动确认 3★/4★/5★并保留支援机械。"
+        case .infrast: "MAA 推荐默认：对全部设施执行常规换班，不使用无人机。"
+        case .mall: "MAA 推荐默认：访友领信用并按推荐清单购物。"
+        case .award: "MAA 推荐默认：只领取每日与每周任务奖励。"
         }
     }
 }

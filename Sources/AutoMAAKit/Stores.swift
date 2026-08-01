@@ -1,5 +1,26 @@
 import Foundation
 
+public enum ConfigurationStoreError: LocalizedError, Equatable {
+    case unsupportedSchema(Int?)
+
+    public var errorDescription: String? {
+        switch self {
+        case let .unsupportedSchema(version):
+            if let version {
+                "配置协议 schema v\(version) 与当前版本不兼容"
+            } else {
+                "配置文件缺少有效的 schema 版本"
+            }
+        }
+    }
+}
+
+public struct ConfigurationRecovery: Sendable {
+    public let configuration: AppConfiguration
+    public let backupURL: URL
+    public let previousSchemaVersion: Int?
+}
+
 public struct AppDirectories: Sendable {
     public let root: URL
     public let maaConfig: URL
@@ -54,11 +75,25 @@ public struct ConfigurationStore: Sendable {
         let data = try Data(contentsOf: directories.configuration)
         let version = try Self.decoder.decode(VersionProbe.self, from: data)
         guard version.schemaVersion == AppConfiguration.currentSchemaVersion else {
-            let configuration = AppConfiguration.defaults
-            try save(configuration)
-            return configuration
+            throw ConfigurationStoreError.unsupportedSchema(version.schemaVersion)
         }
         return try Self.decoder.decode(AppConfiguration.self, from: data)
+    }
+
+    public func resetIncompatibleConfiguration() throws -> ConfigurationRecovery {
+        try directories.prepare()
+        let data = try Data(contentsOf: directories.configuration)
+        let version = try? Self.decoder.decode(VersionProbe.self, from: data).schemaVersion
+        let versionLabel = version.map(String.init) ?? "unknown"
+        let backupURL = uniqueBackupURL(versionLabel: versionLabel)
+        try data.write(to: backupURL, options: .atomic)
+        let configuration = AppConfiguration.defaults
+        try save(configuration)
+        return ConfigurationRecovery(
+            configuration: configuration,
+            backupURL: backupURL,
+            previousSchemaVersion: version
+        )
     }
 
     public func save(_ configuration: AppConfiguration) throws {
@@ -79,6 +114,14 @@ public struct ConfigurationStore: Sendable {
         decoder.dateDecodingStrategy = .iso8601
         return decoder
     }()
+
+    private func uniqueBackupURL(versionLabel: String) -> URL {
+        let base = directories.root.appending(path: "config-schema-v\(versionLabel).backup.json")
+        guard FileManager.default.fileExists(atPath: base.path) else { return base }
+        return directories.root.appending(
+            path: "config-schema-v\(versionLabel)-\(UUID().uuidString.lowercased()).backup.json"
+        )
+    }
 }
 
 public struct HistoryStore: Sendable {

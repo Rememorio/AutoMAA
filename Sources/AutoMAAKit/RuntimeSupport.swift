@@ -165,14 +165,58 @@ public struct PortAddress: Sendable, Equatable {
     public var port: String
 
     public init(_ value: String) throws {
-        guard let separator = value.lastIndex(of: ":") else {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let separator = trimmed.lastIndex(of: ":") else {
             throw RuntimeError.invalidAddress(value)
         }
-        host = String(value[..<separator])
-        port = String(value[value.index(after: separator)...])
-        if host.isEmpty || port.isEmpty || Int(port) == nil {
+        var parsedHost = String(trimmed[..<separator])
+        let parsedPort = String(trimmed[trimmed.index(after: separator)...])
+        if parsedHost.hasPrefix("["), parsedHost.hasSuffix("]") {
+            parsedHost.removeFirst()
+            parsedHost.removeLast()
+        }
+        guard !parsedHost.isEmpty,
+              !parsedHost.contains(where: \.isWhitespace),
+              let portNumber = Int(parsedPort),
+              (1...65_535).contains(portNumber)
+        else {
             throw RuntimeError.invalidAddress(value)
         }
+        host = parsedHost
+        port = String(portNumber)
+    }
+}
+
+public enum SensitiveDataRedactor {
+    public static func redact(_ value: String, sensitiveValues: [String] = []) -> String {
+        var result = value
+        let secrets = Set(sensitiveValues.compactMap { rawValue -> String? in
+            let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.count >= 3 ? trimmed : nil
+        }).sorted { $0.count > $1.count }
+        for secret in secrets {
+            result = result.replacingOccurrences(
+                of: secret,
+                with: "[已隐藏]",
+                options: [.caseInsensitive, .literal]
+            )
+        }
+        result = replacingMatches(
+            in: result,
+            pattern: #"(?<![\p{L}\p{N}._%+-])[\p{L}\p{N}._%+-]+@[\p{L}\p{N}.-]+\.[A-Za-z]{2,}(?![\p{L}\p{N}])"#,
+            replacement: "[已隐藏邮箱]"
+        )
+        return replacingMatches(
+            in: result,
+            pattern: #"(?<!\d)\d{7,}(?!\d)"#,
+            replacement: "[已隐藏号码]"
+        )
+    }
+
+    private static func replacingMatches(in value: String, pattern: String, replacement: String) -> String {
+        guard let expression = try? NSRegularExpression(pattern: pattern) else { return value }
+        let range = NSRange(value.startIndex..<value.endIndex, in: value)
+        return expression.stringByReplacingMatches(in: value, range: range, withTemplate: replacement)
     }
 }
 

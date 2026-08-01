@@ -12,12 +12,12 @@ public enum ClientKind: String, Codable, CaseIterable, Identifiable, Sendable {
 
     public var title: String {
         switch self {
-        case .official: "中国大陆 · 官服"
-        case .bilibili: "中国大陆 · B 服"
+        case .official: "简中服 · 官服"
+        case .bilibili: "简中服 · Bilibili"
         case .txwy: "繁中服"
-        case .yoStarEN: "国际服"
-        case .yoStarJP: "日服"
-        case .yoStarKR: "韩服"
+        case .yoStarEN: "英文服"
+        case .yoStarJP: "日文服"
+        case .yoStarKR: "韩文服"
         }
     }
 
@@ -108,10 +108,16 @@ public enum FightStagePreset: String, CaseIterable, Identifiable, Sendable {
     case currentOrLast = ""
     case oneSeven = "1-7"
     case lmd = "CE-6"
+    case battleRecord = "LS-6"
     case redCertificate = "AP-5"
     case skillSummary = "CA-5"
-    case battleRecord = "LS-6"
+    case carbon = "SK-5"
     case annihilation = "Annihilation"
+    case chernobog = "Chernobog@Annihilation"
+    case lungmenOutskirts = "LungmenOutskirts@Annihilation"
+    case lungmenDowntown = "LungmenDowntown@Annihilation"
+    case obsidianFestival = "OF-1"
+    case obsidianFestivalFarm = "OF-F3"
 
     public var id: String { rawValue }
 
@@ -120,10 +126,16 @@ public enum FightStagePreset: String, CaseIterable, Identifiable, Sendable {
         case .currentOrLast: "当前/上次"
         case .oneSeven: "1-7"
         case .lmd: "龙门币-6/5"
+        case .battleRecord: "作战记录-6/5"
         case .redCertificate: "红票-5"
-        case .skillSummary: "技能-5"
-        case .battleRecord: "经验-6/5"
-        case .annihilation: "剿灭模式"
+        case .skillSummary: "技巧概要-5"
+        case .carbon: "碳素-5"
+        case .annihilation: "当期剿灭"
+        case .chernobog: "切尔诺伯格"
+        case .lungmenOutskirts: "龙门外环"
+        case .lungmenDowntown: "龙门市区"
+        case .obsidianFestival: "OF-1"
+        case .obsidianFestivalFarm: "OF-F3"
         }
     }
 }
@@ -154,6 +166,7 @@ public enum DroneUsage: String, Codable, CaseIterable, Identifiable, Sendable {
 
 public enum InfrastMode: Int, Codable, CaseIterable, Identifiable, Sendable {
     case fullShift = 0
+    case customSchedule = 10_000
     case collectOnly = 20_000
 
     public var id: Int { rawValue }
@@ -161,14 +174,32 @@ public enum InfrastMode: Int, Codable, CaseIterable, Identifiable, Sendable {
     public var title: String {
         switch self {
         case .fullShift: "完整换班"
-        case .collectOnly: "仅收菜，不换班"
+        case .customSchedule: "自定义排班"
+        case .collectOnly: "仅收菜"
         }
     }
 
     public var detail: String {
         switch self {
         case .fullShift: "MAA 单设施最优解，会处理所选设施并进行完整换班。"
-        case .collectOnly: "保留收取产物、无人机与会客室逻辑，不更换干员。"
+        case .customSchedule: "读取 MAA 基建排班文件，并执行其中指定的方案。"
+        case .collectOnly: "一键轮换模式：保留收取产物、无人机与会客室逻辑，不进行常规换班。"
+        }
+    }
+}
+
+public enum RecruitExtraTagsMode: Int, Codable, CaseIterable, Identifiable, Sendable {
+    case standard = 0
+    case alwaysThree = 1
+    case moreHighRarity = 2
+
+    public var id: Int { rawValue }
+
+    public var title: String {
+        switch self {
+        case .standard: "标准选择"
+        case .alwaysThree: "总是选择三个标签"
+        case .moreHighRarity: "尽量选择更多高星标签"
         }
     }
 }
@@ -213,7 +244,7 @@ public struct FightConfiguration: Codable, Equatable, Sendable {
     public var settingsMode = TaskSettingsMode.custom
     public var stage = ""
     public var medicine: Int?
-    public var expiringMedicine: Int?
+    public var medicineExpireDays: Int?
     public var stone: Int?
     public var times: Int?
     public var series: Int?
@@ -237,7 +268,9 @@ public struct RecruitConfiguration: Codable, Equatable, Sendable {
     public var autoConfirm4 = true
     public var autoConfirm5 = false
     public var autoConfirm6 = false
-    public var preserveRobot = true
+    public var firstTags: [String] = []
+    public var extraTagsMode = RecruitExtraTagsMode.standard
+    public var preserveTags = ["支援机械"]
 
     public init() {}
 
@@ -261,6 +294,8 @@ public struct InfrastConfiguration: Codable, Equatable, Sendable {
     public var receptionClueExchange = true
     public var receptionSendClue = true
     public var continueTraining = true
+    public var customSchedulePath = ""
+    public var customSchedulePlanIndex = 0
 
     public init() {}
 
@@ -307,6 +342,7 @@ public struct AwardConfiguration: Codable, Equatable, Sendable {
     public var freeRecruit = false
     public var orundum = false
     public var mining = false
+    public var specialAccess = false
 
     public init() {}
 
@@ -351,7 +387,7 @@ public struct ClientConfiguration: Codable, Identifiable, Equatable, Sendable {
         name: String,
         kind: ClientKind,
         appPath: String,
-        address: String = "localhost:1717",
+        address: String = "127.0.0.1:1717",
         profileName: String,
         bundleIdentifier: String? = nil,
         enabled: Bool = true,
@@ -470,7 +506,7 @@ public struct AutomationPlan: Codable, Identifiable, Equatable, Sendable {
 }
 
 public struct AppConfiguration: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = 3
+    public static let currentSchemaVersion = 4
 
     public var schemaVersion: Int
     public var cliPath: String

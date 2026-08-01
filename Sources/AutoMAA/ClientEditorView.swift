@@ -95,7 +95,7 @@ struct ClientEditorView: View {
                     GridRow {
                         Text("MaaTools")
                             .foregroundStyle(.secondary)
-                        TextField("localhost:1717", text: $client.address)
+                        TextField("127.0.0.1:1717", text: $client.address)
                             .textFieldStyle(.roundedBorder)
                     }
                     GridRow {
