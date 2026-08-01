@@ -7,9 +7,9 @@ AutoMAA 使用 Swift 6.2、SwiftUI 和 Swift Package Manager，最低支持 macO
 ```bash
 git clone https://github.com/Rememorio/AutoMAA.git
 cd AutoMAA
-swift test
+swift test --parallel
 ./scripts/build-app.sh
-open .build/AutoMAA.app
+open .build/AutoMAA.app --args --data-directory /tmp/automaa-development
 ```
 
 项目分为：
@@ -34,8 +34,8 @@ open .build/AutoMAA.app
 
 - 使用临时 `AppDirectories(root:)`；
 - 使用假 Bundle Identifier 与测试专用端口；
-- 不使用 `localhost:1717`；
+- 不使用默认 MaaTools 地址或端口；
 - 不读取 `~/Library/Application Support/AutoMAA`；
 - 不依赖网络、PlayCover 或已登录账号。
 
-提交前至少运行 `swift test` 和 `git diff --check`。
+Debug 构建支持 `--data-directory <临时目录>`，它会同时隔离配置、日志和 LaunchAgent，并关闭系统 LaunchAgent 集成与自动更新检查。提交前至少运行 `swift test --parallel` 和 `git diff --check`；涉及发布结构时运行 `./scripts/verify-release.sh`。

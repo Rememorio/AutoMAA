@@ -22,7 +22,7 @@ AutoMAA 是原生 macOS MAA 工作流编排器。它管理客户端、账号、�
 ```bash
 git status --short --branch
 git diff
-swift test
+swift test --parallel
 ```
 
 保留不属于当前任务的本地改动。除非用户明确要求，不要提交、推送、创建 Release，也不要操作真实游戏客户端。
@@ -30,7 +30,7 @@ swift test
 常用验证命令：
 
 ```bash
-swift test
+swift test --parallel
 ./scripts/build-app.sh
 ./scripts/test-updater.sh
 ./scripts/package-dmg.sh
@@ -45,6 +45,7 @@ npm run docs:build
 | --- | --- |
 | `Sources/AutoMAA/` | SwiftUI 应用、界面状态和用户交互 |
 | `Sources/AutoMAAKit/Models.swift` | 配置协议、任务枚举和工作流数据模型 |
+| `Sources/AutoMAAKit/ConfigurationValidation.swift` | 结构校验、运行前检查和 Profile 名称规范化 |
 | `Sources/AutoMAAKit/MAAConfigurationWriter.swift` | 将 AutoMAA 配置转换为独立的 MAA Profile 与 Task 文件 |
 | `Sources/AutoMAAKit/WorkflowRunner.swift` | 串行调度、重试、断点、清理和事件输出 |
 | `Sources/AutoMAAKit/RuntimeSupport.swift` | 进程锁、端口、游戏生命周期和人工处理分类 |
@@ -55,6 +56,7 @@ npm run docs:build
 | `Tests/AutoMAAKitTests/` | 核心配置与工作流测试 |
 | `scripts/` | App、图标和 DMG 构建脚本 |
 | `docs/` | VitePress 用户与开发文档 |
+| `.github/workflows/ci.yml` | Swift 测试、App 构建、签名和更新器隔离验证 |
 | `.github/workflows/docs.yml` | GitHub Pages 构建与部署 |
 
 界面层不应重新实现工作流或 MAA 参数语义。可测试的配置、生成和调度逻辑应放在 `AutoMAAKit`。
@@ -69,9 +71,10 @@ npm run docs:build
 4. 只有成功完成的任务才能写入当日断点。断点必须按方案隔离；失败、超时和取消不得伪装成成功。
 5. “安全停止”必须终止当前 MAA 命令、关闭当前客户端并清理连接。
 6. 不绕过登录、验证码、用户协议、维护、强制更新或未知弹窗，也不自动下载或安装游戏包体。
-7. 日志与错误信息应足以定位问题，但不得记录密码、完整手机号或其他凭据。
+7. 日志与错误信息应足以定位问题，但必须通过统一脱敏层隐藏配置中的账号片段、完整手机号、邮箱和其他凭据。
 8. 每个客户端使用独立的 MAA Profile；生成文件只能清理由 AutoMAA 清单或命名规则确认归属的文件。
-9. AutoMAA 本体更新只接受官方仓库固定命名的正式 Release；替换前必须校验大小、SHA-256、Bundle ID、版本、架构和代码签名，失败时保留或恢复旧 App。
+9. AutoMAA 本体更新只接受构建时配置仓库中固定命名的正式 Release；替换前必须校验大小、SHA-256、Bundle ID、版本、架构和代码签名，失败时保留或恢复旧 App。
+10. 图形界面、定时 Runner 和直接调用 `WorkflowRunner` 必须使用同一套运行前校验；不能只在按钮层阻止危险配置。
 
 官方构建的更新仓库由 `scripts/Info.plist` 中的 `AutoMAAUpdateRepository` 指定。下游发行版可以在构建时改为自己的仓库，不要在界面或业务代码中另行写死维护者信息。
 
@@ -79,14 +82,15 @@ npm run docs:build
 
 ## MAA 配置规则
 
-- MAA 参数名称、默认值和服务端映射必须以当前 MAA/MaaMacGui 的公开协议为依据，不要凭印象新增参数。
-- “MAA 默认参数”和“AutoMAA 自定义参数”是两个明确模式。关闭自定义参数不能丢失用户先前输入的值。
-- 基建“仅收菜，不换班”使用 `Infrast mode = 20000`；完整换班使用 `mode = 0`，两者必须在模型、界面和生成参数中明确区分。
+- MAA 参数名称、默认值和服务端映射以当前 MAA 集成文档与 MaaCore 接口为准；MaaMacGui 只用于交互和推荐值参考。上游 GUI 仍在使用弃用字段时，不得把弃用字段带入 AutoMAA。
+- “MAA 推荐参数”和“AutoMAA 自定义参数”是两个明确模式。关闭自定义参数不能丢失用户先前输入的值；推荐参数应集中生成并尽量省略有稳定 Core 默认值的可选字段，避免复制一份会漂移的默认配置。
+- 基建常规换班使用 `Infrast mode = 0`，自定义排班使用 `mode = 10000`，仅收菜的一键轮换使用 `mode = 20000`；文案必须准确说明 mode 20000 仍保留无人机和会客室等基本操作。
+- 不得生成上游已弃用参数。当前临期理智药使用 `medicine_expire_days`，公招保留标签使用 `preserve_tags`。
 - 任务参数属于自动化方案，不属于账号；不要重新把相同任务配置复制回每个账号。
 - 未启用的可选参数不应写入任务文件。
 - Profile 名称和生成文件名必须经过安全规范化，禁止目录穿越或覆盖用户手写配置。
 - 修改配置字段时同步检查默认值、Codable 往返、UI、任务生成和测试。
-- 项目处于 `0.x` 阶段，配置协议发生不兼容变化时递增 `AppConfiguration.currentSchemaVersion`，并更新测试和 README。除非任务明确要求，不增加旧实验配置的迁移层。
+- 项目处于 `0.x` 阶段，配置协议发生不兼容变化时递增 `AppConfiguration.currentSchemaVersion`，并更新测试、README 和配置参考。除非任务明确要求，不增加旧实验配置的迁移层；不兼容配置必须先备份再重置，后台 Runner 不得静默改写它。
 
 ## Swift 与 SwiftUI 规范
 
@@ -103,7 +107,7 @@ npm run docs:build
 提交 Swift 改动前至少运行：
 
 ```bash
-swift test
+swift test --parallel
 ```
 
 涉及应用入口、SwiftUI 或打包的改动还需运行：
@@ -117,11 +121,13 @@ swift test
 自动化测试不得接触真实游戏或用户数据。
 
 - 所有存储测试使用 `AppDirectories(root:)` 指向独立临时目录。
+- LaunchAgent 测试必须同时注入临时 `launchAgentsDirectory` 并关闭系统集成；只替换 `AppDirectories` 仍可能触碰用户的 `~/Library/LaunchAgents` 或调用真实 `launchctl`。
 - 流程测试使用假 Bundle Identifier、测试专用高位端口和无副作用的可执行文件，例如 `/usr/bin/true`。
-- 不得在测试中使用默认官服/日服 Bundle Identifier、真实 `.app` 路径、`localhost:1717` 或用户的 `~/Library/Application Support/AutoMAA`。
+- 不得在测试中使用生产服务器的 Bundle Identifier、真实 `.app` 路径、默认 MaaTools 地址或用户的 `~/Library/Application Support/AutoMAA`。
 - 不得依赖已经安装的账号、密码、PlayCover 状态、MAA Profile 或网络。
 - 修改账号切换、端口释放、断点、取消、任务参数和人工处理分类时必须补充回归测试。
 - 真机或真实账号测试只在用户明确授权时进行；开始前说明范围，结束后确认客户端关闭和端口释放，并在结果中隐去敏感信息。
+- SwiftUI 冒烟测试使用 Debug 构建的 `--data-directory <临时目录>`，或仅在独立 QA Bundle 中注入 `AUTOMAA_DEVELOPMENT_DATA_DIRECTORY`；该入口同时隔离配置、日志和 LaunchAgent，禁止用它指向默认用户目录。
 
 ## 文档与视觉资产
 
@@ -140,14 +146,27 @@ swift test
 - 每个 commit 保持单一目的，不提交用户配置、日志、构建目录、DMG 或凭据。
 - 不重写已经公开的 tag 或 Release。发版步骤见 `RELEASE.md`。
 
+## 维护记忆与自进化
+
+代理应把一次性发现转化为最小、可验证且不会过期的项目知识，让后续改动更安全，而不是在文档末尾不断堆叠经验记录。
+
+1. **先取证再立规则。** 上游行为以公开协议、当前源码或可重复测试为证据；不要把推测、单次本机现象或个人偏好写成全局约束。
+2. **错误先变成回归测试。** 修复缺陷时先找到能稳定复现的最小输入，再把安全不变量放进 `AutoMAAKit`，最后更新文案。测试名称描述行为，不记录事件经过。
+3. **知识放在最窄的正确层级。** 代码不变量写成类型和校验，用户选择写入文档，贡献流程写入 `CONTRIBUTING.md`，发版检查写入 `RELEASE.md`；只有跨任务长期有效的代理约束才进入本文件。
+4. **有机改写而非追加补丁。** 新结论与旧规则冲突时，直接重写或删除旧内容；不要同时保留两个时代的参数、命名或流程。定期搜索已弃用字段、过期版本、旧截图和重复说明。
+5. **审计上游漂移。** 每个 MINOR Release 至少对照一次 MAA 集成文档、MaaCore 参数解析、maa-cli 配置 schema 和最新稳定版更新日志。发现差异时同步模型、生成器、UI、测试和文档，不用兼容层掩盖错误。
+6. **只学习项目知识。** 不把用户账号、手机号、路径、日志内容或私人运行习惯沉淀进仓库。通用场景要抽象成空白模板、假数据和可配置能力。
+7. **让规则能够被删除。** 新增规则时优先说明要保护的不变量；一旦代码结构或自动化检查已经完整承载该约束，就精简重复文字，保持本文件可读。
+
 ## 完成标准
 
 交付前确认：
 
 - 改动是通用配置能力，没有维护者专属内容；
 - 核心安全约束仍成立；
+- MAA 上游协议审计没有遗留弃用字段或未经说明的能力差异；
 - 新行为有足够的自动化测试；
-- `swift test` 通过，必要时 App 和 DMG 构建也通过；
+- `swift test` 和 CI 等价验证通过，必要时 App、更新器、文档和 DMG 构建也通过；
 - README、贡献指南、发版文档和更新日志与实现一致；
 - `git diff --check` 无错误，工作区中没有敏感信息或意外产物；
 - 最终说明列出验证范围、未验证项和已知限制。

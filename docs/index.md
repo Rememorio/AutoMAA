@@ -28,10 +28,10 @@ features:
     details: 成功步骤按方案与日期记录，失败后可以续跑，不同方案不会互相误跳过。
   - icon: ⚙️
     title: MAA 参数
-    details: 每项任务可选择 MAA 默认参数，或启用 AutoMAA 的清晰可视化配置。
+    details: 每项任务可选择对齐当前 MAA 的推荐参数，或启用 AutoMAA 的清晰可视化配置。
   - icon: 🏭
-    title: 两种基建模式
-    details: 轻量方案可仅收菜，完整方案可换班；设施、无人机、宿舍信赖与会客室均可配置。
+    title: 三种基建模式
+    details: 轻量方案可仅收菜，完整方案可换班，也可读取 MAA 自定义排班文件。
   - icon: 🕗
     title: 每方案定时
     details: 每个方案都有独立的 macOS LaunchAgent，也可以随时手动运行或安全停止。
@@ -45,8 +45,8 @@ features:
   </div>
 
   <figure class="product-shot product-shot-wide">
-    <img class="theme-shot theme-shot-light" src="./assets/screenshots/overview-light.webp" width="2320" height="1520" alt="AutoMAA 今日总览：展示国服与日服两个客户端、三个演示账号、十二个日常步骤和每天八点自动运行" />
-    <img class="theme-shot theme-shot-dark" src="./assets/screenshots/overview-dark.webp" width="2320" height="1520" alt="AutoMAA 今日总览：展示国服与日服两个客户端、三个演示账号、十二个日常步骤和每天八点自动运行" />
+    <img class="theme-shot theme-shot-light" src="./assets/screenshots/overview-light.webp" width="2320" height="1520" alt="AutoMAA 今日总览：展示简中服与日文服两个客户端、三个演示账号和两套日常方案" />
+    <img class="theme-shot theme-shot-dark" src="./assets/screenshots/overview-dark.webp" width="2320" height="1520" alt="AutoMAA 今日总览：展示简中服与日文服两个客户端、三个演示账号和两套日常方案" />
     <figcaption><strong>今日总览</strong><span>先确认顺序与安全检查，再开始完整工作流。</span></figcaption>
   </figure>
 
@@ -59,7 +59,7 @@ features:
     <figure class="product-shot">
       <img class="theme-shot theme-shot-light" src="./assets/screenshots/task-settings-light.webp" width="2320" height="1520" loading="lazy" decoding="async" alt="AutoMAA 任务配置：理智作战、公开招募、基建收菜和领取奖励可排序，并可分别启用自定义参数" />
       <img class="theme-shot theme-shot-dark" src="./assets/screenshots/task-settings-dark.webp" width="2320" height="1520" loading="lazy" decoding="async" alt="AutoMAA 任务配置：理智作战、公开招募、基建收菜和领取奖励可排序，并可分别启用自定义参数" />
-      <figcaption><strong>熟悉的 MAA 任务参数</strong><span>需要时精细配置，不需要时关闭开关沿用 MAA 默认值。</span></figcaption>
+      <figcaption><strong>熟悉的 MAA 任务参数</strong><span>需要时精细配置，不需要时关闭开关使用 MAA 推荐值。</span></figcaption>
     </figure>
   </div>
 </section>

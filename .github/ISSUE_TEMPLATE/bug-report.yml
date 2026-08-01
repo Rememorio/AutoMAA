@@ -1,0 +1,77 @@
+name: Bug 报告
+description: 报告可复现的 AutoMAA 行为问题
+title: "bug: "
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。请先确认问题发生在 AutoMAA 本身；MAA 识别问题通常应报告给 MAA。提交前请从日志和截图中移除账号片段、手机号、邮箱与本机私人路径。
+
+  - type: input
+    id: automaa-version
+    attributes:
+      label: AutoMAA 版本
+      placeholder: 例如 0.2.0
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: 环境
+      description: macOS、芯片、maa-cli 与 MaaCore 版本
+      placeholder: macOS 26.0 / Apple Silicon / maa-cli x.y.z / MaaCore x.y.z
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 问题区域
+      options:
+        - 配置与界面
+        - 任务参数生成
+        - 客户端或账号编排
+        - 定时与断点
+        - 更新与安装
+        - 文档
+        - 其他
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. …
+        2. …
+        3. …
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期与实际结果
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 已脱敏的日志或截图
+      description: 可直接拖入附件；不要粘贴用户配置、账号片段或完整手机号。
+
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我使用的是最新正式版本，并已查看文档站的常见问题。
+          required: true
+        - label: 我已经移除账号、手机号、邮箱、密码、验证码和私人路径。
+          required: true
+        - label: 我没有为了复现问题关闭系统安全机制或让 AutoMAA 操作无权使用的账号。
+          required: true

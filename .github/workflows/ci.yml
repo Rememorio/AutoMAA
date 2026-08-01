@@ -1,0 +1,44 @@
+name: Continuous integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  swift:
+    name: Swift and macOS app
+    runs-on: macos-26
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Show toolchain
+        run: swift --version
+
+      - name: Run isolated tests
+        run: swift test --parallel
+
+      - name: Compile release with warnings as errors
+        run: swift build -c release -Xswiftc -warnings-as-errors
+
+      - name: Build application bundle
+        run: ./scripts/build-app.sh
+
+      - name: Verify application signature
+        run: codesign --verify --deep --strict --verbose=2 .build/AutoMAA.app
+
+      - name: Test updater in a temporary directory
+        run: ./scripts/test-updater.sh
+
+      - name: Check tracked-file formatting
+        run: git diff --check

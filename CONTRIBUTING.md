@@ -23,9 +23,9 @@
 git clone git@github.com:<your-name>/AutoMAA.git
 cd AutoMAA
 git remote add upstream https://github.com/Rememorio/AutoMAA.git
-swift test
+swift test --parallel
 ./scripts/build-app.sh
-open .build/AutoMAA.app
+open .build/AutoMAA.app --args --data-directory /tmp/automaa-development
 ```
 
 大多数代码改动不需要真实游戏、PlayCover 或 MAA。单元测试必须保持完全隔离且可重复运行。
@@ -75,7 +75,8 @@ test: isolate unavailable client workflow
 - UI 使用原生 SwiftUI 组件、动态颜色和 SF Symbols，并兼顾深浅色、VoiceOver 与“减少动态效果”。
 - 可测试的配置、MAA 参数生成和工作流逻辑放在 `AutoMAAKit`，不要堆进 SwiftUI 视图。
 - 任何外部进程都必须处理超时、取消和非零退出码。
-- MAA 参数必须与上游公开协议一致；请在 PR 中注明依据的 MAA/MaaMacGui 文档或代码位置。
+- MAA 参数必须与上游当前集成文档和 MaaCore 接口一致；MaaMacGui 只作为交互与推荐值参考。请在 PR 中注明依据的协议、源码或版本。
+- 不生成上游已弃用字段，也不为掩盖协议漂移增加兼容层；协议变化应同步模型、生成器、UI、测试和文档。
 - 保持客户端严格串行、端口释放确认、成功后才写断点和取消时完整清理等安全约束。
 - 配置协议不兼容变化需要递增 schema，并同步默认值、Codable、任务生成、UI、测试和 README。
 - 除非经过讨论并能说明分发与维护成本，不新增第三方依赖。
@@ -85,7 +86,7 @@ test: isolate unavailable client workflow
 提交前至少运行：
 
 ```bash
-swift test
+swift test --parallel
 git diff --check
 ```
 
@@ -98,7 +99,7 @@ git diff --check
 涉及打包脚本或 Release 结构时还需运行：
 
 ```bash
-./scripts/package-dmg.sh
+./scripts/verify-release.sh
 ```
 
 涉及 README 或 `docs/` 时还需运行：
@@ -112,7 +113,8 @@ npm run docs:build
 
 - 使用临时 `AppDirectories(root:)`；
 - 使用假 Bundle Identifier、测试端口和无副作用的命令；
-- 不连接 `localhost:1717`，不启动真实游戏，不读取用户的 AutoMAA 数据目录；
+- 不连接默认 MaaTools 地址或端口，不启动真实游戏，不读取用户的 AutoMAA 数据目录；
+- LaunchAgent 测试必须注入临时目录并关闭系统集成；SwiftUI 冒烟测试必须使用 Debug `--data-directory <临时目录>`，或仅在独立 QA Bundle 中注入 `AUTOMAA_DEVELOPMENT_DATA_DIRECTORY`；
 - 错误修复应包含能在修复前失败、修复后通过的回归测试；
 - UI 改动在 PR 中提供深色和浅色模式截图，涉及状态变化时说明动画和无障碍表现。
 

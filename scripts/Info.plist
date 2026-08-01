@@ -10,6 +10,8 @@
     <string>com.rememorio.AutoMAA</string>
     <key>CFBundleIconFile</key>
     <string>AutoMAA.icns</string>
+    <key>CFBundleGetInfoString</key>
+    <string>AutoMAA 0.2.0</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
@@ -19,7 +21,7 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.1</string>
+    <string>0.2.0</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>AutoMAAUpdateRepository</key>
@@ -28,6 +30,8 @@
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSHumanReadableCopyright</key>
+    <string>Copyright © 2026 AutoMAA contributors</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
 </dict>

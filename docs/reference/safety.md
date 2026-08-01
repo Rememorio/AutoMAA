@@ -9,7 +9,7 @@ AutoMAA 会启动和关闭游戏客户端，并调用 MAA 执行游戏内操作�
 - 串行启动、切换和关闭客户端；
 - 调用本机 `maa-cli`；
 - 记录步骤结果与必要错误信息；
-- 安装用户主动启用的 LaunchAgent 定时任务。
+- 安装用户主动启用的 LaunchAgent 定时任务；
 - 启动时向 GitHub Releases API 查询 AutoMAA 的最新正式版本；
 - 经用户确认后下载、校验并替换 AutoMAA.app。
 

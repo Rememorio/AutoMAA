@@ -8,6 +8,7 @@
 
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-000000?logo=apple)](https://www.apple.com/macos/)
 [![Swift 6.2](https://img.shields.io/badge/Swift-6.2-F05138?logo=swift&logoColor=white)](https://www.swift.org/)
+[![Continuous integration](https://github.com/Rememorio/AutoMAA/actions/workflows/ci.yml/badge.svg)](https://github.com/Rememorio/AutoMAA/actions/workflows/ci.yml)
 [![MIT License](https://img.shields.io/badge/License-MIT-2ea44f)](./LICENSE)
 [![GitHub Release](https://img.shields.io/github/v/release/Rememorio/AutoMAA)](https://github.com/Rememorio/AutoMAA/releases/latest)
 [![Documentation](https://img.shields.io/badge/文档-AutoMAA-0d9f9e)](https://rememorio.github.io/AutoMAA/)
@@ -49,22 +50,22 @@ AutoMAA 不复制 MAA 的识别能力，也不把 MaaCore 打包进仓库。运�
 
 ### 通用工作流
 
-- 支持中国大陆官服、Bilibili 服、繁中服、国际服、日服和韩服。
+- 支持简中服 · 官服、简中服 · Bilibili、繁中服、英文服、日文服和韩文服。
 - 客户端与账号按照用户配置的顺序串行执行；每个方案单独定义任务顺序。
 - 同一客户端支持多个账号，通过登录页中的唯一账号片段安全匹配。
 - 每个客户端使用独立的 MAA Profile，避免服务器资源和连接配置互相污染。
 
 ### 日常任务
 
-- **理智作战**：当前/上次、1-7、龙门币、红票、技能、经验、剿灭和自定义关卡；支持理智药、48 小时过期理智药、源石、次数、连战与博朗台模式。
-- **公开招募**：刷新、次数、加急、星级自动确认和小车词条保留。
-- **基建**：可选 `Infrast mode = 20000` 的仅收菜模式，或 `mode = 0` 的完整换班模式；支持设施、无人机、心情阈值、宿舍信赖、会客室与训练室选项。
+- **理智作战**：当前/上次、长期资源关卡、固定剿灭、OF 关卡和自定义关卡；支持普通理智药、指定天数内到期的理智药、源石、次数、1–10 次连战与博朗台模式。
+- **公开招募**：刷新、次数、加急、星级自动确认、三星首选、额外标签策略和任意保留标签。
+- **基建**：可选 `mode = 20000` 的仅收菜一键轮换、`mode = 0` 的完整换班或 `mode = 10000` 的 MAA 自定义排班；支持设施、无人机、心情阈值、宿舍信赖、会客室与训练室选项。
 - **信用与购物**：访问好友基建领取信用、信用商店购物、优先购买、黑名单、溢出策略与可选助战信用关。
 - **领取奖励**：每日/每周任务、邮件、免费单抽、合成玉与限时活动奖励。
 
-每张任务卡都有“自定义参数”开关：关闭时使用 MAA 的出厂默认参数，再次开启会恢复此前保存的 AutoMAA 参数。未启用的理智参数不会写入 MAA 任务文件。
+每张任务卡都有“自定义参数”开关：关闭时使用 AutoMAA 对齐当前 MAA 的推荐参数，再次开启会恢复此前保存的自定义值。未启用的可选理智参数不会写入 MAA 任务文件。
 
-> MAA 的基建出厂参数会进行常规换班。若只想收菜而不换班，请开启自定义参数并明确选择“仅收菜，不换班”。
+> MAA 的推荐基建参数会进行常规换班。若只想收菜而不常规换班，请开启自定义参数并明确选择“仅收菜”。
 
 ### 可靠性与安全边界
 
@@ -72,6 +73,8 @@ AutoMAA 不复制 MAA 的识别能力，也不把 MaaCore 打包进仓库。运�
 - 已完成的客户端或账号不会在当天再次启动或切换。
 - 切换客户端前关闭当前游戏，并确认 MaaTools 连接已经释放。
 - 使用单实例锁防止任务重复运行，使用 `caffeinate` 避免流程中途休眠。
+- 图形界面和无界面定时运行使用同一套运行前校验；账号片段不唯一、参数损坏或自定义排班缺失时不会开始流程。
+- 命令输出写入历史前会遮盖账号片段、完整手机号和邮箱。
 - 账号无法匹配时只跳过该账号；客户端需要人工处理时关闭并跳过该客户端。
 - 连接被未知进程占用或客户端无法安全关闭时停止流程，避免连接到错误实例。
 - “安全停止”会终止当前 MAA 命令、关闭当前客户端并清理连接；也可以按 `Command-.`。
@@ -105,14 +108,14 @@ maa version
 
 图文步骤、安全解释和校验命令见文档站的[下载与安装](https://rememorio.github.io/AutoMAA/guide/installation)；请勿全局关闭 Gatekeeper。
 
-安装完成后，AutoMAA 的更新与游戏包体更新相互独立。`v0.1.1` 起，AutoMAA 会在启动时检查本项目的正式 GitHub Release，也可以在“全局设置”中手动检查；更新包通过附件大小、SHA-256、Bundle ID、版本、架构和代码签名校验后，可选择“重启并立即更新”。`v0.1.0` 需要先从 Releases 手动安装一次 `v0.1.1`。MaaCore 与资源仍由 `maa-cli` 管理，游戏大版本更新仍需在游戏运行环境中手动完成。
+安装完成后，AutoMAA 的更新与游戏包体更新相互独立。AutoMAA 会检查本项目的正式 GitHub Release；更新包通过附件大小、SHA-256、Bundle ID、版本、架构和代码签名校验后，可选择“重启并立即更新”。“全局设置”还可以查看 maa-cli / MaaCore 版本、更新稳定版核心与基础资源、热更新识别资源。游戏大版本更新仍需在游戏运行环境中手动完成。
 
 ## 快速开始
 
 1. 启动 AutoMAA，在“全局设置”中确认 `maa-cli` 路径。Apple Silicon Homebrew 的默认路径通常是 `/opt/homebrew/bin/maa`。
 2. 添加一个客户端，选择服务器、游戏 `.app`、MaaTools 地址和唯一的 MAA Profile 名称。
 3. 添加一个或多个账号。同一客户端只有一个启用账号时，账号片段可以留空；存在多个启用账号时，每个账号必须填写不同的登录页匹配片段。这里填写 MAA 能识别的唯一片段即可，例如手机号末四位；AutoMAA 不读取或保存游戏密码。
-4. 打开“轻量日常”“完整日常”模板或新建方案，选择执行账号、任务顺序和参数。只收基建时选择“仅收菜，不换班”；完整换班时选择“完整换班”。
+4. 打开“轻量日常”“完整日常”模板或新建方案，选择执行账号、任务顺序和参数。只收基建时选择“仅收菜”；完整换班时选择“完整换班”。
 5. 回到“自动化总览”，处理当前方案的运行检查提示，然后在有人值守的情况下点击对应方案的“运行”。
 6. 验证稳定后，在方案编辑页设置时间并启用独立定时运行。也可以继续创建午间、周末或临时方案。
 
@@ -138,7 +141,7 @@ AutoMAA 的用户数据保存在：
 
 `MAA/` 下的文件由 AutoMAA 管理，不建议手动编辑。删除方案、客户端或账号时，AutoMAA 只会清理由自身清单或严格命名规则确认归属的生成文件。
 
-当前配置协议为 schema v3。项目仍在 `0.x` 阶段，不承诺对实验阶段的旧配置进行迁移；重要配置请自行备份。
+当前配置协议为 schema v4。项目仍在 `0.x` 阶段，不承诺迁移实验配置；发现旧 schema 或损坏配置时，图形界面会先把原文件备份到同一目录，再恢复通用空配置。后台 Runner 只报错，不会静默改写原文件。
 
 ## 开发
 
@@ -147,18 +150,24 @@ AutoMAA 的用户数据保存在：
 ```bash
 git clone https://github.com/Rememorio/AutoMAA.git
 cd AutoMAA
-swift test
+swift test --parallel
 ./scripts/build-app.sh
-open .build/AutoMAA.app
+open .build/AutoMAA.app --args --data-directory /tmp/automaa-development
 ```
 
-制作与 Release 相同结构的 DMG：
+快速制作与 Release 相同结构的 DMG：
 
 ```bash
 ./scripts/package-dmg.sh
 ```
 
-产物位于 `dist/`，并同时生成 SHA-256 校验文件。若修改了图标母图，可运行 `./scripts/build-icon.sh` 重新生成 `.icns`。
+正式发版前执行唯一的完整验收入口：
+
+```bash
+./scripts/verify-release.sh
+```
+
+产物位于 `dist/`，并同时生成 SHA-256 校验文件。完整验收会覆盖隔离测试、文档、更新器、DMG、挂载结构、版本、架构与签名。若修改了图标母图，可运行 `./scripts/build-icon.sh` 重新生成 `.icns`。
 
 在临时目录中验证更新辅助程序的替换、校验和结果回写：
 

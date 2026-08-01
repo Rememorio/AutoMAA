@@ -12,6 +12,7 @@ APP_DIR="$PROJECT_DIR/.build/AutoMAA.app"
 BUILD_VERSION="$(/bin/date -u +%Y%m%d%H%M%S)"
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 
+/bin/rm -rf -- "$APP_DIR"
 /bin/mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 /bin/cp "$BIN_DIR/AutoMAA" "$APP_DIR/Contents/MacOS/AutoMAA"
 /bin/cp "$BIN_DIR/AutoMAARunner" "$APP_DIR/Contents/MacOS/AutoMAARunner"

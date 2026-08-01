@@ -3,7 +3,8 @@ set -euo pipefail
 
 PROJECT_DIR="${0:A:h:h}"
 INFO_PLIST="$PROJECT_DIR/scripts/Info.plist"
-VERSION="${1:-$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO_PLIST")}"
+APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO_PLIST")"
+VERSION="${1:-$APP_VERSION}"
 ARCH="$(/usr/bin/uname -m)"
 
 if [[ ! "$VERSION" =~ '^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$' ]]; then
@@ -13,6 +14,11 @@ fi
 
 if [[ "$ARCH" != "arm64" ]]; then
     print -u2 "AutoMAA DMG currently supports arm64 builds only (current: $ARCH)"
+    exit 2
+fi
+
+if [[ "$VERSION" != "$APP_VERSION" ]]; then
+    print -u2 "Requested DMG version $VERSION does not match App version $APP_VERSION"
     exit 2
 fi
 
