@@ -329,35 +329,39 @@ private struct TaskConfigCard<Content: View>: View {
                     TaskIcon(task: task, enabled: enabled)
                     Text(task.title)
                         .font(.headline)
+                        .foregroundStyle(enabled ? Color.primary : Color.secondary)
                     Spacer()
                     Toggle("", isOn: $enabled)
                         .labelsHidden()
                         .toggleStyle(.switch)
                         .controlSize(.small)
+                        .accessibilityLabel("启用\(task.title)")
                 }
-                Divider()
-                HStack {
-                    Text("参数")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Toggle("自定义参数", isOn: $usesCustomSettings)
-                        .toggleStyle(.switch)
-                        .controlSize(.mini)
-                }
-                if usesCustomSettings {
-                    VStack(alignment: .leading, spacing: 9) {
-                        content
+                VStack(alignment: .leading, spacing: 11) {
+                    Divider()
+                    HStack {
+                        Text("参数")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Toggle("自定义参数", isOn: $usesCustomSettings)
+                            .toggleStyle(.switch)
+                            .controlSize(.mini)
                     }
-                } else {
-                    Label(defaultSummary, systemImage: task == .infrast ? "exclamationmark.triangle.fill" : "arrow.uturn.backward.circle.fill")
-                        .font(.caption)
-                        .foregroundStyle(task == .infrast ? Color.orange : Color.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    if usesCustomSettings {
+                        VStack(alignment: .leading, spacing: 9) {
+                            content
+                        }
+                    } else {
+                        Label(defaultSummary, systemImage: task == .infrast ? "exclamationmark.triangle.fill" : "arrow.uturn.backward.circle.fill")
+                            .font(.caption)
+                            .foregroundStyle(task == .infrast ? Color.orange : Color.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
+                .disabled(!enabled)
+                .opacity(enabled ? 1 : 0.48)
             }
-            .disabled(!enabled)
-            .opacity(enabled ? 1 : 0.48)
         }
     }
 
