@@ -9,6 +9,7 @@
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-000000?logo=apple)](https://www.apple.com/macos/)
 [![Swift 6.2](https://img.shields.io/badge/Swift-6.2-F05138?logo=swift&logoColor=white)](https://www.swift.org/)
 [![MIT License](https://img.shields.io/badge/License-MIT-2ea44f)](./LICENSE)
+[![GitHub Release](https://img.shields.io/github/v/release/Rememorio/AutoMAA)](https://github.com/Rememorio/AutoMAA/releases/latest)
 
 </div>
 
@@ -74,8 +75,7 @@ AutoMAA 不会下载或安装游戏包体，也不会尝试绕过登录、验证
 ## 系统要求
 
 - macOS 14 或更高版本。
-- Apple Silicon Mac；当前主要在 Apple Silicon 环境开发和验证。
-- Xcode 26 或兼容 Swift 6.2 的开发工具链（从源码构建时需要）。
+- Apple Silicon Mac。
 - 已安装的 [`maa-cli`](https://github.com/MaaAssistantArknights/maa-cli) 及 MaaCore/资源。
 - 一个 MAA 能够连接的游戏运行环境。当前 AutoMAA 客户端生命周期适配以 PlayCover + MaaTools 为准。
 
@@ -89,31 +89,30 @@ maa version
 
 如果通过其他方式安装，请参考 [maa-cli 安装文档](https://docs.maa.plus/zh-cn/manual/cli/install.html)。macOS 游戏连接环境请参考 [MAA 的 macOS 文档](https://docs.maa.plus/zh-cn/manual/device/macos.html)。
 
-## 构建与运行
+## 下载与安装
 
-```bash
-git clone https://github.com/Rememorio/AutoMAA.git
-cd AutoMAA
-./scripts/build-app.sh
-open .build/AutoMAA.app
-```
+1. 前往 [Releases](https://github.com/Rememorio/AutoMAA/releases/latest) 下载最新的 `AutoMAA-*-macOS-arm64.dmg`。
+2. 打开 DMG，将 AutoMAA 拖入其中的“应用程序”文件夹。
+3. 首次启动时，在 Finder 的“应用程序”中右键 AutoMAA，选择“打开”，再确认一次“打开”。
 
-构建脚本会生成经过本地临时签名的 `.build/AutoMAA.app`，其中包含图形应用和用于定时任务的无界面运行器。
+当前公开构建采用临时代码签名，尚未使用 Apple Developer ID 公证，因此直接双击可能被 Gatekeeper 拦截。如果右键打开仍被拦截，请前往“系统设置 → 隐私与安全性”，在安全性提示中选择“仍要打开”。请只从本仓库 Releases 下载，并使用 Release 中附带的 `.sha256` 文件校验安装包。
 
-如果修改了图标母图，可重新生成 `.icns`：
-
-```bash
-./scripts/build-icon.sh
-```
+安装完成后，AutoMAA 的更新与游戏包体更新相互独立：新版本 AutoMAA 请从 Releases 重新下载安装；MaaCore 与资源可在 AutoMAA 中更新，游戏的大版本更新仍需在游戏运行环境中手动完成。
 
 ## 快速开始
 
 1. 启动 AutoMAA，在“全局设置”中确认 `maa-cli` 路径。Apple Silicon Homebrew 的默认路径通常是 `/opt/homebrew/bin/maa`。
 2. 添加一个客户端，选择服务器、游戏 `.app`、MaaTools 地址和唯一的 MAA Profile 名称。
-3. 添加一个或多个账号。同一客户端只有一个启用账号时，账号片段可以留空；存在多个启用账号时，每个账号必须填写不同的登录页匹配片段。
+3. 添加一个或多个账号。同一客户端只有一个启用账号时，账号片段可以留空；存在多个启用账号时，每个账号必须填写不同的登录页匹配片段。这里填写 MAA 能识别的唯一片段即可，例如手机号末四位；AutoMAA 不读取或保存游戏密码。
 4. 为每个账号启用任务并调整执行顺序。只收基建时，保持基建自定义参数开启并选择需要收取的设施和无人机用途。
 5. 回到“今日总览”，处理所有运行检查提示，然后在有人值守的情况下执行一次完整工作流。
 6. 验证稳定后，可在“全局设置”中启用每日自动运行。
+
+## 游戏更新与人工处理
+
+AutoMAA 启动客户端后会等待 MaaTools 就绪，再交给 MAA 进入主界面。游戏大版本更新后，首次启动可能还会下载或解压数 GB 的游戏数据；这类流程可能超过自动启动的等待时间，也可能出现需要用户确认的提示。
+
+建议在游戏更新后先手动启动一次对应客户端，等待数据下载完成并确认能够到达登录页或主界面，再运行 AutoMAA。若运行中遇到游戏版本不匹配、资源下载、维护、重新登录、验证码、用户协议或公告弹窗，AutoMAA 会有限重试、记录人工处理提示、关闭并跳过该客户端，不会自动下载游戏包体或反复操作未知界面。
 
 ## 数据与生成文件
 
@@ -134,10 +133,23 @@ AutoMAA 的用户数据保存在：
 
 ## 开发
 
+从源码构建需要 Xcode 26 或兼容 Swift 6.2 的工具链：
+
 ```bash
+git clone https://github.com/Rememorio/AutoMAA.git
+cd AutoMAA
 swift test
-swift run AutoMAA
+./scripts/build-app.sh
+open .build/AutoMAA.app
 ```
+
+制作与 Release 相同结构的 DMG：
+
+```bash
+./scripts/package-dmg.sh
+```
+
+产物位于 `dist/`，并同时生成 SHA-256 校验文件。若修改了图标母图，可运行 `./scripts/build-icon.sh` 重新生成 `.icns`。
 
 项目结构：
 

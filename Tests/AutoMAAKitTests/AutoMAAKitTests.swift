@@ -269,6 +269,17 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertTrue(result.guidance.contains("更新游戏包体"))
     }
 
+    func testStartupFailureClassifierRecognizesGameDataDownload() {
+        let result = StartupFailureClassifier.diagnose(
+            output: "执行超时：游戏仍在下载资源",
+            hasAccountSelector: false
+        )
+
+        XCTAssertEqual(result.scope, .client)
+        XCTAssertTrue(result.guidance.contains("下载或解压更新数据"))
+        XCTAssertTrue(result.guidance.contains("跳过该客户端"))
+    }
+
     func testStartupFailureClassifierKeepsAccountMismatchLocal() {
         let result = StartupFailureClassifier.diagnose(
             output: "No matching account name was found",
@@ -281,7 +292,7 @@ final class AutoMAAKitTests: XCTestCase {
 
     func testStartupFailureClassifierRecognizesNetworkFailure() {
         let result = StartupFailureClassifier.diagnose(
-            output: "Network error: failed to lookup address information",
+            output: "执行超时：Network error: failed to lookup address information",
             hasAccountSelector: false
         )
 
@@ -336,19 +347,24 @@ final class AutoMAAKitTests: XCTestCase {
         var schedule = ScheduleConfiguration()
         schedule.hotUpdateBeforeRun = false
         let config = AppConfiguration(
+            cliPath: "/usr/bin/true",
             clients: [
                 ClientConfiguration(
                     name: "缺失客户端 1",
                     kind: .official,
                     appPath: "/Applications/Definitely-Missing-One.app",
+                    address: "localhost:65534",
                     profileName: "missing-1",
+                    bundleIdentifier: "dev.automaa.tests.missing-one",
                     accounts: [AccountConfiguration(name: "账号 1")]
                 ),
                 ClientConfiguration(
                     name: "缺失客户端 2",
                     kind: .yoStarJP,
                     appPath: "/Applications/Definitely-Missing-Two.app",
+                    address: "localhost:65533",
                     profileName: "missing-2",
+                    bundleIdentifier: "dev.automaa.tests.missing-two",
                     accounts: [AccountConfiguration(name: "账号 2")]
                 ),
             ],

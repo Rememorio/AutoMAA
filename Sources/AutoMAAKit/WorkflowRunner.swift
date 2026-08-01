@@ -679,8 +679,11 @@ public final class WorkflowRunner {
     }
 
     private func shortOutput(_ result: CommandResult) -> String {
-        if result.timedOut { return "执行超时" }
         let output = result.combinedOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+        if result.timedOut {
+            guard !output.isEmpty else { return "执行超时" }
+            return "执行超时：\(String(output.suffix(1_480)))"
+        }
         guard !output.isEmpty else { return "命令退出码：\(result.exitCode)" }
         return String(output.suffix(1_500))
     }

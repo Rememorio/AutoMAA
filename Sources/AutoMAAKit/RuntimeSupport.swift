@@ -65,6 +65,15 @@ enum StartupFailureClassifier {
                 guidance: "疑似游戏大版本更新或资源版本不匹配，请手动更新游戏包体并进入一次主界面；本次将跳过该客户端"
             )
         }
+        if containsAny(value, [
+            "downloading resource", "resource download", "unpacking resource",
+            "下载资源", "资源下载", "下载数据", "解压资源",
+        ]) {
+            return .init(
+                scope: .client,
+                guidance: "游戏可能仍在下载或解压更新数据，请手动等待更新完成并进入一次主界面；本次将跳过该客户端"
+            )
+        }
         if containsAny(value, ["maintenance", "server is closed", "维护中", "服务器维护", "停服维护"]) {
             return .init(
                 scope: .client,

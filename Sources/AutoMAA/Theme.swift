@@ -68,12 +68,38 @@ extension RunnerPhase {
         case .updating: "更新资源"
         case .launching: "启动客户端"
         case .switchingAccount: "切换账号"
-        case .runningTask: "执行任务"
+        case .runningTask: "任务进行中"
         case .closing: "关闭客户端"
         case .attention: "需要手动处理"
         case .cancelled: "已停止"
         case .completed: "已完成"
         case .failed: "发生错误"
+        }
+    }
+
+    var statusSymbol: String {
+        switch self {
+        case .idle: "circle"
+        case .preparing: "slider.horizontal.3"
+        case .updating: "arrow.triangle.2.circlepath"
+        case .launching: "macwindow.badge.plus"
+        case .switchingAccount: "person.crop.circle.badge.clock"
+        case .runningTask: "checklist"
+        case .closing: "rectangle.portrait.and.arrow.right"
+        case .attention: "exclamationmark.triangle.fill"
+        case .cancelled: "stop.circle.fill"
+        case .completed: "checkmark.circle.fill"
+        case .failed: "xmark.octagon.fill"
+        }
+    }
+
+    var statusTint: Color {
+        switch self {
+        case .attention: .orange
+        case .failed: .red
+        case .cancelled: .secondary
+        case .completed: .green
+        default: .maaAccent
         }
     }
 }
