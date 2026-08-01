@@ -6,6 +6,7 @@ import SwiftUI
 
 enum SidebarSelection: Hashable {
     case overview
+    case plan(UUID)
     case client(UUID)
     case account(UUID, UUID)
     case logs
@@ -50,8 +51,9 @@ final class AppModel: ObservableObject {
     @Published var statusMessage = "等待开始"
     @Published var progress = 0.0
     @Published var isRunning = false
+    @Published var runningPlanID: UUID?
     @Published var bannerMessage: String?
-    @Published var scheduleInstalled: Bool
+    @Published var installedPlanIDs: Set<UUID>
     @Published var lastReport: WorkflowReport?
     @Published private(set) var applicationUpdateState: ApplicationUpdateState = .idle
 
@@ -86,7 +88,7 @@ final class AppModel: ObservableObject {
         softwareUpdateResultStore = SoftwareUpdateResultStore(directories: directories)
         configuration = (try? configurationStore.load()) ?? .defaults
         logs = historyStore.load()
-        scheduleInstalled = launchAgentManager.isInstalled
+        installedPlanIDs = launchAgentManager.installedPlanIDs
         try? MAAConfigurationWriter(directories: directories).prepare(configuration)
     }
 
@@ -107,21 +109,54 @@ final class AppModel: ObservableObject {
     }
 
     var activeTaskCount: Int {
-        configuration.clients.filter(\.enabled).reduce(0) { result, client in
-            result + client.accounts.filter(\.enabled).reduce(0) { count, account in
-                count + account.stepOrder.filter { account.isEnabled($0) }.count
-            }
-        }
+        configuration.plans.reduce(0) { $0 + $1.enabledTasks.count }
     }
 
     var readinessIssues: [ReadinessIssue] {
+        readinessIssues(for: selectedPlanID)
+    }
+
+    var selectedPlanID: UUID? {
+        if case let .plan(id) = selection, configuration.plans.contains(where: { $0.id == id }) {
+            return id
+        }
+        return configuration.plans.first?.id
+    }
+
+    var selectedPlan: AutomationPlan? {
+        guard let selectedPlanID else { return nil }
+        return configuration.plans.first(where: { $0.id == selectedPlanID })
+    }
+
+    func readinessIssues(for planID: UUID?) -> [ReadinessIssue] {
         var result: [ReadinessIssue] = []
+        let clientIDs = configuration.clients.map(\.id)
+        let accountIDs = configuration.clients.flatMap { $0.accounts.map(\.id) }
+        let planIDs = configuration.plans.map(\.id)
+        if Set(clientIDs).count != clientIDs.count {
+            result.append(.init(severity: .error, message: "客户端标识重复，请删除并重新添加重复项"))
+        }
+        if Set(accountIDs).count != accountIDs.count {
+            result.append(.init(severity: .error, message: "账号标识重复，请删除并重新添加重复项"))
+        }
+        if Set(planIDs).count != planIDs.count {
+            result.append(.init(severity: .error, message: "自动化方案标识重复，请删除并重新添加重复项"))
+        }
         if !FileManager.default.isExecutableFile(atPath: configuration.cliPath) {
             result.append(.init(severity: .error, message: "找不到可执行的 maa-cli：\(configuration.cliPath)"))
         }
-        let activeClients = configuration.clients.filter(\.enabled)
+        guard let planID, let plan = configuration.plans.first(where: { $0.id == planID }) else {
+            result.append(.init(severity: .error, message: "至少需要创建一个自动化方案"))
+            return result
+        }
+        if plan.enabledTasks.isEmpty {
+            result.append(.init(severity: .error, message: "「\(plan.name)」没有启用任何步骤"))
+        }
+        let activeClients = configuration.clients.filter { client in
+            client.enabled && client.accounts.contains(where: plan.includes)
+        }
         if activeClients.isEmpty {
-            result.append(.init(severity: .error, message: "至少需要启用一个客户端"))
+            result.append(.init(severity: .error, message: "「\(plan.name)」没有可执行的账号"))
         }
         for client in activeClients {
             if !FileManager.default.fileExists(atPath: client.appPath) {
@@ -134,11 +169,12 @@ final class AppModel: ObservableObject {
                 result.append(.init(severity: .warning, message: "\(client.name) 的 MaaTools 地址无效，运行时会跳过该客户端"))
             }
             let enabledAccounts = client.accounts.filter(\.enabled)
-            if enabledAccounts.isEmpty {
+            let targetAccounts = client.accounts.filter(plan.includes)
+            if targetAccounts.isEmpty {
                 result.append(.init(severity: .warning, message: "\(client.name) 没有启用的账号"))
             }
             if enabledAccounts.count > 1 {
-                for account in enabledAccounts where account.accountSelector.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                for account in targetAccounts where account.accountSelector.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     result.append(.init(severity: .warning, message: "\(account.name) 缺少唯一账号片段，运行时会跳过该账号"))
                 }
                 let selectors = enabledAccounts
@@ -148,13 +184,8 @@ final class AppModel: ObservableObject {
                     result.append(.init(severity: .error, message: "\(client.name) 的账号片段不能重复"))
                 }
             }
-            for account in enabledAccounts {
-                if account.stepOrder.allSatisfy({ !account.isEnabled($0) }) {
-                    result.append(.init(severity: .warning, message: "\(account.name) 没有启用任何日常任务"))
-                }
-            }
         }
-        let profileNames = activeClients.map { normalizedProfile($0.profileName) }
+        let profileNames = configuration.clients.map { normalizedProfile($0.profileName) }
         if Set(profileNames).count != profileNames.count {
             result.append(.init(severity: .error, message: "每个客户端需要使用不同的 MAA Profile 名称"))
         }
@@ -162,7 +193,16 @@ final class AppModel: ObservableObject {
     }
 
     var canRun: Bool {
-        !isRunning && !readinessIssues.contains { $0.severity == .error }
+        canRun(planID: selectedPlanID)
+    }
+
+    func canRun(planID: UUID?) -> Bool {
+        !isRunning && !readinessIssues(for: planID).contains { $0.severity == .error }
+    }
+
+    func isPlanScheduleCurrent(_ plan: AutomationPlan) -> Bool {
+        guard let installed = launchAgentManager.installedTime(planID: plan.id) else { return false }
+        return installed.hour == plan.schedule.hour && installed.minute == plan.schedule.minute
     }
 
     func clientBinding(_ id: UUID) -> Binding<ClientConfiguration>? {
@@ -177,6 +217,21 @@ final class AppModel: ObservableObject {
                       let index = self.configuration.clients.firstIndex(where: { $0.id == id })
                 else { return }
                 self.configuration.clients[index] = newValue
+            }
+        )
+    }
+
+    func planBinding(_ id: UUID) -> Binding<AutomationPlan>? {
+        guard configuration.plans.contains(where: { $0.id == id }) else { return nil }
+        return Binding(
+            get: { [weak self] in
+                self?.configuration.plans.first(where: { $0.id == id }) ?? .lightRoutine
+            },
+            set: { [weak self] newValue in
+                guard let self,
+                      let index = self.configuration.plans.firstIndex(where: { $0.id == id })
+                else { return }
+                self.configuration.plans[index] = newValue
             }
         )
     }
@@ -212,23 +267,28 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func saveNow(showConfirmation: Bool = true) {
+    @discardableResult
+    func saveNow(showConfirmation: Bool = true) -> Bool {
         do {
-            try configurationStore.save(configuration)
             try MAAConfigurationWriter(directories: directories).prepare(configuration)
+            try configurationStore.save(configuration)
             if showConfirmation { showBanner("配置已保存") }
+            return true
         } catch {
             showBanner("保存失败：\(error.localizedDescription)")
+            return false
         }
     }
 
-    func runAll(resumeToday: Bool = true) {
-        guard canRun else {
-            showBanner(readinessIssues.first(where: { $0.severity == .error })?.message ?? "当前配置无法运行")
+    func runPlan(_ planID: UUID, resumeToday: Bool = true) {
+        let issues = readinessIssues(for: planID)
+        guard canRun(planID: planID) else {
+            showBanner(issues.first(where: { $0.severity == .error })?.message ?? "当前方案无法运行")
             return
         }
-        saveNow(showConfirmation: false)
+        guard saveNow(showConfirmation: false) else { return }
         isRunning = true
+        runningPlanID = planID
         lastReport = nil
         progress = 0
         let snapshot = configuration
@@ -236,23 +296,33 @@ final class AppModel: ObservableObject {
             self?.consume(event)
         }
         workflowTask = Task { [weak self] in
-            let report = await runner.run(snapshot, resumeToday: resumeToday)
+            let report = await runner.run(snapshot, planID: planID, resumeToday: resumeToday)
             guard let self else { return }
             self.lastReport = report
             self.isRunning = false
+            self.runningPlanID = nil
             self.workflowTask = nil
             if let fatalError = report.fatalError {
                 self.showBanner(fatalError)
             } else if report.cancelled {
                 self.showBanner("流程已安全停止，当前客户端和连接已清理")
             } else if report.isSuccess {
-                self.showBanner("今天的流程已全部完成")
+                let name = snapshot.plans.first(where: { $0.id == planID })?.name ?? "方案"
+                self.showBanner("「\(name)」已全部完成")
             } else if !report.attentionMessages.isEmpty {
                 self.showBanner(self.attentionBanner(report.attentionMessages))
             } else {
                 self.showBanner("流程完成，但有 \(report.failedSteps) 个步骤失败")
             }
         }
+    }
+
+    func runSelectedPlan(resumeToday: Bool = true) {
+        guard let selectedPlanID else {
+            showBanner("请先创建自动化方案")
+            return
+        }
+        runPlan(selectedPlanID, resumeToday: resumeToday)
     }
 
     func hotUpdate() {
@@ -273,12 +343,27 @@ final class AppModel: ObservableObject {
     func prepareApplication() {
         guard !didPrepareApplication else { return }
         didPrepareApplication = true
+        synchronizeSchedules()
         if let result = softwareUpdateResultStore.loadAndClear() {
             applicationUpdateState = result.status == .success ? .upToDate : .failed(result.message)
             showBanner(result.message)
             return
         }
         checkForApplicationUpdate(showResult: false)
+    }
+
+    private func synchronizeSchedules() {
+        guard FileManager.default.isExecutableFile(atPath: runnerExecutableURL.path) else { return }
+        let plans = configuration.plans
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.launchAgentManager.synchronize(runnerURL: self.runnerExecutableURL, plans: plans)
+                self.installedPlanIDs = self.launchAgentManager.installedPlanIDs
+            } catch {
+                self.showBanner("定时任务同步失败：\(error.localizedDescription)")
+            }
+        }
     }
 
     func checkForApplicationUpdate(showResult: Bool = true) {
@@ -410,6 +495,42 @@ final class AppModel: ObservableObject {
         selection = .account(clientID, account.id)
     }
 
+    func addPlan(_ template: AutomationPlan = .lightRoutine) {
+        var plan = template
+        plan.id = UUID()
+        plan.name = uniquePlanName(template.name)
+        plan.schedule.enabled = false
+        configuration.plans.append(plan)
+        selection = .plan(plan.id)
+    }
+
+    func duplicatePlan(_ planID: UUID) {
+        guard var plan = configuration.plans.first(where: { $0.id == planID }) else { return }
+        plan.id = UUID()
+        plan.name = uniquePlanName("\(plan.name) 副本")
+        plan.schedule.enabled = false
+        configuration.plans.append(plan)
+        selection = .plan(plan.id)
+    }
+
+    func deletePlan(_ planID: UUID) {
+        configuration.plans.removeAll { $0.id == planID }
+        selection = .overview
+        guard saveNow(showConfirmation: false) else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            try? await self.launchAgentManager.uninstall(planID: planID)
+            self.installedPlanIDs = self.launchAgentManager.installedPlanIDs
+        }
+    }
+
+    func movePlan(_ planID: UUID, by offset: Int) {
+        guard let index = configuration.plans.firstIndex(where: { $0.id == planID }) else { return }
+        let destination = index + offset
+        guard configuration.plans.indices.contains(destination) else { return }
+        configuration.plans.swapAt(index, destination)
+    }
+
     func addClient() {
         let client = ClientConfiguration(
             name: "新客户端",
@@ -423,7 +544,11 @@ final class AppModel: ObservableObject {
     }
 
     func deleteClient(_ clientID: UUID) {
+        let accountIDs = Set(configuration.clients.first(where: { $0.id == clientID })?.accounts.map(\.id) ?? [])
         configuration.clients.removeAll { $0.id == clientID }
+        for index in configuration.plans.indices {
+            configuration.plans[index].accountIDs.subtract(accountIDs)
+        }
         selection = .overview
         saveNow(showConfirmation: false)
     }
@@ -447,39 +572,54 @@ final class AppModel: ObservableObject {
     func deleteAccount(clientID: UUID, accountID: UUID) {
         guard let index = configuration.clients.firstIndex(where: { $0.id == clientID }) else { return }
         configuration.clients[index].accounts.removeAll { $0.id == accountID }
+        for planIndex in configuration.plans.indices {
+            configuration.plans[planIndex].accountIDs.remove(accountID)
+        }
         selection = .client(clientID)
     }
 
-    func setScheduleEnabled(_ enabled: Bool) {
+    func setPlanScheduleEnabled(_ planID: UUID, _ enabled: Bool) {
         guard !isRunning else { return }
         if enabled,
-           let issue = readinessIssues.first(where: { $0.severity == .error }) {
-            configuration.schedule.enabled = false
+           let issue = readinessIssues(for: planID).first(where: { $0.severity == .error }) {
+            if let index = configuration.plans.firstIndex(where: { $0.id == planID }) {
+                configuration.plans[index].schedule.enabled = false
+            }
             showBanner("暂时无法启用定时运行：\(issue.message)")
             return
         }
-        configuration.schedule.enabled = enabled
-        saveNow(showConfirmation: false)
+        guard let index = configuration.plans.firstIndex(where: { $0.id == planID }) else { return }
+        configuration.plans[index].schedule.enabled = enabled
+        let plan = configuration.plans[index]
+        guard saveNow(showConfirmation: false) else { return }
         Task { [weak self] in
             guard let self else { return }
             do {
                 if enabled {
                     try await self.launchAgentManager.install(
                         runnerURL: self.runnerExecutableURL,
-                        schedule: self.configuration.schedule
+                        plan: plan
                     )
                 } else {
-                    try await self.launchAgentManager.uninstall()
+                    try await self.launchAgentManager.uninstall(planID: planID)
                 }
-                self.scheduleInstalled = self.launchAgentManager.isInstalled
-                self.showBanner(enabled ? "每日自动运行已启用" : "每日自动运行已关闭")
+                self.installedPlanIDs = self.launchAgentManager.installedPlanIDs
+                let name = self.configuration.plans.first(where: { $0.id == planID })?.name ?? "方案"
+                self.showBanner(enabled ? "「\(name)」定时运行已启用" : "「\(name)」定时运行已关闭")
             } catch {
-                self.configuration.schedule.enabled = false
-                self.scheduleInstalled = self.launchAgentManager.isInstalled
+                if let index = self.configuration.plans.firstIndex(where: { $0.id == planID }) {
+                    self.configuration.plans[index].schedule.enabled = false
+                }
+                self.installedPlanIDs = self.launchAgentManager.installedPlanIDs
                 self.saveNow(showConfirmation: false)
                 self.showBanner("定时任务配置失败：\(error.localizedDescription)")
             }
         }
+    }
+
+    func applyPlanSchedule(_ planID: UUID) {
+        guard configuration.plans.first(where: { $0.id == planID })?.schedule.enabled == true else { return }
+        setPlanScheduleEnabled(planID, true)
     }
 
     private var runnerExecutableURL: URL {
@@ -536,6 +676,14 @@ final class AppModel: ObservableObject {
         let used = Set(configuration.clients.map { normalizedProfile($0.profileName) })
         while used.contains("client-\(index)") { index += 1 }
         return "client-\(index)"
+    }
+
+    private func uniquePlanName(_ base: String) -> String {
+        let used = Set(configuration.plans.map { $0.name.trimmingCharacters(in: .whitespacesAndNewlines) })
+        if !used.contains(base) { return base }
+        var index = 2
+        while used.contains("\(base) \(index)") { index += 1 }
+        return "\(base) \(index)"
     }
 
     private func showBanner(_ message: String) {

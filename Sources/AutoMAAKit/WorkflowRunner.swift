@@ -11,6 +11,7 @@ public final class WorkflowRunner {
     private let historyStore: HistoryStore
     private let stateStore: ExecutionStateStore
     private let eventSink: EventSink
+    private var currentPlanID: UUID?
 
     public init(
         directories: AppDirectories = .init(),
@@ -22,10 +23,34 @@ public final class WorkflowRunner {
         self.eventSink = eventSink
     }
 
-    public func run(_ configuration: AppConfiguration, resumeToday: Bool = true) async -> WorkflowReport {
+    public func run(
+        _ configuration: AppConfiguration,
+        planID: UUID,
+        resumeToday: Bool = true
+    ) async -> WorkflowReport {
         var report = WorkflowReport()
         var lock: ProcessLock?
         var lease: CaffeinateLease?
+        currentPlanID = nil
+        guard let plan = configuration.plans.first(where: { $0.id == planID }) else {
+            report.fatalError = "找不到要运行的自动化方案"
+            emit(.failed, report.fatalError ?? "方案不存在", 0, .error)
+            return report
+        }
+        currentPlanID = plan.id
+        defer { currentPlanID = nil }
+        guard !plan.enabledTasks.isEmpty else {
+            report.fatalError = "「\(plan.name)」没有启用任何步骤"
+            emit(.failed, report.fatalError ?? "方案没有任务", 0, .error)
+            return report
+        }
+        guard configuration.clients.contains(where: { client in
+            client.enabled && client.accounts.contains(where: plan.includes)
+        }) else {
+            report.fatalError = "「\(plan.name)」没有可执行的账号"
+            emit(.failed, report.fatalError ?? "方案没有账号", 0, .error)
+            return report
+        }
         do {
             try directories.prepare()
             guard FileManager.default.isExecutableFile(atPath: configuration.cliPath) else {
@@ -45,16 +70,16 @@ public final class WorkflowRunner {
         var state = resumeToday ? stateStore.loadForToday() : ExecutionState(dateKey: ExecutionStateStore.todayKey)
         if !resumeToday { try? stateStore.save(state) }
 
-        let activeClients = configuration.clients.filter(\.enabled)
+        let activeClients = configuration.clients.filter { client in
+            client.enabled && client.accounts.contains(where: plan.includes)
+        }
         let totalSteps = max(1, activeClients.reduce(0) { partial, client in
-            partial + client.accounts.filter(\.enabled).reduce(0) { count, account in
-                count + account.stepOrder.filter { account.isEnabled($0) }.count
-            }
+            partial + client.accounts.filter(plan.includes).count * plan.enabledTasks.count
         })
         var visitedSteps = 0
 
-        emit(.preparing, "正在准备任务配置", 0, .info)
-        if configuration.schedule.hotUpdateBeforeRun {
+        emit(.preparing, "正在准备「\(plan.name)」", 0, .info)
+        if plan.policy.hotUpdateBeforeRun {
             emit(.updating, "正在热更新 MAA 资源", 0, .info)
             let result = await runCommand(
                 executable: configuration.cliPath,
@@ -75,15 +100,15 @@ public final class WorkflowRunner {
                 report.cancelled = true
                 break
             }
-            let clientStepCount = client.accounts.filter(\.enabled).reduce(0) { count, account in
-                count + account.stepOrder.filter { account.isEnabled($0) }.count
-            }
+            let clientStepCount = client.accounts.filter(plan.includes).count * plan.enabledTasks.count
             let visitedAtClientStart = visitedSteps
             if clientStepCount == 0 {
                 emit(.runningTask, "\(client.name) 没有待执行任务，未启动客户端", Double(visitedSteps) / Double(totalSteps), .info, client: client)
                 continue
             }
-            let completedClientSteps = resumeToday ? completedStepCount(client: client, state: state) : 0
+            let completedClientSteps = resumeToday
+                ? completedStepCount(plan: plan, client: client, state: state)
+                : 0
             if completedClientSteps == clientStepCount {
                 report.skippedSteps += clientStepCount
                 visitedSteps += clientStepCount
@@ -140,16 +165,16 @@ public final class WorkflowRunner {
             }
 
             var stopAfterClosingClient = false
-            accountLoop: for account in client.accounts where account.enabled {
+            accountLoop: for account in client.accounts where plan.includes(account) {
                 if Task.isCancelled {
                     report.cancelled = true
                     stopAfterClosingClient = true
                     break accountLoop
                 }
-                let enabledTasks = account.stepOrder.filter { account.isEnabled($0) }
+                let enabledTasks = plan.enabledTasks
                 let visitedAtAccountStart = visitedSteps
                 if resumeToday, enabledTasks.allSatisfy({
-                    state.completedSteps.contains(checkpointKey(client: client, account: account, task: $0))
+                    state.completedSteps.contains(checkpointKey(plan: plan, client: client, account: account, task: $0))
                 }) {
                     report.skippedSteps += enabledTasks.count
                     visitedSteps += enabledTasks.count
@@ -164,7 +189,12 @@ public final class WorkflowRunner {
                     continue
                 }
                 do {
-                    try await switchAccount(account, client: client, configuration: configuration)
+                    try await switchAccount(
+                        account,
+                        client: client,
+                        configuration: configuration,
+                        policy: plan.policy
+                    )
                 } catch {
                     if isCancellation(error) {
                         report.cancelled = true
@@ -194,7 +224,7 @@ public final class WorkflowRunner {
                         stopAfterClosingClient = true
                         break accountLoop
                     }
-                    let key = checkpointKey(client: client, account: account, task: task)
+                    let key = checkpointKey(plan: plan, client: client, account: account, task: task)
                     if resumeToday, state.completedSteps.contains(key) {
                         report.skippedSteps += 1
                         visitedSteps += 1
@@ -214,6 +244,7 @@ public final class WorkflowRunner {
                     do {
                         success = try await runTask(
                             task,
+                            plan: plan,
                             account: account,
                             client: client,
                             configuration: configuration
@@ -285,9 +316,14 @@ public final class WorkflowRunner {
                             account: account,
                             task: task
                         )
-                        if configuration.schedule.continueAfterStepFailure {
+                        if plan.policy.continueAfterStepFailure {
                             do {
-                                try await switchAccount(account, client: client, configuration: configuration)
+                                try await switchAccount(
+                                    account,
+                                    client: client,
+                                    configuration: configuration,
+                                    policy: plan.policy
+                                )
                             } catch {
                                 if isCancellation(error) {
                                     report.cancelled = true
@@ -342,7 +378,7 @@ public final class WorkflowRunner {
         } else if report.failedSteps > 0 {
             emit(.completed, "流程完成，\(report.failedSteps) 个步骤失败", 1, .warning)
         } else {
-            emit(.completed, "全部任务执行完成", 1, .success)
+            emit(.completed, "「\(plan.name)」已全部完成", 1, .success)
         }
         return report
     }
@@ -397,7 +433,8 @@ public final class WorkflowRunner {
     private func switchAccount(
         _ account: AccountConfiguration,
         client: ClientConfiguration,
-        configuration: AppConfiguration
+        configuration: AppConfiguration,
+        policy: ExecutionPolicy
     ) async throws {
         guard !Task.isCancelled else { throw RuntimeError.cancelled }
         let selector = account.accountSelector.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -411,7 +448,7 @@ public final class WorkflowRunner {
             arguments += ["--account-name", selector]
         }
         arguments += commonArguments(client)
-        let attempts = max(1, configuration.schedule.maxRetries + 1)
+        let attempts = max(1, policy.maxRetries + 1)
         var lastResult = CommandResult(exitCode: -1, standardOutput: "", standardError: "", timedOut: false)
         for attempt in 1...attempts {
             guard !Task.isCancelled else { throw RuntimeError.cancelled }
@@ -448,14 +485,20 @@ public final class WorkflowRunner {
 
     private func runTask(
         _ task: TaskKind,
+        plan: AutomationPlan,
         account: AccountConfiguration,
         client: ClientConfiguration,
         configuration: AppConfiguration
     ) async throws -> Bool {
         guard !Task.isCancelled else { throw RuntimeError.cancelled }
         let writer = MAAConfigurationWriter(directories: directories)
-        let taskName = writer.taskName(clientID: client.id, accountID: account.id, task: task)
-        let attempts = max(1, configuration.schedule.maxRetries + 1)
+        let taskName = writer.taskName(
+            planID: plan.id,
+            clientID: client.id,
+            accountID: account.id,
+            task: task
+        )
+        let attempts = max(1, plan.policy.maxRetries + 1)
         for attempt in 1...attempts {
             guard !Task.isCancelled else { throw RuntimeError.cancelled }
             emit(
@@ -487,7 +530,12 @@ public final class WorkflowRunner {
                 if !(await portProbe.isOpen(client.address)) {
                     try await launch(client)
                 }
-                try await switchAccount(account, client: client, configuration: configuration)
+                try await switchAccount(
+                    account,
+                    client: client,
+                    configuration: configuration,
+                    policy: plan.policy
+                )
             }
         }
         return false
@@ -688,15 +736,19 @@ public final class WorkflowRunner {
         return String(output.suffix(1_500))
     }
 
-    private func checkpointKey(client: ClientConfiguration, account: AccountConfiguration, task: TaskKind) -> String {
-        "\(client.id.uuidString)/\(account.id.uuidString)/\(task.rawValue)"
+    private func checkpointKey(
+        plan: AutomationPlan,
+        client: ClientConfiguration,
+        account: AccountConfiguration,
+        task: TaskKind
+    ) -> String {
+        "\(plan.id.uuidString)/\(client.id.uuidString)/\(account.id.uuidString)/\(task.rawValue)"
     }
 
-    private func completedStepCount(client: ClientConfiguration, state: ExecutionState) -> Int {
-        client.accounts.filter(\.enabled).reduce(0) { count, account in
-            count + account.stepOrder.filter { task in
-                account.isEnabled(task)
-                    && state.completedSteps.contains(checkpointKey(client: client, account: account, task: task))
+    private func completedStepCount(plan: AutomationPlan, client: ClientConfiguration, state: ExecutionState) -> Int {
+        client.accounts.filter(plan.includes).reduce(0) { count, account in
+            count + plan.enabledTasks.filter { task in
+                state.completedSteps.contains(checkpointKey(plan: plan, client: client, account: account, task: task))
             }.count
         }
     }
@@ -713,6 +765,7 @@ public final class WorkflowRunner {
         let log = LogEntry(
             level: level,
             message: message,
+            planID: currentPlanID,
             clientID: client?.id,
             accountID: account?.id,
             task: task

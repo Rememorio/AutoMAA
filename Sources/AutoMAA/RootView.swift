@@ -43,6 +43,12 @@ struct RootView: View {
         switch model.selection {
         case .overview:
             DashboardView()
+        case let .plan(id):
+            if let binding = model.planBinding(id) {
+                PlanEditorView(plan: binding)
+            } else {
+                ContentUnavailableView("方案不存在", systemImage: "clock.badge.exclamationmark")
+            }
         case let .client(id):
             if let binding = model.clientBinding(id) {
                 ClientEditorView(client: binding)

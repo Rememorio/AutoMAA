@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: AutoMAA
-  text: 把多个 MAA 日常，串成一条可靠工作流
-  tagline: 原生 macOS、多客户端、多账号、顺序可配置；安全切换、失败可恢复、每天只需要按一次开始。
+  text: 把 MAA 日常，组织成可复用自动化方案
+  tagline: 原生 macOS、多客户端、多账号；轻量收菜与完整日常独立配置、手动或定时运行。
   actions:
     - theme: brand
       text: 下载与安装
@@ -18,30 +18,30 @@ hero:
 
 features:
   - icon: ⛓️
-    title: 通用工作流
-    details: 自由添加和排序客户端、账号与任务，不预置任何开发者账号或本机路径。
+    title: 可复用方案
+    details: 客户端和账号只配置一次，任意创建轻量、完整、周末或临时方案，不预置开发者数据。
   - icon: 🛡️
     title: 安全切换
     details: 当前客户端关闭并确认 MaaTools 连接释放后，才会启动下一项。
   - icon: ↩️
     title: 当日断点
-    details: 成功步骤按日期记录，失败后可以续跑，不重复消耗已经完成的任务。
+    details: 成功步骤按方案与日期记录，失败后可以续跑，不同方案不会互相误跳过。
   - icon: ⚙️
     title: MAA 参数
     details: 每项任务可选择 MAA 默认参数，或启用 AutoMAA 的清晰可视化配置。
   - icon: 🏭
-    title: 不换班收菜
-    details: 基建支持只收制造、贸易、会客室产物，并可配置无人机用途。
+    title: 两种基建模式
+    details: 轻量方案可仅收菜，完整方案可换班；设施、无人机、宿舍信赖与会客室均可配置。
   - icon: 🕗
-    title: 每日自动运行
-    details: 验证流程稳定后，可交给 macOS LaunchAgent 在用户登录状态下定时执行。
+    title: 每方案定时
+    details: 每个方案都有独立的 macOS LaunchAgent，也可以随时手动运行或安全停止。
 ---
 
 <section class="product-showcase" aria-labelledby="product-tour-title">
   <div class="showcase-heading">
     <span class="showcase-kicker">PRODUCT TOUR</span>
-    <h2 id="product-tour-title">一眼看清今天会怎样执行</h2>
-    <p>客户端、账号、任务数量和执行顺序集中呈现；运行前检查通过后，再交给 AutoMAA 串行完成。</p>
+    <h2 id="product-tour-title">一眼看清每套日常怎样执行</h2>
+    <p>方案、目标账号、任务组合和定时时间集中呈现；运行前检查通过后，再交给 AutoMAA 串行完成。</p>
   </div>
 
   <figure class="product-shot product-shot-wide">

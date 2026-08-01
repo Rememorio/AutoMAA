@@ -1,5 +1,21 @@
 import Foundation
 
+public enum MAAConfigurationWriterError: LocalizedError, Equatable {
+    case duplicateProfileName
+    case duplicateClientID
+    case duplicateAccountID
+    case duplicatePlanID
+
+    public var errorDescription: String? {
+        switch self {
+        case .duplicateProfileName: "每个客户端必须使用不同的 MAA Profile 名称"
+        case .duplicateClientID: "客户端标识重复，请删除并重新添加重复项"
+        case .duplicateAccountID: "账号标识重复，请删除并重新添加重复项"
+        case .duplicatePlanID: "自动化方案标识重复，请删除并重新添加重复项"
+        }
+    }
+}
+
 public struct MAAConfigurationWriter: Sendable {
     public let directories: AppDirectories
 
@@ -9,14 +25,17 @@ public struct MAAConfigurationWriter: Sendable {
 
     public func prepare(_ configuration: AppConfiguration) throws {
         try directories.prepare()
+        try validate(configuration)
         var generated: Set<String> = []
         for client in configuration.clients {
             generated.insert("profiles/\(safeName(client.profileName)).toml")
             try writeProfile(for: client)
-            for account in client.accounts {
-                for task in TaskKind.allCases {
-                    generated.insert("tasks/\(taskName(clientID: client.id, accountID: account.id, task: task)).json")
-                    try writeTask(task, account: account, client: client)
+            for plan in configuration.plans {
+                for account in client.accounts {
+                    for task in TaskKind.allCases {
+                        generated.insert("tasks/\(taskName(planID: plan.id, clientID: client.id, accountID: account.id, task: task)).json")
+                        try writeTask(task, plan: plan, account: account, client: client)
+                    }
                 }
             }
         }
@@ -26,8 +45,27 @@ public struct MAAConfigurationWriter: Sendable {
         try manifest.write(to: directories.generatedManifest, options: .atomic)
     }
 
-    public func taskName(clientID: UUID, accountID: UUID, task: TaskKind) -> String {
-        "\(clientID.uuidString.lowercased())-\(accountID.uuidString.lowercased())-\(task.rawValue)"
+    public func taskName(planID: UUID, clientID: UUID, accountID: UUID, task: TaskKind) -> String {
+        "\(planID.uuidString.lowercased())-\(clientID.uuidString.lowercased())-\(accountID.uuidString.lowercased())-\(task.rawValue)"
+    }
+
+    private func validate(_ configuration: AppConfiguration) throws {
+        let profileNames = configuration.clients.map { safeName($0.profileName) }
+        guard Set(profileNames).count == profileNames.count else {
+            throw MAAConfigurationWriterError.duplicateProfileName
+        }
+        let clientIDs = configuration.clients.map(\.id)
+        guard Set(clientIDs).count == clientIDs.count else {
+            throw MAAConfigurationWriterError.duplicateClientID
+        }
+        let accountIDs = configuration.clients.flatMap { $0.accounts.map(\.id) }
+        guard Set(accountIDs).count == accountIDs.count else {
+            throw MAAConfigurationWriterError.duplicateAccountID
+        }
+        let planIDs = configuration.plans.map(\.id)
+        guard Set(planIDs).count == planIDs.count else {
+            throw MAAConfigurationWriterError.duplicatePlanID
+        }
     }
 
     private func writeProfile(for client: ClientConfiguration) throws {
@@ -48,43 +86,48 @@ public struct MAAConfigurationWriter: Sendable {
         try lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
     }
 
-    private func writeTask(_ task: TaskKind, account: AccountConfiguration, client: ClientConfiguration) throws {
+    private func writeTask(
+        _ task: TaskKind,
+        plan: AutomationPlan,
+        account: AccountConfiguration,
+        client: ClientConfiguration
+    ) throws {
         let parameters: [String: Any]
         switch task {
         case .fight:
             var value: [String: Any] = [
-                "stage": account.fight.usesCustomSettings
-                    ? account.fight.stage.trimmingCharacters(in: .whitespacesAndNewlines)
+                "stage": plan.fight.usesCustomSettings
+                    ? plan.fight.stage.trimmingCharacters(in: .whitespacesAndNewlines)
                     : "",
                 "server": client.kind.serverCode,
                 "client_type": client.kind.maaTaskClientType,
-                "DrGrandet": account.fight.usesCustomSettings && account.fight.drGrandet,
+                "DrGrandet": plan.fight.usesCustomSettings && plan.fight.drGrandet,
             ]
-            if account.fight.usesCustomSettings {
-                if let medicine = account.fight.medicine { value["medicine"] = medicine }
-                if let expiringMedicine = account.fight.expiringMedicine {
+            if plan.fight.usesCustomSettings {
+                if let medicine = plan.fight.medicine { value["medicine"] = medicine }
+                if let expiringMedicine = plan.fight.expiringMedicine {
                     value["expiring_medicine"] = expiringMedicine
                 }
-                if let stone = account.fight.stone { value["stone"] = stone }
-                if let times = account.fight.times { value["times"] = times }
-                if let series = account.fight.series { value["series"] = series }
+                if let stone = plan.fight.stone { value["stone"] = stone }
+                if let times = plan.fight.times { value["times"] = times }
+                if let series = plan.fight.series { value["series"] = series }
             }
             parameters = value
         case .recruit:
-            if account.recruit.usesCustomSettings {
+            if plan.recruit.usesCustomSettings {
                 let confirm = [
-                    account.recruit.autoConfirm3 ? 3 : nil,
-                    account.recruit.autoConfirm4 ? 4 : nil,
-                    account.recruit.autoConfirm5 ? 5 : nil,
-                    account.recruit.autoConfirm6 ? 6 : nil,
+                    plan.recruit.autoConfirm3 ? 3 : nil,
+                    plan.recruit.autoConfirm4 ? 4 : nil,
+                    plan.recruit.autoConfirm5 ? 5 : nil,
+                    plan.recruit.autoConfirm6 ? 6 : nil,
                 ].compactMap { $0 }
                 parameters = [
-                    "refresh": account.recruit.refresh,
+                    "refresh": plan.recruit.refresh,
                     "select": [5, 4],
                     "confirm": confirm,
-                    "times": account.recruit.times,
-                    "expedite": account.recruit.expedite,
-                    "skip_robot": account.recruit.preserveRobot,
+                    "times": plan.recruit.times,
+                    "expedite": plan.recruit.expedite,
+                    "skip_robot": plan.recruit.preserveRobot,
                     "server": client.kind.serverCode,
                 ]
             } else {
@@ -108,18 +151,21 @@ public struct MAAConfigurationWriter: Sendable {
                 ]
             }
         case .infrast:
-            if account.infrast.usesCustomSettings {
-                var facilities: [String] = []
-                if account.infrast.collectManufacturing { facilities.append("Mfg") }
-                if account.infrast.collectTrading { facilities.append("Trade") }
-                if account.infrast.collectReception { facilities.append("Reception") }
+            if plan.infrast.usesCustomSettings {
                 parameters = [
-                    "mode": 20_000,
-                    "facility": facilities,
-                    "drones": account.infrast.drones.rawValue,
-                    "reception_message_board": account.infrast.collectReception,
-                    "reception_clue_exchange": account.infrast.collectReception,
-                    "reception_send_clue": account.infrast.collectReception,
+                    "mode": plan.infrast.mode.rawValue,
+                    "facility": plan.infrast.facilities.map(\.rawValue),
+                    "drones": plan.infrast.drones.rawValue,
+                    "threshold": plan.infrast.threshold,
+                    "replenish": plan.infrast.replenish,
+                    "dorm_notstationed_enabled": plan.infrast.dormNotStationed,
+                    "dorm_trust_enabled": plan.infrast.dormTrust,
+                    "continue_training": plan.infrast.continueTraining,
+                    "reception_message_board": plan.infrast.receptionMessageBoard,
+                    "reception_clue_exchange": plan.infrast.receptionClueExchange,
+                    "reception_send_clue": plan.infrast.receptionSendClue,
+                    "filename": "",
+                    "plan_index": 0,
                 ]
             } else {
                 parameters = [
@@ -135,18 +181,46 @@ public struct MAAConfigurationWriter: Sendable {
                     "dorm_trust_enabled": false,
                     "continue_training": true,
                     "reception_message_board": true,
+                    "reception_clue_exchange": true,
+                    "reception_send_clue": true,
                     "filename": "",
                     "plan_index": 0,
                 ]
             }
-        case .award:
-            if account.award.usesCustomSettings {
+        case .mall:
+            if plan.mall.usesCustomSettings {
                 parameters = [
-                    "award": account.award.dailyWeekly,
-                    "mail": account.award.mail,
-                    "recruit": account.award.freeRecruit,
-                    "orundum": account.award.orundum,
-                    "mining": account.award.mining,
+                    "visit_friends": plan.mall.visitFriends,
+                    "shopping": plan.mall.shopping,
+                    "buy_first": plan.mall.buyFirst,
+                    "blacklist": plan.mall.blacklist,
+                    "force_shopping_if_credit_full": plan.mall.forceShoppingIfCreditFull,
+                    "only_buy_discount": plan.mall.onlyBuyDiscount,
+                    "reserve_max_credit": plan.mall.reserveMaxCredit,
+                    "credit_fight": plan.mall.creditFight,
+                    "formation_index": plan.mall.formationIndex,
+                ]
+            } else {
+                parameters = [
+                    "visit_friends": true,
+                    "shopping": true,
+                    "buy_first": ["招聘许可", "龙门币"],
+                    "blacklist": ["加急许可", "家具零件"],
+                    "force_shopping_if_credit_full": true,
+                    "only_buy_discount": false,
+                    "reserve_max_credit": false,
+                    "credit_fight": false,
+                    "formation_index": 0,
+                ]
+            }
+        case .award:
+            if plan.award.usesCustomSettings {
+                parameters = [
+                    "award": plan.award.dailyWeekly,
+                    "mail": plan.award.mail,
+                    "recruit": plan.award.freeRecruit,
+                    "orundum": plan.award.orundum,
+                    "mining": plan.award.mining,
                     "specialaccess": false,
                 ]
             } else {
@@ -171,7 +245,7 @@ public struct MAAConfigurationWriter: Sendable {
         let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
         let url = directories.maaConfig
             .appending(path: "tasks")
-            .appending(path: "\(taskName(clientID: client.id, accountID: account.id, task: task)).json")
+            .appending(path: "\(taskName(planID: plan.id, clientID: client.id, accountID: account.id, task: task)).json")
         try data.write(to: url, options: .atomic)
     }
 
@@ -180,6 +254,7 @@ public struct MAAConfigurationWriter: Sendable {
         case .fight: "Fight"
         case .recruit: "Recruit"
         case .infrast: "Infrast"
+        case .mall: "Mall"
         case .award: "Award"
         }
     }
@@ -213,7 +288,8 @@ public struct MAAConfigurationWriter: Sendable {
 
     private func removeOrphanedTaskFiles(keeping generated: Set<String>) throws {
         let tasksDirectory = directories.maaConfig.appending(path: "tasks")
-        let pattern = #"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}-(fight|recruit|infrast|award)\.json$"#
+        let uuid = #"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"#
+        let pattern = "^(?:\(uuid)-){2,3}(fight|recruit|infrast|mall|award)\\.json$"
         let expression = try NSRegularExpression(pattern: pattern)
         let files = try FileManager.default.contentsOfDirectory(at: tasksDirectory, includingPropertiesForKeys: nil)
         for url in files {

@@ -1,6 +1,6 @@
 # 首次配置
 
-完成安装后，建议在有人值守的情况下跑通一次完整流程，再启用每日自动运行。
+完成安装后，建议先用一个方案在有人值守时跑通完整流程，再逐个启用定时运行。
 
 ## 1. 检查全局设置
 
@@ -8,14 +8,13 @@
 
 - `maa-cli` 路径正确；Apple Silicon Homebrew 通常是 `/opt/homebrew/bin/maa`；
 - “立即更新资源”能够正常完成；
-- 初次调试时先关闭每日自动运行；
-- 单步骤失败重试保持 0–1 次，避免未知界面上反复操作。
+- 游戏客户端已经手动完成包体更新、数据下载、协议确认和登录。
 
-“运行前热更新 MAA 资源”只更新 MaaCore 资源，不会下载或更新游戏包体。
+“运行前热更新 MAA 资源”位于每个方案的执行策略中，只更新 MAA 资源，不会下载或更新游戏包体。
 
 ## 2. 添加客户端
 
-在侧边栏“工作流”旁点击添加按钮。每个客户端需要：
+在侧边栏“客户端与账号”旁点击添加按钮。每个客户端需要：
 
 | 配置 | 说明 |
 | --- | --- |
@@ -31,12 +30,12 @@
 <figure class="guide-screenshot">
   <img class="theme-shot theme-shot-light" src="../assets/screenshots/client-settings-light.webp" width="2320" height="1520" loading="lazy" decoding="async" alt="AutoMAA 客户端配置界面，包含连接信息、独立 Profile、账号队列和生命周期保护" />
   <img class="theme-shot theme-shot-dark" src="../assets/screenshots/client-settings-dark.webp" width="2320" height="1520" loading="lazy" decoding="async" alt="AutoMAA 客户端配置界面，包含连接信息、独立 Profile、账号队列和生命周期保护" />
-  <figcaption>客户端配置示例：两个账号共享同一个客户端，但执行顺序与 MAA Profile 都是明确、可检查的。</figcaption>
+  <figcaption>多个账号可以共享同一个客户端；连接、Profile 和关闭边界由客户端统一维护。</figcaption>
 </figure>
 
 ## 3. 添加账号
 
-一个客户端可以包含任意数量账号。
+一个客户端可以包含任意数量账号。账号只描述“是谁、如何切换”，不再重复保存任务参数。
 
 - 只有一个启用账号时，“账号匹配片段”可以留空。
 - 有多个启用账号时，每个账号都必须填写非空、互不重复的匹配片段。
@@ -45,37 +44,31 @@
 
 第一次多账号运行时请留意登录页，确认 MAA 选中了正确账号。
 
-## 4. 配置任务
+## 4. 配置自动化方案
 
-账号内可以启用并排序：
+首次启动会提供两个可自由修改的模板：
 
-1. [理智作战](../tasks/fight)
-2. [公开招募](../tasks/recruit)
-3. [基建收菜](../tasks/infrast)
-4. [领取奖励](../tasks/award)
+- **轻量日常**：理智作战、公开招募、基建仅收菜、领取奖励；
+- **完整日常**：理智作战、公开招募、基建完整换班、信用与购物、领取奖励。
 
-每张任务卡都有“自定义参数”开关：关闭时采用 MAA 的默认设置；开启后使用 AutoMAA 当前显示的参数。
+每个方案都可以：
 
-<figure class="guide-screenshot">
-  <img class="theme-shot theme-shot-light" src="../assets/screenshots/task-settings-light.webp" width="2320" height="1520" loading="lazy" decoding="async" alt="AutoMAA 账号任务配置界面，四项任务可以排序并分别设置参数" />
-  <img class="theme-shot theme-shot-dark" src="../assets/screenshots/task-settings-dark.webp" width="2320" height="1520" loading="lazy" decoding="async" alt="AutoMAA 账号任务配置界面，四项任务可以排序并分别设置参数" />
-  <figcaption>账号任务示例：顺序直接拖动调整，每张任务卡独立决定是否覆盖 MAA 默认参数。</figcaption>
-</figure>
+1. 自动包含所有已启用账号，或只勾选指定账号；
+2. 启用、关闭和调整[任务](../tasks/)顺序；
+3. 为任务使用 MAA 默认参数，或开启 AutoMAA 的可视化自定义参数；
+4. 单独设置资源热更新、失败重试和继续策略；
+5. 手动运行，或设置独立的每日定时时间。
+
+新增账号后，“所有已启用账号”方案会自动包含它；精确选择账号的方案不会被悄悄改变。
 
 ## 5. 检查并运行
 
-回到“今日总览”：
+打开要执行的方案，或回到“自动化总览”：
 
-1. 处理“运行检查”中的错误和警告。
-2. 确认执行顺序与账号顺序正确。
-3. 点击“开始今日任务”。
+1. 确认目标账号、步骤顺序和任务参数；
+2. 处理“运行检查”中的错误和警告；
+3. 点击方案的“立即运行”或“运行”；
 4. 观察首次账号切换、任务结果、客户端关闭和下一客户端启动。
-
-<figure class="guide-screenshot">
-  <img class="theme-shot theme-shot-light" src="../assets/screenshots/overview-light.webp" width="2320" height="1520" loading="lazy" decoding="async" alt="AutoMAA 今日总览，集中展示执行顺序、自动运行时间与运行前检查" />
-  <img class="theme-shot theme-shot-dark" src="../assets/screenshots/overview-dark.webp" width="2320" height="1520" loading="lazy" decoding="async" alt="AutoMAA 今日总览，集中展示执行顺序、自动运行时间与运行前检查" />
-  <figcaption>运行前总览：确认客户端、账号、任务总数和安全检查均符合预期。</figcaption>
-</figure>
 
 运行中可随时点击“安全停止”或按 `Command-.`。AutoMAA 会先终止当前 MAA 命令，再关闭游戏和释放连接。
 
@@ -83,9 +76,9 @@
 
 在“运行日志”中确认：
 
-- 每个账号都显示“已进入”；
+- 每个目标账号都显示“已进入”；
 - 成功任务显示“完成”；
 - 客户端切换前显示“端口已释放”；
-- 最后显示“全部任务执行完成”，或给出明确的人工处理提示。
+- 最后显示当前方案已完成，或给出明确的人工处理提示。
 
-流程稳定后再配置[每日自动运行](./scheduling)。
+轻量方案与完整方案的完成记录彼此独立：早上完成过“理智作战”，不会让晚间方案误跳过同名步骤。流程稳定后再配置[每日自动运行](./scheduling)。

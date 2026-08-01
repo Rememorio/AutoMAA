@@ -9,7 +9,8 @@ struct DashboardView: View {
             VStack(alignment: .leading, spacing: 20) {
                 header
                 metrics
-                workflow
+                routines
+                executionFlow
                 readiness
                 recentActivity
             }
@@ -17,14 +18,14 @@ struct DashboardView: View {
             .frame(maxWidth: 1_060, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
-        .navigationTitle("今日总览")
+        .navigationTitle("自动化总览")
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(greeting)
                 .font(.system(size: 28, weight: .bold, design: .rounded))
-            Text(model.isRunning ? model.statusMessage : "按你的配置调度 MAA，依次完成每个客户端和账号的日常任务。")
+            Text(model.isRunning ? model.statusMessage : "账号只配置一次，用不同方案安排轻量收菜、完整换班或任何自定义日常。")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
@@ -33,15 +34,10 @@ struct DashboardView: View {
 
     private var metrics: some View {
         HStack(spacing: 12) {
+            metric(title: "自动化方案", value: "\(model.configuration.plans.count)", symbol: "clock.arrow.circlepath", color: .purple)
             metric(title: "客户端", value: "\(model.activeClientCount)", symbol: "macwindow", color: .maaBlue)
-            metric(title: "账号", value: "\(model.activeAccountCount)", symbol: "person.2.fill", color: .maaAccent)
-            metric(title: "日常步骤", value: "\(model.activeTaskCount)", symbol: "checklist", color: .orange)
-            metric(
-                title: "自动运行",
-                value: model.configuration.schedule.enabled ? String(format: "%02d:%02d", model.configuration.schedule.hour, model.configuration.schedule.minute) : "关闭",
-                symbol: "clock.fill",
-                color: .purple
-            )
+            metric(title: "启用账号", value: "\(model.activeAccountCount)", symbol: "person.2.fill", color: .maaAccent)
+            metric(title: "定时方案", value: "\(model.configuration.plans.filter(\.schedule.enabled).count)", symbol: "clock.badge.checkmark.fill", color: .orange)
         }
     }
 
@@ -66,53 +62,118 @@ struct DashboardView: View {
         .frame(maxWidth: .infinity)
     }
 
-    private var workflow: some View {
+    private var routines: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionTitle("执行顺序", detail: "客户端严格串行；关闭并确认当前连接释放后，才会启动下一项。")
-            Panel {
-                if model.configuration.clients.isEmpty {
+            sectionTitle("自动化方案", detail: "每个方案独立选择账号、任务参数、完成记录和定时时间，也可以随时手动运行。")
+            if model.configuration.plans.isEmpty {
+                Panel {
                     VStack(spacing: 14) {
-                        Image(systemName: "square.stack.3d.up.badge.plus")
+                        Image(systemName: "clock.badge.plus")
                             .font(.system(size: 34))
                             .foregroundStyle(Color.maaAccent)
-                        VStack(spacing: 4) {
-                            Text("创建你的第一个客户端")
-                                .font(.headline)
-                            Text("选择服务器和游戏应用，再添加一个或多个账号。")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Button {
-                            model.addClient()
-                        } label: {
-                            Label("添加客户端", systemImage: "plus")
-                        }
-                        .buttonStyle(.borderedProminent)
+                        Text("创建你的第一个自动化方案")
+                            .font(.headline)
+                        Button("使用轻量日常模板") { model.addPlan(.lightRoutine) }
+                            .buttonStyle(.borderedProminent)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 18)
-                } else {
-                    HStack(spacing: 10) {
-                        ForEach(Array(model.configuration.clients.filter(\.enabled).enumerated()), id: \.element.id) { index, client in
-                            clientNode(client)
-                            if index < model.configuration.clients.filter(\.enabled).count - 1 {
-                                VStack(spacing: 4) {
-                                    Image(systemName: "arrow.right")
-                                        .foregroundStyle(Color.maaAccent)
-                                    Text("释放端口")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
-                                .frame(width: 64)
-                            }
-                        }
+                }
+            } else {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 12)], spacing: 12) {
+                    ForEach(model.configuration.plans) { plan in
+                        routineCard(plan)
                     }
                 }
             }
         }
     }
 
-    private func clientNode(_ client: ClientConfiguration) -> some View {
+    private func routineCard(_ plan: AutomationPlan) -> some View {
+        Panel {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .foregroundStyle(Color.maaAccent)
+                    Text(plan.name)
+                        .font(.headline)
+                    Spacer()
+                    if plan.schedule.enabled {
+                        Label(String(format: "%02d:%02d", plan.schedule.hour, plan.schedule.minute), systemImage: "clock.fill")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("仅手动")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                HStack(spacing: 6) {
+                    ForEach(plan.enabledTasks) { task in
+                        Image(systemName: task.symbol)
+                            .font(.caption)
+                            .foregroundStyle(Color.maaAccent)
+                            .frame(width: 25, height: 25)
+                            .background(Color.maaAccent.opacity(0.09), in: RoundedRectangle(cornerRadius: 6))
+                            .help(task.title)
+                    }
+                    Spacer()
+                    Text("\(targetCount(plan)) 个账号")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Divider()
+                HStack {
+                    Button("编辑") { model.selection = .plan(plan.id) }
+                    Spacer()
+                    Button {
+                        model.runPlan(plan.id)
+                    } label: {
+                        Label("运行", systemImage: "play.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!model.canRun(planID: plan.id))
+                }
+            }
+        }
+    }
+
+    private var executionFlow: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("当前执行路径", detail: "客户端严格串行；确认当前客户端关闭、连接释放后，才启动下一项。")
+            Panel {
+                if let plan = model.selectedPlan {
+                    let clients = model.configuration.clients.filter { $0.enabled && $0.accounts.contains(where: plan.includes) }
+                    if clients.isEmpty {
+                        Text("「\(plan.name)」还没有可执行账号")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        HStack(spacing: 10) {
+                            ForEach(Array(clients.enumerated()), id: \.element.id) { index, client in
+                                clientNode(client, plan: plan)
+                                if index < clients.count - 1 {
+                                    VStack(spacing: 4) {
+                                        Image(systemName: "arrow.right")
+                                            .foregroundStyle(Color.maaAccent)
+                                        Text("关闭并释放")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .frame(width: 68)
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    Text("请选择一个方案")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func clientNode(_ client: ClientConfiguration, plan: AutomationPlan) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Image(systemName: client.kind.symbol)
@@ -127,7 +188,7 @@ struct DashboardView: View {
                 }
             }
             HStack(spacing: 6) {
-                ForEach(client.accounts.filter(\.enabled)) { account in
+                ForEach(client.accounts.filter(plan.includes)) { account in
                     Text(account.name)
                         .font(.caption.weight(.medium))
                         .padding(.horizontal, 9)
@@ -141,21 +202,12 @@ struct DashboardView: View {
 
     private var readiness: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionTitle("运行检查", detail: "关键条件不满足时会拒绝启动，避免跑错账号或连错客户端。")
+            sectionTitle("运行检查", detail: "以下检查针对侧边栏当前选中的方案。")
             Panel {
                 if model.readinessIssues.isEmpty {
-                    HStack(spacing: 12) {
-                        Image(systemName: "checkmark.seal.fill")
-                            .font(.title2)
-                            .foregroundStyle(.green)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("配置已就绪")
-                                .font(.headline)
-                            Text("可以安全执行完整工作流")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
+                    Label("「\(model.selectedPlan?.name ?? "方案")」已准备就绪", systemImage: "checkmark.seal.fill")
+                        .font(.headline)
+                        .foregroundStyle(.green)
                 } else {
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(model.readinessIssues) { issue in
@@ -181,15 +233,12 @@ struct DashboardView: View {
                     Text("还没有运行记录")
                         .font(.callout)
                         .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
                     VStack(spacing: 10) {
                         ForEach(model.logs.suffix(4).reversed()) { log in
                             HStack(spacing: 10) {
                                 StatusDot(color: log.level.color)
-                                Text(log.message)
-                                    .font(.callout)
-                                    .lineLimit(1)
+                                Text(log.message).font(.callout).lineLimit(1)
                                 Spacer()
                                 Text(log.timestamp, style: .time)
                                     .font(.caption.monospacedDigit())
@@ -204,14 +253,13 @@ struct DashboardView: View {
 
     private func sectionTitle(_ title: String, detail: String?) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(title)
-                .font(.headline)
-            if let detail {
-                Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            Text(title).font(.headline)
+            if let detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
         }
+    }
+
+    private func targetCount(_ plan: AutomationPlan) -> Int {
+        model.configuration.clients.filter(\.enabled).flatMap { $0.accounts.filter(plan.includes) }.count
     }
 
     private var greeting: String {

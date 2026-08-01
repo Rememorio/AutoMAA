@@ -15,6 +15,48 @@ struct SidebarView: View {
                 }
 
                 Section {
+                    ForEach(model.configuration.plans) { plan in
+                        HStack(spacing: 9) {
+                            Image(systemName: "clock.arrow.circlepath")
+                                .foregroundStyle(Color.maaAccent)
+                            Text(plan.name)
+                                .lineLimit(1)
+                            Spacer()
+                            if plan.schedule.enabled {
+                                Text(String(format: "%02d:%02d", plan.schedule.hour, plan.schedule.minute))
+                                    .font(.caption2.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .tag(SidebarSelection.plan(plan.id))
+                    }
+                } header: {
+                    HStack {
+                        Text("自动化方案")
+                        Spacer()
+                        Menu {
+                            Button("轻量日常") { model.addPlan(.lightRoutine) }
+                            Button("完整日常") { model.addPlan(.completeRoutine) }
+                            Divider()
+                            Button("空白方案") {
+                                var plan = AutomationPlan(name: "新方案")
+                                plan.fight.enabled = false
+                                plan.recruit.enabled = false
+                                plan.infrast.enabled = false
+                                plan.mall.enabled = false
+                                plan.award.enabled = false
+                                model.addPlan(plan)
+                            }
+                        } label: {
+                            Image(systemName: "plus.circle")
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .help("添加自动化方案")
+                    }
+                }
+
+                Section {
                     ForEach(model.configuration.clients) { client in
                         DisclosureGroup {
                             ForEach(client.accounts) { account in
@@ -41,7 +83,7 @@ struct SidebarView: View {
                     }
                 } header: {
                     HStack {
-                        Text("工作流")
+                        Text("客户端与账号")
                         Spacer()
                         Button {
                             model.addClient()
@@ -106,10 +148,12 @@ struct SidebarView: View {
                 .tint(.red)
                 .help("停止当前 MAA 命令，关闭客户端并释放连接")
             } else {
+                planPicker
+
                 Button {
-                    model.runAll()
+                    model.runSelectedPlan()
                 } label: {
-                    Label("开始今日任务", systemImage: "play.fill")
+                    Label("运行这个方案", systemImage: "play.fill")
                         .fontWeight(.semibold)
                         .frame(maxWidth: .infinity)
                 }
@@ -117,7 +161,7 @@ struct SidebarView: View {
                 .controlSize(.large)
                 .tint(.maaAccent)
                 .disabled(!model.canRun)
-                .help(model.canRun ? "按照侧边栏顺序执行所有客户端和账号" : "请先处理总览中的配置问题")
+                .help(model.canRun ? "按当前方案依次执行客户端和账号" : "请先处理当前方案的配置问题")
             }
         }
         .padding(14)
@@ -126,6 +170,37 @@ struct SidebarView: View {
         .overlay(alignment: .top) {
             Divider()
         }
+    }
+
+    private var planPicker: some View {
+        Menu {
+            ForEach(model.configuration.plans) { plan in
+                Button {
+                    model.selection = .plan(plan.id)
+                } label: {
+                    if model.selectedPlanID == plan.id {
+                        Label(plan.name, systemImage: "checkmark")
+                    } else {
+                        Text(plan.name)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "clock.arrow.circlepath")
+                    .foregroundStyle(Color.maaAccent)
+                Text(model.selectedPlan?.name ?? "选择方案")
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                Spacer()
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .disabled(model.configuration.plans.isEmpty)
     }
 
     private var workflowStatus: some View {
@@ -170,7 +245,11 @@ struct SidebarView: View {
 
     private var statusDetail: String {
         if model.isRunning { return model.statusMessage }
-        if model.readinessIssues.isEmpty { return "\(model.activeAccountCount) 个账号 · \(model.activeTaskCount) 个步骤" }
+        if model.readinessIssues.isEmpty {
+            let plan = model.selectedPlan
+            let accounts = model.configuration.clients.filter(\.enabled).flatMap { $0.accounts.filter { plan?.includes($0) == true } }.count
+            return "\(accounts) 个账号 · \(plan?.enabledTasks.count ?? 0) 个步骤"
+        }
         return model.canRun
             ? "\(model.readinessIssues.count) 项提醒"
             : "\(model.readinessIssues.count) 项问题待处理"

@@ -18,7 +18,7 @@ struct AutoMAAApp: App {
                     .disabled(model.applicationUpdateState.isBusy)
             }
             CommandGroup(after: .newItem) {
-                Button("运行全部任务") { model.runAll() }
+                Button("运行当前方案") { model.runSelectedPlan() }
                     .keyboardShortcut("r", modifiers: [.command])
                     .disabled(!model.canRun)
                 Button("安全停止当前流程") { model.cancelRun() }

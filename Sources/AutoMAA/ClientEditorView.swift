@@ -145,7 +145,7 @@ struct ClientEditorView: View {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(account.name)
                                     .font(.callout.weight(.semibold))
-                                Text(account.enabled ? "\(account.stepOrder.filter { account.isEnabled($0) }.count) 个步骤" : "已停用")
+                                Text(account.enabled ? "由自动化方案安排" : "已停用")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }

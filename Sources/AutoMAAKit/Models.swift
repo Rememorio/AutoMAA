@@ -78,6 +78,7 @@ public enum TaskKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case fight
     case recruit
     case infrast
+    case mall
     case award
 
     public var id: String { rawValue }
@@ -86,7 +87,8 @@ public enum TaskKind: String, Codable, CaseIterable, Identifiable, Sendable {
         switch self {
         case .fight: "理智作战"
         case .recruit: "公开招募"
-        case .infrast: "基建收菜"
+        case .infrast: "基建"
+        case .mall: "信用与购物"
         case .award: "领取奖励"
         }
     }
@@ -96,6 +98,7 @@ public enum TaskKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .fight: "bolt.fill"
         case .recruit: "person.crop.rectangle.stack.fill"
         case .infrast: "building.2.fill"
+        case .mall: "cart.fill"
         case .award: "gift.fill"
         }
     }
@@ -149,6 +152,55 @@ public enum DroneUsage: String, Codable, CaseIterable, Identifiable, Sendable {
     }
 }
 
+public enum InfrastMode: Int, Codable, CaseIterable, Identifiable, Sendable {
+    case fullShift = 0
+    case collectOnly = 20_000
+
+    public var id: Int { rawValue }
+
+    public var title: String {
+        switch self {
+        case .fullShift: "完整换班"
+        case .collectOnly: "仅收菜，不换班"
+        }
+    }
+
+    public var detail: String {
+        switch self {
+        case .fullShift: "MAA 单设施最优解，会处理所选设施并进行完整换班。"
+        case .collectOnly: "保留收取产物、无人机与会客室逻辑，不更换干员。"
+        }
+    }
+}
+
+public enum InfrastFacility: String, Codable, CaseIterable, Identifiable, Sendable {
+    case manufacturing = "Mfg"
+    case trading = "Trade"
+    case power = "Power"
+    case control = "Control"
+    case reception = "Reception"
+    case office = "Office"
+    case dorm = "Dorm"
+    case processing = "Processing"
+    case training = "Training"
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .manufacturing: "制造站"
+        case .trading: "贸易站"
+        case .power: "发电站"
+        case .control: "控制中枢"
+        case .reception: "会客室"
+        case .office: "办公室"
+        case .dorm: "宿舍"
+        case .processing: "加工站"
+        case .training: "训练室"
+        }
+    }
+}
+
 public enum TaskSettingsMode: String, Codable, CaseIterable, Identifiable, Sendable {
     case maaDefault
     case custom
@@ -198,10 +250,46 @@ public struct RecruitConfiguration: Codable, Equatable, Sendable {
 public struct InfrastConfiguration: Codable, Equatable, Sendable {
     public var enabled = true
     public var settingsMode = TaskSettingsMode.custom
-    public var collectManufacturing = true
-    public var collectTrading = true
-    public var collectReception = false
+    public var mode = InfrastMode.collectOnly
+    public var facilities: [InfrastFacility] = [.manufacturing, .trading, .reception]
     public var drones = DroneUsage.money
+    public var threshold = 0.3
+    public var replenish = false
+    public var dormNotStationed = false
+    public var dormTrust = false
+    public var receptionMessageBoard = true
+    public var receptionClueExchange = true
+    public var receptionSendClue = true
+    public var continueTraining = true
+
+    public init() {}
+
+    public static var fullShift: InfrastConfiguration {
+        var value = InfrastConfiguration()
+        value.mode = .fullShift
+        value.facilities = InfrastFacility.allCases
+        value.drones = .money
+        return value
+    }
+
+    public var usesCustomSettings: Bool {
+        get { settingsMode == .custom }
+        set { settingsMode = newValue ? .custom : .maaDefault }
+    }
+}
+
+public struct MallConfiguration: Codable, Equatable, Sendable {
+    public var enabled = true
+    public var settingsMode = TaskSettingsMode.custom
+    public var visitFriends = true
+    public var shopping = true
+    public var buyFirst = ["招聘许可", "龙门币"]
+    public var blacklist = ["加急许可", "家具零件"]
+    public var forceShoppingIfCreditFull = true
+    public var onlyBuyDiscount = false
+    public var reserveMaxCredit = false
+    public var creditFight = false
+    public var formationIndex = 0
 
     public init() {}
 
@@ -233,41 +321,17 @@ public struct AccountConfiguration: Codable, Identifiable, Equatable, Sendable {
     public var name: String
     public var accountSelector: String
     public var enabled: Bool
-    public var stepOrder: [TaskKind]
-    public var fight: FightConfiguration
-    public var recruit: RecruitConfiguration
-    public var infrast: InfrastConfiguration
-    public var award: AwardConfiguration
 
     public init(
         id: UUID = UUID(),
         name: String,
         accountSelector: String = "",
-        enabled: Bool = true,
-        stepOrder: [TaskKind] = TaskKind.allCases,
-        fight: FightConfiguration = .init(),
-        recruit: RecruitConfiguration = .init(),
-        infrast: InfrastConfiguration = .init(),
-        award: AwardConfiguration = .init()
+        enabled: Bool = true
     ) {
         self.id = id
         self.name = name
         self.accountSelector = accountSelector
         self.enabled = enabled
-        self.stepOrder = stepOrder
-        self.fight = fight
-        self.recruit = recruit
-        self.infrast = infrast
-        self.award = award
-    }
-
-    public func isEnabled(_ task: TaskKind) -> Bool {
-        switch task {
-        case .fight: fight.enabled
-        case .recruit: recruit.enabled
-        case .infrast: infrast.enabled
-        case .award: award.enabled
-        }
     }
 }
 
@@ -305,10 +369,19 @@ public struct ClientConfiguration: Codable, Identifiable, Equatable, Sendable {
     }
 }
 
-public struct ScheduleConfiguration: Codable, Equatable, Sendable {
+public struct PlanSchedule: Codable, Equatable, Sendable {
     public var enabled = false
     public var hour = 8
     public var minute = 0
+
+    public init(enabled: Bool = false, hour: Int = 8, minute: Int = 0) {
+        self.enabled = enabled
+        self.hour = hour
+        self.minute = minute
+    }
+}
+
+public struct ExecutionPolicy: Codable, Equatable, Sendable {
     public var hotUpdateBeforeRun = true
     public var maxRetries = 1
     public var continueAfterStepFailure = true
@@ -316,24 +389,104 @@ public struct ScheduleConfiguration: Codable, Equatable, Sendable {
     public init() {}
 }
 
+public struct AutomationPlan: Codable, Identifiable, Equatable, Sendable {
+    public var id: UUID
+    public var name: String
+    public var includesAllEnabledAccounts: Bool
+    public var accountIDs: Set<UUID>
+    public var stepOrder: [TaskKind]
+    public var fight: FightConfiguration
+    public var recruit: RecruitConfiguration
+    public var infrast: InfrastConfiguration
+    public var mall: MallConfiguration
+    public var award: AwardConfiguration
+    public var schedule: PlanSchedule
+    public var policy: ExecutionPolicy
+
+    public init(
+        id: UUID = UUID(),
+        name: String,
+        includesAllEnabledAccounts: Bool = true,
+        accountIDs: Set<UUID> = [],
+        stepOrder: [TaskKind] = TaskKind.allCases,
+        fight: FightConfiguration = .init(),
+        recruit: RecruitConfiguration = .init(),
+        infrast: InfrastConfiguration = .init(),
+        mall: MallConfiguration = .init(),
+        award: AwardConfiguration = .init(),
+        schedule: PlanSchedule = .init(),
+        policy: ExecutionPolicy = .init()
+    ) {
+        self.id = id
+        self.name = name
+        self.includesAllEnabledAccounts = includesAllEnabledAccounts
+        self.accountIDs = accountIDs
+        self.stepOrder = stepOrder
+        self.fight = fight
+        self.recruit = recruit
+        self.infrast = infrast
+        self.mall = mall
+        self.award = award
+        self.schedule = schedule
+        self.policy = policy
+    }
+
+    public func isEnabled(_ task: TaskKind) -> Bool {
+        switch task {
+        case .fight: fight.enabled
+        case .recruit: recruit.enabled
+        case .infrast: infrast.enabled
+        case .mall: mall.enabled
+        case .award: award.enabled
+        }
+    }
+
+    public func includes(_ account: AccountConfiguration) -> Bool {
+        account.enabled && (includesAllEnabledAccounts || accountIDs.contains(account.id))
+    }
+
+    public var enabledTasks: [TaskKind] {
+        stepOrder.filter(isEnabled)
+    }
+
+    public static var lightRoutine: AutomationPlan {
+        var mall = MallConfiguration()
+        mall.enabled = false
+        return AutomationPlan(
+            name: "轻量日常",
+            infrast: .init(),
+            mall: mall,
+            schedule: .init(hour: 8, minute: 0)
+        )
+    }
+
+    public static var completeRoutine: AutomationPlan {
+        AutomationPlan(
+            name: "完整日常",
+            infrast: .fullShift,
+            schedule: .init(hour: 20, minute: 0)
+        )
+    }
+}
+
 public struct AppConfiguration: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = 2
+    public static let currentSchemaVersion = 3
 
     public var schemaVersion: Int
     public var cliPath: String
     public var clients: [ClientConfiguration]
-    public var schedule: ScheduleConfiguration
+    public var plans: [AutomationPlan]
 
     public init(
         schemaVersion: Int = Self.currentSchemaVersion,
         cliPath: String = "/opt/homebrew/bin/maa",
         clients: [ClientConfiguration],
-        schedule: ScheduleConfiguration = .init()
+        plans: [AutomationPlan] = [.lightRoutine, .completeRoutine]
     ) {
         self.schemaVersion = schemaVersion
         self.cliPath = cliPath
         self.clients = clients
-        self.schedule = schedule
+        self.plans = plans
     }
 
     public static var defaults: AppConfiguration {
@@ -353,6 +506,7 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
     public var timestamp: Date
     public var level: LogLevel
     public var message: String
+    public var planID: UUID?
     public var clientID: UUID?
     public var accountID: UUID?
     public var task: TaskKind?
@@ -362,6 +516,7 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
         timestamp: Date = Date(),
         level: LogLevel,
         message: String,
+        planID: UUID? = nil,
         clientID: UUID? = nil,
         accountID: UUID? = nil,
         task: TaskKind? = nil
@@ -370,6 +525,7 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
         self.timestamp = timestamp
         self.level = level
         self.message = message
+        self.planID = planID
         self.clientID = clientID
         self.accountID = accountID
         self.task = task
