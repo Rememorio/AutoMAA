@@ -1,0 +1,176 @@
+import Foundation
+
+public struct AppDirectories: Sendable {
+    public let root: URL
+    public let maaConfig: URL
+    public let logs: URL
+    public let configuration: URL
+    public let history: URL
+    public let executionState: URL
+    public let generatedManifest: URL
+    public let lock: URL
+
+    public init(root: URL? = nil) {
+        let resolvedRoot = root ?? FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: "Library/Application Support/AutoMAA", directoryHint: .isDirectory)
+        self.root = resolvedRoot
+        maaConfig = resolvedRoot.appending(path: "MAA", directoryHint: .isDirectory)
+        logs = resolvedRoot.appending(path: "Logs", directoryHint: .isDirectory)
+        configuration = resolvedRoot.appending(path: "config.json")
+        history = resolvedRoot.appending(path: "history.json")
+        executionState = resolvedRoot.appending(path: "execution-state.json")
+        generatedManifest = resolvedRoot.appending(path: "generated-files.json")
+        lock = resolvedRoot.appending(path: "runner.lock")
+    }
+
+    public func prepare() throws {
+        let manager = FileManager.default
+        try manager.createDirectory(at: root, withIntermediateDirectories: true)
+        try manager.createDirectory(at: maaConfig, withIntermediateDirectories: true)
+        try manager.createDirectory(at: maaConfig.appending(path: "profiles"), withIntermediateDirectories: true)
+        try manager.createDirectory(at: maaConfig.appending(path: "tasks"), withIntermediateDirectories: true)
+        try manager.createDirectory(at: logs, withIntermediateDirectories: true)
+    }
+}
+
+public struct ConfigurationStore: Sendable {
+    private struct VersionProbe: Decodable {
+        let schemaVersion: Int?
+    }
+
+    public let directories: AppDirectories
+
+    public init(directories: AppDirectories = .init()) {
+        self.directories = directories
+    }
+
+    public func load() throws -> AppConfiguration {
+        try directories.prepare()
+        guard FileManager.default.fileExists(atPath: directories.configuration.path) else {
+            let configuration = AppConfiguration.defaults
+            try save(configuration)
+            return configuration
+        }
+        let data = try Data(contentsOf: directories.configuration)
+        let version = try Self.decoder.decode(VersionProbe.self, from: data)
+        guard version.schemaVersion == AppConfiguration.currentSchemaVersion else {
+            let configuration = AppConfiguration.defaults
+            try save(configuration)
+            return configuration
+        }
+        return try Self.decoder.decode(AppConfiguration.self, from: data)
+    }
+
+    public func save(_ configuration: AppConfiguration) throws {
+        try directories.prepare()
+        let data = try Self.encoder.encode(configuration)
+        try data.write(to: directories.configuration, options: .atomic)
+    }
+
+    private static let encoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        return encoder
+    }()
+
+    private static let decoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }()
+}
+
+public struct HistoryStore: Sendable {
+    public let directories: AppDirectories
+
+    public init(directories: AppDirectories = .init()) {
+        self.directories = directories
+    }
+
+    public func load() -> [LogEntry] {
+        guard let data = try? Data(contentsOf: directories.history),
+              let logs = try? Self.decoder.decode([LogEntry].self, from: data)
+        else { return [] }
+        return logs
+    }
+
+    public func append(_ entry: LogEntry) {
+        var logs = load()
+        logs.append(entry)
+        if logs.count > 1_000 {
+            logs.removeFirst(logs.count - 1_000)
+        }
+        guard let data = try? Self.encoder.encode(logs) else { return }
+        try? directories.prepare()
+        try? data.write(to: directories.history, options: .atomic)
+    }
+
+    public func clear() throws {
+        try directories.prepare()
+        try Data("[]".utf8).write(to: directories.history, options: .atomic)
+    }
+
+    private static let encoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted]
+        encoder.dateEncodingStrategy = .iso8601
+        return encoder
+    }()
+
+    private static let decoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }()
+}
+
+public struct ExecutionStateStore: Sendable {
+    public let directories: AppDirectories
+
+    public init(directories: AppDirectories = .init()) {
+        self.directories = directories
+    }
+
+    public func loadForToday() -> ExecutionState {
+        let today = Self.todayKey
+        guard let data = try? Data(contentsOf: directories.executionState),
+              var state = try? Self.decoder.decode(ExecutionState.self, from: data),
+              state.dateKey == today
+        else { return ExecutionState(dateKey: today) }
+        state.updatedAt = Date()
+        return state
+    }
+
+    public func save(_ state: ExecutionState) throws {
+        try directories.prepare()
+        let data = try Self.encoder.encode(state)
+        try data.write(to: directories.executionState, options: .atomic)
+    }
+
+    public func reset() throws {
+        try save(ExecutionState(dateKey: Self.todayKey))
+    }
+
+    public static var todayKey: String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: Date())
+    }
+
+    private static let encoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        return encoder
+    }()
+
+    private static let decoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }()
+}
