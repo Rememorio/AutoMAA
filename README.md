@@ -10,10 +10,13 @@
 [![Swift 6.2](https://img.shields.io/badge/Swift-6.2-F05138?logo=swift&logoColor=white)](https://www.swift.org/)
 [![MIT License](https://img.shields.io/badge/License-MIT-2ea44f)](./LICENSE)
 [![GitHub Release](https://img.shields.io/github/v/release/Rememorio/AutoMAA)](https://github.com/Rememorio/AutoMAA/releases/latest)
+[![Documentation](https://img.shields.io/badge/文档-AutoMAA-0d9f9e)](https://rememorio.github.io/AutoMAA/)
 
 </div>
 
 AutoMAA 是一个面向 [MAA](https://github.com/MaaAssistantArknights/MaaAssistantArknights) 的自动化编排器。它负责安排客户端和账号顺序、生成任务参数、调用 `maa-cli`、处理重试与断点，并在合适的时间安全切换到下一项；游戏画面识别与实际操作仍由 MaaCore 完成。
+
+完整的安装、配置、任务说明与故障排查请访问 **[AutoMAA 文档站](https://rememorio.github.io/AutoMAA/)**。
 
 它不是 MAA 的替代品，也不是某个游戏运行器的附属助手。当前版本首先支持 macOS 上通过 PlayCover 与 MaaTools 连接的游戏客户端，但产品模型围绕 MAA 的“客户端—账号—任务”工作流设计，PlayCover 只是现阶段的连接实现。
 
@@ -97,6 +100,8 @@ maa version
 
 当前公开构建采用临时代码签名，尚未使用 Apple Developer ID 公证，因此直接双击可能被 Gatekeeper 拦截。如果右键打开仍被拦截，请前往“系统设置 → 隐私与安全性”，在安全性提示中选择“仍要打开”。请只从本仓库 Releases 下载，并使用 Release 中附带的 `.sha256` 文件校验安装包。
 
+图文步骤、安全解释和校验命令见文档站的[下载与安装](https://rememorio.github.io/AutoMAA/guide/installation)；请勿全局关闭 Gatekeeper。
+
 安装完成后，AutoMAA 的更新与游戏包体更新相互独立：新版本 AutoMAA 请从 Releases 重新下载安装；MaaCore 与资源可在 AutoMAA 中更新，游戏的大版本更新仍需在游戏运行环境中手动完成。
 
 ## 快速开始
@@ -151,6 +156,15 @@ open .build/AutoMAA.app
 
 产物位于 `dist/`，并同时生成 SHA-256 校验文件。若修改了图标母图，可运行 `./scripts/build-icon.sh` 重新生成 `.icns`。
 
+本地预览文档站：
+
+```bash
+npm ci
+npm run docs:dev
+```
+
+生产构建使用 `npm run docs:build`。`main` 上的文档改动由 GitHub Actions 自动发布到 GitHub Pages。
+
 项目结构：
 
 ```text
@@ -158,6 +172,7 @@ Sources/
 ├── AutoMAA/        # SwiftUI 图形界面
 ├── AutoMAAKit/     # 配置、任务生成、执行器和系统集成
 └── AutoMAARunner/  # LaunchAgent 使用的无界面入口
+docs/               # VitePress 中文文档站
 Tests/
 └── AutoMAAKitTests/
 ```

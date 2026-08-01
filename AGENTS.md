@@ -33,6 +33,7 @@ swift test
 swift test
 ./scripts/build-app.sh
 ./scripts/package-dmg.sh
+npm run docs:build
 ```
 
 构建产物位于 `.build/` 和 `dist/`，不得提交。
@@ -51,6 +52,8 @@ swift test
 | `Sources/AutoMAARunner/` | 无界面定时运行入口 |
 | `Tests/AutoMAAKitTests/` | 核心配置与工作流测试 |
 | `scripts/` | App、图标和 DMG 构建脚本 |
+| `docs/` | VitePress 用户与开发文档 |
+| `.github/workflows/docs.yml` | GitHub Pages 构建与部署 |
 
 界面层不应重新实现工作流或 MAA 参数语义。可测试的配置、生成和调度逻辑应放在 `AutoMAAKit`。
 
@@ -117,6 +120,7 @@ swift test
 ## 文档与视觉资产
 
 - 用户行为、系统要求或配置语义变化时同步更新 `README.md`。
+- 完整用户指南位于 `docs/`；新增页面时同步更新 VitePress 导航，并运行 `npm run docs:build` 检查站内链接。
 - 面向贡献者的流程更新在 `CONTRIBUTING.md`，发版流程更新在 `RELEASE.md`。
 - 用户可见的重要变化记录在 `CHANGELOG.md`。
 - 保留并准确表达 MAA、MaaCore、`maa-cli`、MaaMacGui 和当前连接环境的 credit。

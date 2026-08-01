@@ -101,6 +101,13 @@ git diff --check
 ./scripts/package-dmg.sh
 ```
 
+涉及 README 或 `docs/` 时还需运行：
+
+```bash
+npm ci
+npm run docs:build
+```
+
 测试要求：
 
 - 使用临时 `AppDirectories(root:)`；

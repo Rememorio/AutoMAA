@@ -59,6 +59,13 @@ git diff --cached --check
 git commit -m "release: vX.Y.Z"
 ```
 
+如果用户行为、安装说明或兼容性发生变化，同步更新 `docs/` 并执行：
+
+```bash
+npm ci
+npm run docs:build
+```
+
 ## 3. 自动化验证
 
 测试必须在没有真实游戏连接的情况下通过：
@@ -185,6 +192,7 @@ git ls-remote origin "refs/tags/vX.Y.Z"
 - [ ] `main` 与远端同步，工作区干净
 - [ ] 版本号和 `CHANGELOG.md` 已更新
 - [ ] README 与实际能力、限制和签名状态一致
+- [ ] 文档站构建通过，安装与常见问题页面已同步
 - [ ] 仓库不含用户配置、敏感信息或构建产物
 - [ ] `swift test` 通过
 - [ ] Release App 构建和代码签名校验通过
@@ -194,3 +202,4 @@ git ls-remote origin "refs/tags/vX.Y.Z"
 - [ ] tag 指向正确提交
 - [ ] Release 附件上传完成并重新下载验证
 - [ ] Release 页面、下载链接和安装说明可公开访问
+- [ ] GitHub Pages 部署成功且线上关键页面可访问

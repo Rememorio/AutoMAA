@@ -1,0 +1,96 @@
+# 常见问题
+
+## macOS 提示“Apple 无法验证 AutoMAA.app”
+
+当前公开版本尚未使用 Apple Developer ID 公证。请先确认安装包来自官方 Release 并校验 SHA-256，然后按照[下载与安装](../guide/installation#处理-apple-无法验证-提示)中的“仍要打开”步骤操作。
+
+不要全局关闭 Gatekeeper，也不要运行来源不明的终端命令来移除系统保护。
+
+## 找不到 `maa-cli`
+
+在终端运行：
+
+```bash
+which maa
+maa version
+```
+
+如果尚未安装：
+
+```bash
+brew install MaaAssistantArknights/tap/maa-cli
+maa install
+```
+
+然后把 `which maa` 输出的路径填入 AutoMAA“全局设置”。Apple Silicon Homebrew 通常为 `/opt/homebrew/bin/maa`。
+
+## 提示 MaaCore 或资源缺失
+
+运行：
+
+```bash
+maa install
+maa update
+```
+
+也可以在 AutoMAA“全局设置”中点击“立即更新资源”。如果 GitHub 网络不稳定，稍后重试或先确认代理和 DNS；不要删除仍在使用的 MAA 配置目录。
+
+## 无法连接 `localhost:1717`
+
+依次确认：
+
+1. 游戏客户端已启动；
+2. 当前连接环境已正确安装并启用 MaaTools；
+3. 客户端地址确实是 `localhost:1717`；
+4. 没有另一个游戏、MAA 或遗留进程占用端口；
+5. 上一个客户端已经完全退出。
+
+查看占用进程可在终端运行：
+
+```bash
+lsof -nP -iTCP:1717
+```
+
+不要在不清楚进程身份时强制结束它。先关闭相关游戏和 MAA，再重新运行 AutoMAA。
+
+## 多账号匹配失败
+
+- 在对应客户端的登录页确认每个账号显示的文本；
+- 使用短而唯一的片段，例如末四位；
+- 不要填写掩码后所有账号都相同的部分；
+- 确认同一客户端的片段没有重复；
+- 不要填写密码或完整手机号。
+
+账号匹配失败只会跳过当前账号，其他账号仍可继续。
+
+## 今天的任务被自动跳过
+
+AutoMAA 会记录当天已经成功的任务。如果你确认需要重跑，在“全局设置”中选择“重置今日完成记录”。
+
+这个操作不会恢复游戏中已经消耗的理智、道具或无人机，请先判断是否适合重跑。
+
+## 定时任务没有执行
+
+确认：
+
+- “系统定时任务已安装”；
+- 触发时间到达时用户处于登录状态；
+- Mac 没有关机；
+- App 没有被移动、删除或替换到不同路径；
+- `~/Library/Application Support/AutoMAA/Logs` 中是否有 Runner 日志；
+- 当时是否已有另一个 AutoMAA 流程持有进程锁。
+
+修改时间后需要点击“应用时间”。
+
+## 怎样提交有效的问题报告
+
+在 [GitHub Issues](https://github.com/Rememorio/AutoMAA/issues) 中说明：
+
+- AutoMAA 版本；
+- macOS 版本与芯片；
+- `maa version` 输出；
+- 客户端服务器类型；
+- 预期行为、实际行为和复现步骤；
+- 已去除敏感信息的相关日志。
+
+不要公开完整手机号、账号片段、密码、验证码、本机用户名或私人路径。
