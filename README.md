@@ -164,6 +164,8 @@ Tests/
 
 欢迎通过 [Issues](https://github.com/Rememorio/AutoMAA/issues) 报告能够复现的问题，也欢迎提交 Pull Request。涉及账号切换、客户端生命周期或任务参数的改动，请同时补充相应测试，并优先保证“不会跑错账号、不会连接错客户端”。
 
+提交代码前请阅读 [`CONTRIBUTING.md`](./CONTRIBUTING.md)。仓库的架构、安全边界和编码代理约束记录在 [`AGENTS.md`](./AGENTS.md)，维护者发版流程记录在 [`RELEASE.md`](./RELEASE.md)。外部贡献者通过分支和 Pull Request 合入 `main`；维护者可按项目需要直接维护 `main`。
+
 ## 致谢
 
 AutoMAA 建立在 MAA 社区长期积累的成果之上，谨向以下项目及其所有贡献者致谢：
