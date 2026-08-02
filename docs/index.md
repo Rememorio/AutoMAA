@@ -5,6 +5,9 @@ hero:
   name: AutoMAA
   text: 把 MAA 日常，组织成可复用自动化方案
   tagline: 原生 macOS、多客户端、多账号；轻量收菜与完整日常独立配置、手动或定时运行。
+  image:
+    src: /automaa-hero-icon.webp
+    alt: AutoMAA 应用图标
   actions:
     - theme: brand
       text: 下载与安装

@@ -92,6 +92,57 @@ html {
   line-height: 1.75;
 }
 
+.VPHero.has-image .image-container {
+  isolation: isolate;
+}
+
+.VPHero.has-image .image-container::before,
+.VPHero.has-image .image-container::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 1;
+  border-radius: 50%;
+  content: "";
+  pointer-events: none;
+}
+
+.VPHero.has-image .image-container::before {
+  width: 250px;
+  height: 200px;
+  border: 1px solid color-mix(in srgb, var(--vp-c-brand-1) 30%, var(--vp-c-divider));
+  background:
+    radial-gradient(circle at 7% 52%, var(--vp-c-brand-2) 0 3px, transparent 4px),
+    radial-gradient(circle at 73% 1%, color-mix(in srgb, var(--vp-c-divider) 75%, var(--vp-c-text-2)) 0 2px, transparent 3px),
+    radial-gradient(circle at 94% 65%, #e88952 0 3px, transparent 4px);
+  transform: translate(-50%, -50%) rotate(-12deg);
+}
+
+.VPHero.has-image .image-container::after {
+  width: 215px;
+  height: 270px;
+  border: 1px solid color-mix(in srgb, #e88952 25%, var(--vp-c-divider));
+  transform: translate(-50%, -50%) rotate(20deg);
+}
+
+.VPHero.has-image .image-bg {
+  z-index: 0;
+  opacity: 0.9;
+}
+
+.VPHero.has-image .image-src {
+  z-index: 2;
+  filter:
+    drop-shadow(0 22px 22px rgba(22, 30, 29, 0.2))
+    drop-shadow(0 5px 8px rgba(229, 122, 65, 0.16));
+}
+
+.dark .VPHero.has-image .image-src {
+  filter:
+    drop-shadow(0 24px 26px rgba(0, 0, 0, 0.34))
+    drop-shadow(0 6px 10px rgba(238, 138, 82, 0.2));
+}
+
 .VPButton {
   border-radius: 11px !important;
   transition: transform 160ms ease, background-color 160ms ease, border-color 160ms ease !important;
@@ -315,6 +366,39 @@ html {
     max-width: 280px;
     font-size: 30px !important;
     line-height: 1.25 !important;
+  }
+}
+
+@media (min-width: 640px) {
+  .VPHero.has-image .image-container::before {
+    width: 330px;
+    height: 250px;
+  }
+
+  .VPHero.has-image .image-container::after {
+    width: 270px;
+    height: 350px;
+  }
+}
+
+@media (min-width: 960px) {
+  .VPHero.has-image .image-container {
+    transform: translate(8px, -12px);
+  }
+
+  .VPHero.has-image .image-container::before {
+    width: 420px;
+    height: 312px;
+  }
+
+  .VPHero.has-image .image-container::after {
+    width: 330px;
+    height: 430px;
+  }
+
+  .VPHero.has-image .image-src {
+    max-width: 348px;
+    max-height: 348px;
   }
 }
 
