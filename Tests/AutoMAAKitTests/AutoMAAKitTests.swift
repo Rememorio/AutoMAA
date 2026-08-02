@@ -788,6 +788,72 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertFalse(WorkflowReport(cancelled: true).isSuccess)
     }
 
+    func testWorkflowReportNoticeDoesNotTurnCompletedRunIntoFailure() {
+        let notice = WorkflowNotice(message: "公招发现 6★ 组合")
+
+        XCTAssertTrue(WorkflowReport(notices: [notice]).isSuccess)
+    }
+
+    func testActivityWarningCountDoesNotCountCompletionSummaryTwice() {
+        let runID = UUID()
+        let session = ActivitySession(
+            id: "run-\(runID.uuidString)",
+            runID: runID,
+            entries: [
+                LogEntry(level: .warning, message: "公招发现 6★ 组合", runID: runID, phase: .runningTask),
+                LogEntry(level: .warning, message: "流程完成，有 1 项需要确认", runID: runID, phase: .completed),
+            ]
+        )
+
+        XCTAssertEqual(session.warningCount, 1)
+    }
+
+    func testMAAOutputNoticeParserElevatesHighRarityRecruitResultWithoutDuplicateTip() {
+        let output = """
+        [2026-08-03 09:00:00.000][INFO] RecruitingTips: 高级资深干员
+        [2026-08-03 09:00:00.100][INFO] RecruitResult: ★★★★★★ 高级资深干员, 远程位, 输出, 生存, 狙击干员
+        """
+
+        XCTAssertEqual(
+            MAAOutputNoticeParser.recruitmentNotices(in: output, preservedTags: ["支援机械"]),
+            [.highRarity(
+                level: 6,
+                tags: ["高级资深干员", "远程位", "输出", "生存", "狙击干员"]
+            )]
+        )
+    }
+
+    func testMAAOutputNoticeParserElevatesConfiguredPreservedTag() {
+        let output = "\u{001B}[32mRecruitResult: ★ 支援机械, 近战位, 费用回复, 治疗, 先锋干员\u{001B}[0m"
+
+        XCTAssertEqual(
+            MAAOutputNoticeParser.recruitmentNotices(in: output, preservedTags: [" 支援机械 "]),
+            [.preservedTag(
+                tag: "支援机械",
+                tags: ["支援机械", "近战位", "费用回复", "治疗", "先锋干员"]
+            )]
+        )
+    }
+
+    func testMAAOutputNoticeParserKeepsSpecialTipWhenNoResultIsAvailable() {
+        let output = "[INFO] RecruitingTips: 资深干员"
+
+        XCTAssertEqual(
+            MAAOutputNoticeParser.recruitmentNotices(in: output, preservedTags: []),
+            [.specialTag("资深干员")]
+        )
+    }
+
+    func testMAAOutputNoticeParserIgnoresOrdinaryAndMalformedRecruitLines() {
+        let output = """
+        RecruitResult: ★★★ 近战位, 输出, 生存, 防护, 重装干员
+        RecruitResult: ★★★★★★★ invalid
+        RecruitingTips:
+        """
+
+        XCTAssertTrue(MAAOutputNoticeParser.recruitmentNotices(in: output, preservedTags: []).isEmpty)
+    }
+
     @MainActor
     func testCompletedPlanIsNotLaunchedAgainToday() async throws {
         let root = temporaryRoot()

@@ -14,6 +14,11 @@ struct MonotonicProgress {
     }
 }
 
+private struct TaskRunOutcome {
+    let succeeded: Bool
+    let notices: [WorkflowNotice]
+}
+
 @MainActor
 public final class WorkflowRunner {
     public typealias EventSink = @MainActor @Sendable (RunnerEvent) -> Void
@@ -275,9 +280,9 @@ public final class WorkflowRunner {
                         continue
                     }
 
-                    let success: Bool
+                    let outcome: TaskRunOutcome
                     do {
-                        success = try await runTask(
+                        outcome = try await runTask(
                             task,
                             plan: plan,
                             account: account,
@@ -325,8 +330,9 @@ public final class WorkflowRunner {
                         if intervention.scope == .client { break accountLoop }
                         break taskLoop
                     }
+                    report.notices.append(contentsOf: outcome.notices)
                     visitedSteps += 1
-                    if success {
+                    if outcome.succeeded {
                         report.succeededSteps += 1
                         state.completedSteps.insert(key)
                         state.updatedAt = Date()
@@ -411,7 +417,10 @@ public final class WorkflowRunner {
         } else if !report.attentionMessages.isEmpty {
             emit(.completed, attentionSummary(report.attentionMessages), 1, .warning)
         } else if report.failedSteps > 0 {
-            emit(.completed, "流程完成，\(report.failedSteps) 个步骤失败", 1, .warning)
+            let suffix = report.notices.isEmpty ? "" : "，另有 \(report.notices.count) 项结果需要确认"
+            emit(.completed, "流程完成，\(report.failedSteps) 个步骤失败\(suffix)", 1, .warning)
+        } else if !report.notices.isEmpty {
+            emit(.completed, noticeSummary(plan: plan, notices: report.notices), 1, .warning)
         } else {
             emit(.completed, "「\(plan.displayName)」已全部完成", 1, .success)
         }
@@ -561,7 +570,7 @@ public final class WorkflowRunner {
         account: AccountConfiguration,
         client: ClientConfiguration,
         configuration: AppConfiguration
-    ) async throws -> Bool {
+    ) async throws -> TaskRunOutcome {
         guard !Task.isCancelled else { throw RuntimeError.cancelled }
         let writer = MAAConfigurationWriter(directories: directories)
         let taskName = writer.taskName(
@@ -571,6 +580,7 @@ public final class WorkflowRunner {
             task: task
         )
         let attempts = max(1, plan.policy.maxRetries + 1)
+        var notices: [WorkflowNotice] = []
         for attempt in 1...attempts {
             guard !Task.isCancelled else { throw RuntimeError.cancelled }
             emit(
@@ -588,7 +598,28 @@ public final class WorkflowRunner {
                 timeout: task == .fight ? 7_200 : 900
             )
             guard !result.cancelled, !Task.isCancelled else { throw RuntimeError.cancelled }
-            if result.exitCode == 0, !result.timedOut { return true }
+            let outputNotices = workflowNotices(
+                for: task,
+                output: result.combinedOutput,
+                plan: plan,
+                account: account
+            )
+            for notice in outputNotices where !notices.contains(notice) {
+                notices.append(notice)
+                emit(
+                    .runningTask,
+                    notice.message,
+                    0,
+                    .warning,
+                    client: client,
+                    account: account,
+                    task: task,
+                    details: notice.details
+                )
+            }
+            if result.exitCode == 0, !result.timedOut {
+                return TaskRunOutcome(succeeded: true, notices: notices)
+            }
             emit(
                 .runningTask,
                 "\(accountText(account))：\(task.title)未完成\(attempt < attempts ? "，准备重试" : "")",
@@ -611,7 +642,35 @@ public final class WorkflowRunner {
                 )
             }
         }
-        return false
+        return TaskRunOutcome(succeeded: false, notices: notices)
+    }
+
+    private func workflowNotices(
+        for task: TaskKind,
+        output: String,
+        plan: AutomationPlan,
+        account: AccountConfiguration
+    ) -> [WorkflowNotice] {
+        guard task == .recruit else { return [] }
+        let preservedTags = plan.recruit.usesCustomSettings ? plan.recruit.preserveTags : ["支援机械"]
+        return MAAOutputNoticeParser.recruitmentNotices(in: output, preservedTags: preservedTags).map { notice in
+            switch notice {
+            case let .highRarity(level, tags):
+                return WorkflowNotice(
+                    message: "\(accountText(account))：公招发现 \(level)★ 组合，请前往游戏确认",
+                    details: "识别标签：\(tags.joined(separator: "、"))"
+                )
+            case let .preservedTag(tag, tags):
+                return WorkflowNotice(
+                    message: "\(accountText(account))：公招命中保留标签「\(tag)」，已跳过该槽位",
+                    details: "识别标签：\(tags.joined(separator: "、"))"
+                )
+            case let .specialTag(tag):
+                return WorkflowNotice(
+                    message: "\(accountText(account))：公招发现特殊标签「\(tag)」，请前往游戏确认"
+                )
+            }
+        }
     }
 
     private func close(_ client: ClientConfiguration, configuration: AppConfiguration) async throws {
@@ -761,6 +820,10 @@ public final class WorkflowRunner {
         let concise = String(firstLine.prefix(240))
         let suffix = messages.count > 1 ? "（另有 \(messages.count - 1) 项，请查看活动记录）" : ""
         return "流程完成，需要手动处理：\(concise)\(suffix)"
+    }
+
+    private func noticeSummary(plan: AutomationPlan, notices: [WorkflowNotice]) -> String {
+        "「\(plan.displayName)」已完成，公招有 \(notices.count) 项结果需要确认"
     }
 
     private func commonArguments(_ client: ClientConfiguration) -> [String] {

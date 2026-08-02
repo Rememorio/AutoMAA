@@ -636,7 +636,7 @@ public struct ActivitySession: Identifiable, Sendable, Equatable {
     public var planID: UUID? { entries.lazy.compactMap(\.planID).first }
     public var finalPhase: RunnerPhase? { entries.lazy.reversed().compactMap(\.phase).first }
     public var finalLevel: LogLevel { entries.last?.level ?? .info }
-    public var warningCount: Int { entries.count { $0.level == .warning } }
+    public var warningCount: Int { entries.count { $0.level == .warning && $0.phase != .completed } }
     public var errorCount: Int { entries.count { $0.level == .error } }
     public var completedTaskCount: Int { entries.count { $0.level == .success && $0.task != nil } }
 
@@ -687,11 +687,22 @@ public struct RunnerEvent: Sendable {
     }
 }
 
+public struct WorkflowNotice: Equatable, Sendable {
+    public var message: String
+    public var details: String?
+
+    public init(message: String, details: String? = nil) {
+        self.message = message
+        self.details = details
+    }
+}
+
 public struct WorkflowReport: Sendable {
     public var succeededSteps: Int
     public var failedSteps: Int
     public var skippedSteps: Int
     public var attentionMessages: [String]
+    public var notices: [WorkflowNotice]
     public var cancelled: Bool
     public var fatalError: String?
 
@@ -700,6 +711,7 @@ public struct WorkflowReport: Sendable {
         failedSteps: Int = 0,
         skippedSteps: Int = 0,
         attentionMessages: [String] = [],
+        notices: [WorkflowNotice] = [],
         cancelled: Bool = false,
         fatalError: String? = nil
     ) {
@@ -707,6 +719,7 @@ public struct WorkflowReport: Sendable {
         self.failedSteps = failedSteps
         self.skippedSteps = skippedSteps
         self.attentionMessages = attentionMessages
+        self.notices = notices
         self.cancelled = cancelled
         self.fatalError = fatalError
     }

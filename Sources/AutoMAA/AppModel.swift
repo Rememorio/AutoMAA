@@ -361,12 +361,17 @@ final class AppModel: ObservableObject {
             } else if report.cancelled {
                 self.showBanner("流程已安全停止，当前客户端和连接已清理")
             } else if report.isSuccess {
-                let name = snapshot.plans.first(where: { $0.id == planID })?.displayName ?? "方案"
-                self.showBanner("「\(name)」已全部完成")
+                if report.notices.isEmpty {
+                    let name = snapshot.plans.first(where: { $0.id == planID })?.displayName ?? "方案"
+                    self.showBanner("「\(name)」已全部完成")
+                } else {
+                    self.showBanner(self.noticeBanner(report.notices))
+                }
             } else if !report.attentionMessages.isEmpty {
                 self.showBanner(self.attentionBanner(report.attentionMessages))
             } else {
-                self.showBanner("流程完成，但有 \(report.failedSteps) 个步骤失败")
+                let suffix = report.notices.isEmpty ? "" : "，另有 \(report.notices.count) 项公招结果需要确认"
+                self.showBanner("流程完成，但有 \(report.failedSteps) 个步骤失败\(suffix)")
             }
         }
     }
@@ -843,6 +848,12 @@ final class AppModel: ObservableObject {
         let firstLine = first.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? first
         let suffix = messages.count > 1 ? "（另有 \(messages.count - 1) 项，请查看活动记录）" : ""
         return "需要手动处理：\(String(firstLine.prefix(180)))\(suffix)"
+    }
+
+    private func noticeBanner(_ notices: [WorkflowNotice]) -> String {
+        guard let first = notices.first else { return "流程已完成" }
+        let suffix = notices.count > 1 ? "（另有 \(notices.count - 1) 项，请查看活动记录）" : ""
+        return "\(String(first.message.prefix(180)))\(suffix)"
     }
 
     private func uniqueProfileName() -> String {
