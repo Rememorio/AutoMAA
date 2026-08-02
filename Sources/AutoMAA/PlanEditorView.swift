@@ -120,10 +120,12 @@ struct PlanEditorView: View {
                 HStack {
                     DatePicker("每天", selection: scheduleTime, displayedComponents: .hourAndMinute)
                         .datePickerStyle(.field)
+                        .disabled(model.isRunning)
                     Spacer()
                     if plan.schedule.enabled {
-                        Button("应用时间") { model.applyPlanSchedule(plan.id) }
-                            .disabled(model.isRunning)
+                        Label("修改后自动应用", systemImage: "arrow.triangle.2.circlepath")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
                 HStack(spacing: 8) {
@@ -132,7 +134,7 @@ struct PlanEditorView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                Text("由 macOS LaunchAgent 在用户登录期间唤起。手动运行与定时运行使用完全相同的方案。")
+                Text("由 macOS LaunchAgent 在用户登录期间唤起；手动运行与定时运行使用完全相同的方案。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -376,13 +378,46 @@ struct PlanEditorView: View {
     }
 
     private var scheduleStatusColor: Color {
-        if !scheduleInstalled { return .secondary }
-        return model.isPlanScheduleCurrent(plan) ? .green : .orange
+        if scheduleConflict != nil { return .orange }
+        if plan.schedule.enabled {
+            if model.isPlanScheduleCurrent(plan) { return .green }
+            return model.isSynchronizingSchedules ? .maaAccent : .red
+        }
+        return scheduleInstalled ? .red : .secondary
     }
 
     private var scheduleStatusText: String {
-        if !scheduleInstalled { return "系统定时任务未安装" }
-        return model.isPlanScheduleCurrent(plan) ? "系统定时任务已安装" : "时间已更改，请点击应用时间"
+        if let scheduleConflict {
+            return "与「\(scheduleConflict.displayName)」的运行时间相同，请错开设置"
+        }
+        if plan.schedule.enabled {
+            if model.isPlanScheduleCurrent(plan) {
+                return "已启用 · 每天 \(formattedScheduleTime)"
+            }
+            if model.isSynchronizingSchedules { return "正在同步系统定时任务…" }
+            return scheduleInstalled
+                ? "系统定时任务与当前设置不一致，请重新切换开关"
+                : "系统定时任务未安装，请重新切换开关"
+        }
+        if scheduleInstalled {
+            return model.isSynchronizingSchedules
+                ? "正在移除系统定时任务…"
+                : "系统定时任务仍存在，请重新开启后关闭"
+        }
+        return "关闭时不会自动运行"
+    }
+
+    private var scheduleConflict: AutomationPlan? {
+        guard plan.schedule.enabled else { return nil }
+        return model.scheduleConflict(
+            planID: plan.id,
+            hour: plan.schedule.hour,
+            minute: plan.schedule.minute
+        )
+    }
+
+    private var formattedScheduleTime: String {
+        String(format: "%02d:%02d", plan.schedule.hour, plan.schedule.minute)
     }
 
     private var scheduleTime: Binding<Date> {
@@ -390,8 +425,11 @@ struct PlanEditorView: View {
             Calendar.current.date(bySettingHour: plan.schedule.hour, minute: plan.schedule.minute, second: 0, of: Date()) ?? Date()
         } set: { date in
             let components = Calendar.current.dateComponents([.hour, .minute], from: date)
-            plan.schedule.hour = components.hour ?? 0
-            plan.schedule.minute = components.minute ?? 0
+            model.setPlanScheduleTime(
+                plan.id,
+                hour: components.hour ?? 0,
+                minute: components.minute ?? 0
+            )
         }
     }
 

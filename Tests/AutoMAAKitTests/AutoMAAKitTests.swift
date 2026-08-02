@@ -11,9 +11,13 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertEqual(config.plans[0].name, "轻量日常")
         XCTAssertEqual(config.plans[0].infrast.mode, .collectOnly)
         XCTAssertFalse(config.plans[0].mall.enabled)
+        XCTAssertEqual(config.plans[0].schedule.hour, 9)
+        XCTAssertEqual(config.plans[0].schedule.minute, 0)
         XCTAssertEqual(config.plans[1].name, "完整日常")
         XCTAssertEqual(config.plans[1].infrast.mode, .fullShift)
         XCTAssertTrue(config.plans[1].mall.enabled)
+        XCTAssertEqual(config.plans[1].schedule.hour, 21)
+        XCTAssertEqual(config.plans[1].schedule.minute, 0)
     }
 
     func testDisplayNamesTrimWhitespaceAndProvideContextualFallbacks() {
@@ -381,8 +385,40 @@ final class AutoMAAKitTests: XCTestCase {
 
         XCTAssertEqual(manager.installedPlanIDs, Set([plan.id]))
         XCTAssertTrue(manager.isCurrent(runnerURL: runnerURL, plan: plan))
+        XCTAssertFalse(manager.isCurrent(runnerURL: root.appending(path: "MovedRunner"), plan: plan))
         plan.schedule.minute = 16
         XCTAssertFalse(manager.isCurrent(runnerURL: runnerURL, plan: plan))
+    }
+
+    func testLaunchAgentSynchronizationRejectsDuplicateTimesBeforeWritingFiles() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let launchAgents = root.appending(path: "LaunchAgents", directoryHint: .isDirectory)
+        var light = AutomationPlan.lightRoutine
+        light.schedule.enabled = true
+        var complete = AutomationPlan.completeRoutine
+        complete.schedule = light.schedule
+        let manager = LaunchAgentManager(
+            directories: AppDirectories(root: root),
+            launchAgentsDirectory: launchAgents,
+            systemIntegrationEnabled: false
+        )
+
+        do {
+            try await manager.synchronize(
+                runnerURL: root.appending(path: "AutoMAARunner"),
+                plans: [light, complete]
+            )
+            XCTFail("Expected duplicate schedule rejection")
+        } catch let error as LaunchAgentError {
+            XCTAssertEqual(error, .duplicateSchedule(
+                first: "轻量日常",
+                second: "完整日常",
+                hour: 9,
+                minute: 0
+            ))
+        }
+        XCTAssertTrue(manager.installedPlanIDs.isEmpty)
     }
 
     func testLaunchAgentSynchronizationCanRunWithoutSystemIntegration() async throws {

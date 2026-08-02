@@ -517,7 +517,7 @@ public struct AutomationPlan: Codable, Identifiable, Equatable, Sendable {
             name: "轻量日常",
             infrast: .init(),
             mall: mall,
-            schedule: .init(hour: 8, minute: 0)
+            schedule: .init(hour: 9, minute: 0)
         )
     }
 
@@ -525,7 +525,7 @@ public struct AutomationPlan: Codable, Identifiable, Equatable, Sendable {
         AutomationPlan(
             name: "完整日常",
             infrast: .fullShift,
-            schedule: .init(hour: 20, minute: 0)
+            schedule: .init(hour: 21, minute: 0)
         )
     }
 }

@@ -22,10 +22,22 @@ struct SidebarView: View {
                             Text(plan.displayName)
                                 .lineLimit(1)
                             Spacer()
-                            if plan.schedule.enabled {
+                            if model.isPlanScheduleCurrent(plan) {
                                 Text(String(format: "%02d:%02d", plan.schedule.hour, plan.schedule.minute))
                                     .font(.caption2.monospacedDigit())
                                     .foregroundStyle(.secondary)
+                            } else if plan.schedule.enabled {
+                                Image(systemName: model.isSynchronizingSchedules
+                                      ? "arrow.triangle.2.circlepath"
+                                      : "clock.badge.exclamationmark")
+                                    .font(.caption2)
+                                    .foregroundStyle(model.isSynchronizingSchedules ? Color.maaAccent : Color.orange)
+                                    .help(model.isSynchronizingSchedules ? "正在同步定时任务" : "定时任务尚未同步")
+                            } else if model.installedPlanIDs.contains(plan.id) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .font(.caption2)
+                                    .foregroundStyle(.red)
+                                    .help("关闭失败，系统定时任务仍存在")
                             }
                         }
                         .tag(SidebarSelection.plan(plan.id))

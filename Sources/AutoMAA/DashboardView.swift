@@ -22,13 +22,16 @@ struct DashboardView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(greeting)
-                .font(.system(size: 28, weight: .bold, design: .rounded))
-            Text(model.isRunning ? model.statusMessage : "账号只配置一次，用不同方案安排轻量收菜、完整换班或任何自定义日常。")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            let greeting = DashboardGreeting.resolve(at: context.date)
+            VStack(alignment: .leading, spacing: 8) {
+                Text(greeting.title)
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                Text(model.isRunning ? model.statusMessage : greeting.detail)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
         }
     }
 
@@ -37,7 +40,7 @@ struct DashboardView: View {
             metric(title: "自动化方案", value: "\(model.configuration.plans.count)", symbol: "clock.arrow.circlepath", color: .purple)
             metric(title: "客户端", value: "\(model.activeClientCount)", symbol: "macwindow", color: .maaBlue)
             metric(title: "启用账号", value: "\(model.activeAccountCount)", symbol: "person.2.fill", color: .maaAccent)
-            metric(title: "定时方案", value: "\(model.configuration.plans.filter(\.schedule.enabled).count)", symbol: "clock.badge.checkmark.fill", color: .orange)
+            metric(title: "定时方案", value: "\(model.activeScheduleCount)", symbol: "clock.badge.checkmark.fill", color: .orange)
         }
     }
 
@@ -98,10 +101,18 @@ struct DashboardView: View {
                     Text(plan.displayName)
                         .font(.headline)
                     Spacer()
-                    if plan.schedule.enabled {
+                    if model.isPlanScheduleCurrent(plan) {
                         Label(String(format: "%02d:%02d", plan.schedule.hour, plan.schedule.minute), systemImage: "clock.fill")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
+                    } else if plan.schedule.enabled {
+                        Label(model.isSynchronizingSchedules ? "同步中" : "待同步", systemImage: "clock.badge.exclamationmark")
+                            .font(.caption)
+                            .foregroundStyle(model.isSynchronizingSchedules ? Color.maaAccent : Color.orange)
+                    } else if model.installedPlanIDs.contains(plan.id) {
+                        Label("需修复", systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.red)
                     } else {
                         Text("仅手动")
                             .font(.caption)
@@ -311,10 +322,4 @@ struct DashboardView: View {
         return session.finalPhase?.statusTint ?? session.finalLevel.color
     }
 
-    private var greeting: String {
-        let hour = Calendar.current.component(.hour, from: Date())
-        if hour < 11 { return "早上好，博士" }
-        if hour < 18 { return "下午好，博士" }
-        return "晚上好，博士"
-    }
 }

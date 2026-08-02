@@ -1,6 +1,20 @@
 import Darwin
 import Foundation
 
+public enum LaunchAgentError: LocalizedError, Equatable {
+    case invalidSchedule(plan: String)
+    case duplicateSchedule(first: String, second: String, hour: Int, minute: Int)
+
+    public var errorDescription: String? {
+        switch self {
+        case let .invalidSchedule(plan):
+            "「\(plan)」的定时时间无效"
+        case let .duplicateSchedule(first, second, hour, minute):
+            "「\(first)」与「\(second)」都设置为每天 \(String(format: "%02d:%02d", hour, minute))，请错开运行时间"
+        }
+    }
+}
+
 public struct LaunchAgentManager: Sendable {
     public static let labelPrefix = "com.rememorio.AutoMAA.runner"
 
@@ -30,6 +44,7 @@ public struct LaunchAgentManager: Sendable {
     }
 
     public func install(runnerURL: URL, plan: AutomationPlan) async throws {
+        try validate(plan)
         try directories.prepare()
         try FileManager.default.createDirectory(at: launchAgentsDirectory, withIntermediateDirectories: true)
         let plistURL = plistURL(planID: plan.id)
@@ -41,12 +56,8 @@ public struct LaunchAgentManager: Sendable {
         try data.write(to: plistURL, options: .atomic)
         guard systemIntegrationEnabled else { return }
 
-        let domain = "gui/\(getuid())"
-        _ = try? await commandRunner.run(
-            executable: "/bin/launchctl",
-            arguments: ["bootout", domain, plistURL.path],
-            timeout: 10
-        )
+        let domain = launchdDomain
+        try await bootOut(plistURL: plistURL)
         let result = try await commandRunner.run(
             executable: "/bin/launchctl",
             arguments: ["bootstrap", domain, plistURL.path],
@@ -79,13 +90,21 @@ public struct LaunchAgentManager: Sendable {
     }
 
     public func synchronize(runnerURL: URL, plans: [AutomationPlan]) async throws {
+        try validate(plans)
         let desired = Set(plans.filter(\.schedule.enabled).map(\.id))
         for planID in installedPlanIDs.subtracting(desired) {
             try await uninstall(planID: planID)
         }
         try await uninstallLegacyAgentIfNeeded()
         for plan in plans where plan.schedule.enabled {
-            if !isCurrent(runnerURL: runnerURL, plan: plan) {
+            let current = isCurrent(runnerURL: runnerURL, plan: plan)
+            let loaded: Bool
+            if systemIntegrationEnabled {
+                loaded = await isLoaded(label: label(planID: plan.id))
+            } else {
+                loaded = true
+            }
+            if !current || !loaded {
                 try await install(runnerURL: runnerURL, plan: plan)
             }
         }
@@ -118,11 +137,34 @@ public struct LaunchAgentManager: Sendable {
         return (hour, minute)
     }
 
-    func isCurrent(runnerURL: URL, plan: AutomationPlan) -> Bool {
+    public func isCurrent(runnerURL: URL, plan: AutomationPlan) -> Bool {
         guard let data = try? Data(contentsOf: plistURL(planID: plan.id)),
               let installed = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
         else { return false }
         return NSDictionary(dictionary: installed).isEqual(to: propertyList(runnerURL: runnerURL, plan: plan))
+    }
+
+    private func validate(_ plans: [AutomationPlan]) throws {
+        var occupied: [Int: AutomationPlan] = [:]
+        for plan in plans where plan.schedule.enabled {
+            try validate(plan)
+            let key = plan.schedule.hour * 60 + plan.schedule.minute
+            if let existing = occupied[key] {
+                throw LaunchAgentError.duplicateSchedule(
+                    first: existing.displayName,
+                    second: plan.displayName,
+                    hour: plan.schedule.hour,
+                    minute: plan.schedule.minute
+                )
+            }
+            occupied[key] = plan
+        }
+    }
+
+    private func validate(_ plan: AutomationPlan) throws {
+        guard (0...23).contains(plan.schedule.hour), (0...59).contains(plan.schedule.minute) else {
+            throw LaunchAgentError.invalidSchedule(plan: plan.displayName)
+        }
     }
 
     private func uninstallLegacyAgentIfNeeded() async throws {
@@ -133,15 +175,39 @@ public struct LaunchAgentManager: Sendable {
 
     private func uninstall(plistURL: URL) async throws {
         if systemIntegrationEnabled {
-            let domain = "gui/\(getuid())"
-            _ = try? await commandRunner.run(
-                executable: "/bin/launchctl",
-                arguments: ["bootout", domain, plistURL.path],
-                timeout: 10
-            )
+            try await bootOut(plistURL: plistURL)
         }
         if FileManager.default.fileExists(atPath: plistURL.path) {
             try FileManager.default.removeItem(at: plistURL)
         }
+    }
+
+    private var launchdDomain: String {
+        "gui/\(getuid())"
+    }
+
+    private func bootOut(plistURL: URL) async throws {
+        let label = plistURL.deletingPathExtension().lastPathComponent
+        do {
+            let result = try await commandRunner.run(
+                executable: "/bin/launchctl",
+                arguments: ["bootout", launchdDomain, plistURL.path],
+                timeout: 10
+            )
+            if result.exitCode != 0, await isLoaded(label: label) {
+                throw CommandRunnerError.launchFailed(result.combinedOutput)
+            }
+        } catch {
+            if await isLoaded(label: label) { throw error }
+        }
+    }
+
+    private func isLoaded(label: String) async -> Bool {
+        guard let result = try? await commandRunner.run(
+            executable: "/bin/launchctl",
+            arguments: ["print", "\(launchdDomain)/\(label)"],
+            timeout: 10
+        ) else { return false }
+        return result.exitCode == 0
     }
 }

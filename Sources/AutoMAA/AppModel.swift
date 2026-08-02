@@ -55,6 +55,12 @@ enum ApplicationUpdateState {
     }
 }
 
+private enum ScheduleSynchronizationFeedback {
+    case enabled(UUID)
+    case disabled(UUID)
+    case timeChanged(UUID, hour: Int, minute: Int)
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var configuration: AppConfiguration
@@ -68,6 +74,7 @@ final class AppModel: ObservableObject {
     @Published var bannerMessage: String?
     @Published var installedPlanIDs: Set<UUID>
     @Published var lastReport: WorkflowReport?
+    @Published private(set) var isSynchronizingSchedules = false
     @Published private(set) var maaVersionSummary = "尚未检测"
     @Published private(set) var isCheckingMAAEnvironment = false
     @Published private(set) var applicationUpdateState: ApplicationUpdateState = .idle
@@ -83,9 +90,12 @@ final class AppModel: ObservableObject {
     private let softwareUpdateService: SoftwareUpdateService
     private let softwareUpdateResultStore: SoftwareUpdateResultStore
     private let commandRunner = CommandRunner()
+    private let configuredRunnerExecutableURL: URL?
     private var saveTask: Task<Void, Never>?
     private var workflowTask: Task<Void, Never>?
     private var applicationUpdateTask: Task<Void, Never>?
+    private var scheduleSynchronizationTask: Task<Void, Never>?
+    private var scheduleSynchronizationRevision = 0
     private var didPrepareApplication = false
     private let startupNotice: String?
     private let checksForUpdatesAutomatically: Bool
@@ -94,10 +104,12 @@ final class AppModel: ObservableObject {
         directories: AppDirectories = .init(),
         launchAgentsDirectory: URL? = nil,
         managesSystemLaunchAgents: Bool = true,
-        checksForUpdatesAutomatically: Bool = true
+        checksForUpdatesAutomatically: Bool = true,
+        runnerExecutableURL: URL? = nil
     ) {
         self.directories = directories
         self.checksForUpdatesAutomatically = checksForUpdatesAutomatically
+        configuredRunnerExecutableURL = runnerExecutableURL
         configurationStore = ConfigurationStore(directories: directories)
         historyStore = HistoryStore(directories: directories)
         executionStateStore = ExecutionStateStore(directories: directories)
@@ -146,6 +158,7 @@ final class AppModel: ObservableObject {
         saveTask?.cancel()
         workflowTask?.cancel()
         applicationUpdateTask?.cancel()
+        scheduleSynchronizationTask?.cancel()
     }
 
     var activeClientCount: Int {
@@ -160,6 +173,10 @@ final class AppModel: ObservableObject {
 
     var activeTaskCount: Int {
         configuration.plans.reduce(0) { $0 + $1.enabledTasks.count }
+    }
+
+    var activeScheduleCount: Int {
+        configuration.plans.count(where: isPlanScheduleCurrent)
     }
 
     var readinessIssues: [ReadinessIssue] {
@@ -200,8 +217,16 @@ final class AppModel: ObservableObject {
     }
 
     func isPlanScheduleCurrent(_ plan: AutomationPlan) -> Bool {
-        guard let installed = launchAgentManager.installedTime(planID: plan.id) else { return false }
-        return installed.hour == plan.schedule.hour && installed.minute == plan.schedule.minute
+        plan.schedule.enabled && launchAgentManager.isCurrent(runnerURL: runnerExecutableURL, plan: plan)
+    }
+
+    func scheduleConflict(planID: UUID, hour: Int, minute: Int) -> AutomationPlan? {
+        configuration.plans.first {
+            $0.id != planID
+                && $0.schedule.enabled
+                && $0.schedule.hour == hour
+                && $0.schedule.minute == minute
+        }
     }
 
     func clientBinding(_ id: UUID) -> Binding<ClientConfiguration>? {
@@ -414,17 +439,7 @@ final class AppModel: ObservableObject {
     }
 
     private func synchronizeSchedules() {
-        guard FileManager.default.isExecutableFile(atPath: runnerExecutableURL.path) else { return }
-        let plans = configuration.plans
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                try await self.launchAgentManager.synchronize(runnerURL: self.runnerExecutableURL, plans: plans)
-                self.installedPlanIDs = self.launchAgentManager.installedPlanIDs
-            } catch {
-                self.showBanner("定时任务同步失败：\(error.localizedDescription)")
-            }
-        }
+        enqueueScheduleSynchronization(debounce: false)
     }
 
     func checkForApplicationUpdate(showResult: Bool = true) {
@@ -584,11 +599,7 @@ final class AppModel: ObservableObject {
         configuration.plans.removeAll { $0.id == planID }
         selection = .overview
         guard saveNow(showConfirmation: false) else { return }
-        Task { [weak self] in
-            guard let self else { return }
-            try? await self.launchAgentManager.uninstall(planID: planID)
-            self.installedPlanIDs = self.launchAgentManager.installedPlanIDs
-        }
+        enqueueScheduleSynchronization(debounce: false)
     }
 
     func movePlan(_ planID: UUID, by offset: Int) {
@@ -656,40 +667,102 @@ final class AppModel: ObservableObject {
             return
         }
         guard let index = configuration.plans.firstIndex(where: { $0.id == planID }) else { return }
+        let schedule = configuration.plans[index].schedule
+        if enabled, let conflict = scheduleConflict(
+            planID: planID,
+            hour: schedule.hour,
+            minute: schedule.minute
+        ) {
+            showBanner("暂时无法启用：与「\(conflict.displayName)」的定时时间相同")
+            return
+        }
         configuration.plans[index].schedule.enabled = enabled
-        let plan = configuration.plans[index]
         guard saveNow(showConfirmation: false) else { return }
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                if enabled {
-                    try await self.launchAgentManager.install(
-                        runnerURL: self.runnerExecutableURL,
-                        plan: plan
-                    )
-                } else {
-                    try await self.launchAgentManager.uninstall(planID: planID)
-                }
-                self.installedPlanIDs = self.launchAgentManager.installedPlanIDs
-                let name = self.configuration.plans.first(where: { $0.id == planID })?.displayName ?? "方案"
-                self.showBanner(enabled ? "「\(name)」定时运行已启用" : "「\(name)」定时运行已关闭")
-            } catch {
-                if let index = self.configuration.plans.firstIndex(where: { $0.id == planID }) {
-                    self.configuration.plans[index].schedule.enabled = false
-                }
-                self.installedPlanIDs = self.launchAgentManager.installedPlanIDs
-                self.saveNow(showConfirmation: false)
-                self.showBanner("定时任务配置失败：\(error.localizedDescription)")
-            }
+        enqueueScheduleSynchronization(
+            feedback: enabled ? .enabled(planID) : .disabled(planID),
+            debounce: false
+        )
+    }
+
+    func setPlanScheduleTime(_ planID: UUID, hour: Int, minute: Int) {
+        guard (0...23).contains(hour), (0...59).contains(minute),
+              let index = configuration.plans.firstIndex(where: { $0.id == planID })
+        else { return }
+        if configuration.plans[index].schedule.enabled,
+           let conflict = scheduleConflict(planID: planID, hour: hour, minute: minute) {
+            showBanner("无法使用该时间：与「\(conflict.displayName)」的定时运行冲突")
+            return
+        }
+        guard configuration.plans[index].schedule.hour != hour
+                || configuration.plans[index].schedule.minute != minute
+        else { return }
+        configuration.plans[index].schedule.hour = hour
+        configuration.plans[index].schedule.minute = minute
+        guard saveNow(showConfirmation: false) else { return }
+        if configuration.plans[index].schedule.enabled || installedPlanIDs.contains(planID) {
+            enqueueScheduleSynchronization(
+                feedback: .timeChanged(planID, hour: hour, minute: minute),
+                debounce: true
+            )
         }
     }
 
-    func applyPlanSchedule(_ planID: UUID) {
-        guard configuration.plans.first(where: { $0.id == planID })?.schedule.enabled == true else { return }
-        setPlanScheduleEnabled(planID, true)
+    private func enqueueScheduleSynchronization(
+        feedback: ScheduleSynchronizationFeedback? = nil,
+        debounce: Bool
+    ) {
+        guard FileManager.default.isExecutableFile(atPath: runnerExecutableURL.path) else {
+            if feedback != nil { showBanner("找不到 AutoMAARunner，无法配置定时运行") }
+            return
+        }
+        scheduleSynchronizationRevision += 1
+        let revision = scheduleSynchronizationRevision
+        let predecessor = scheduleSynchronizationTask
+        isSynchronizingSchedules = true
+        scheduleSynchronizationTask = Task { [weak self] in
+            if debounce {
+                try? await Task.sleep(for: .milliseconds(350))
+            }
+            if let predecessor { await predecessor.value }
+            guard !Task.isCancelled, let self,
+                  revision == self.scheduleSynchronizationRevision
+            else { return }
+            do {
+                try await self.launchAgentManager.synchronize(
+                    runnerURL: self.runnerExecutableURL,
+                    plans: self.configuration.plans
+                )
+                guard revision == self.scheduleSynchronizationRevision else { return }
+                self.installedPlanIDs = self.launchAgentManager.installedPlanIDs
+                if let feedback { self.showScheduleSynchronizationFeedback(feedback) }
+            } catch {
+                guard revision == self.scheduleSynchronizationRevision else { return }
+                self.installedPlanIDs = self.launchAgentManager.installedPlanIDs
+                self.showBanner("定时任务同步失败：\(error.localizedDescription)")
+            }
+            guard revision == self.scheduleSynchronizationRevision else { return }
+            self.isSynchronizingSchedules = false
+            self.scheduleSynchronizationTask = nil
+        }
+    }
+
+    private func showScheduleSynchronizationFeedback(_ feedback: ScheduleSynchronizationFeedback) {
+        let planID = switch feedback {
+        case let .enabled(id), let .disabled(id), let .timeChanged(id, _, _): id
+        }
+        let name = configuration.plans.first(where: { $0.id == planID })?.displayName ?? "方案"
+        switch feedback {
+        case .enabled:
+            showBanner("「\(name)」定时运行已启用")
+        case .disabled:
+            showBanner("「\(name)」定时运行已关闭")
+        case let .timeChanged(_, hour, minute):
+            showBanner("「\(name)」已改为每天 \(String(format: "%02d:%02d", hour, minute)) 运行")
+        }
     }
 
     private var runnerExecutableURL: URL {
+        if let configuredRunnerExecutableURL { return configuredRunnerExecutableURL }
         let bundled = Bundle.main.bundleURL.appending(path: "Contents/MacOS/AutoMAARunner")
         if FileManager.default.isExecutableFile(atPath: bundled.path) { return bundled }
         if let executable = Bundle.main.executableURL {
