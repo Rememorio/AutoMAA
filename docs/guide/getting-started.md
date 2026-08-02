@@ -28,8 +28,8 @@
 客户端会严格按照侧边栏顺序串行运行。不要给两个客户端配置相同的 Profile。
 
 <figure class="guide-screenshot">
-  <img class="theme-shot theme-shot-light" src="../assets/screenshots/client-settings-light.webp" width="2320" height="1520" loading="lazy" decoding="async" alt="AutoMAA 客户端配置界面，包含连接信息、独立 Profile、账号队列和生命周期保护" />
-  <img class="theme-shot theme-shot-dark" src="../assets/screenshots/client-settings-dark.webp" width="2320" height="1520" loading="lazy" decoding="async" alt="AutoMAA 客户端配置界面，包含连接信息、独立 Profile、账号队列和生命周期保护" />
+  <img class="theme-shot theme-shot-light" src="../assets/screenshots/client-settings-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="AutoMAA 客户端配置界面，包含连接信息、独立 Profile、账号队列和生命周期保护" />
+  <img class="theme-shot theme-shot-dark" src="../assets/screenshots/client-settings-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="AutoMAA 客户端配置界面，包含连接信息、独立 Profile、账号队列和生命周期保护" />
   <figcaption>多个账号可以共享同一个客户端；连接、Profile 和关闭边界由客户端统一维护。</figcaption>
 </figure>
 

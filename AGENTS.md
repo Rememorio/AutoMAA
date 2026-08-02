@@ -133,6 +133,7 @@ swift test --parallel
 
 - 用户行为、系统要求或配置语义变化时同步更新 `README.md`。
 - 完整用户指南位于 `docs/`；新增页面时同步更新 VitePress 导航，并运行 `npm run docs:build` 检查站内链接。
+- 产品截图必须直接保留原生 Retina 背板像素，禁止把 1× 截图放大伪装成 2×；使用无损 WebP 和透明窗口圆角，提交前运行 `npm run docs:check-screenshots`，并在 100% 缩放下确认正文与控件文字清晰。
 - 面向贡献者的流程更新在 `CONTRIBUTING.md`，发版流程更新在 `RELEASE.md`。
 - 用户可见的重要变化记录在 `CHANGELOG.md`；README、文档、更新日志与 Release Notes 必须只表达产品事实、用户影响和已知限制，不能依赖维护协作背景才能成立。
 - 保留并准确表达 MAA、MaaCore、`maa-cli`、MaaMacGui 和当前连接环境的 credit。
