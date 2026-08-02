@@ -25,6 +25,82 @@ struct Panel<Content: View>: View {
     }
 }
 
+struct EditableDisplayNameField: View {
+    let label: String
+    let placeholder: String
+    @Binding var text: String
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        HStack(spacing: 9) {
+            TextField(placeholder, text: $text)
+                .textFieldStyle(.plain)
+                .font(.title2.weight(.bold))
+                .focused($isFocused)
+                .onSubmit { finishEditing() }
+                .accessibilityLabel(label)
+
+            Button {
+                if isFocused {
+                    finishEditing()
+                } else {
+                    isFocused = true
+                }
+            } label: {
+                Image(systemName: fieldSymbol)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(fieldTint)
+                    .frame(width: 20, height: 20)
+            }
+            .buttonStyle(.plain)
+            .help(isFocused ? "完成编辑" : "修改\(label)")
+        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 7)
+        .frame(maxWidth: 380)
+        .background(
+            (isFocused ? Color.maaAccent.opacity(0.08) : Color.primary.opacity(0.04)),
+            in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .stroke(
+                    fieldTint.opacity(isFocused || isEmpty ? 0.75 : 0.28),
+                    lineWidth: isFocused ? 1.5 : 1
+                )
+        }
+        .animation(.easeOut(duration: 0.14), value: isFocused)
+        .onChange(of: isFocused) { _, focused in
+            if !focused { normalizeName() }
+        }
+    }
+
+    private var isEmpty: Bool {
+        text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var fieldSymbol: String {
+        if isFocused { return "checkmark" }
+        return isEmpty ? "exclamationmark" : "pencil"
+    }
+
+    private var fieldTint: Color {
+        isEmpty && !isFocused ? .red : .maaAccent
+    }
+
+    private func finishEditing() {
+        normalizeName()
+        isFocused = false
+    }
+
+    private func normalizeName() {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty, trimmed != text {
+            text = trimmed
+        }
+    }
+}
+
 struct StatusDot: View {
     let color: Color
 

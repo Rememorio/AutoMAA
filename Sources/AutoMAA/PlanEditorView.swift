@@ -32,8 +32,8 @@ struct PlanEditorView: View {
             .frame(maxWidth: 1_060)
             .frame(maxWidth: .infinity)
         }
-        .navigationTitle(plan.name)
-        .confirmationDialog("删除「\(plan.name)」？", isPresented: $confirmDelete) {
+        .navigationTitle(plan.displayName)
+        .confirmationDialog("删除「\(plan.displayName)」？", isPresented: $confirmDelete) {
             Button("删除方案", role: .destructive) { model.deletePlan(plan.id) }
         } message: {
             Text("账号和客户端不会被删除，对应的系统定时任务会一并移除。")
@@ -51,9 +51,7 @@ struct PlanEditorView: View {
             }
             .frame(width: 54, height: 54)
             VStack(alignment: .leading, spacing: 5) {
-                TextField("方案名称", text: $plan.name)
-                    .textFieldStyle(.plain)
-                    .font(.title2.weight(.bold))
+                EditableDisplayNameField(label: "方案名称", placeholder: "例如：工作日早晨", text: $plan.name)
                 Text("\(targetAccounts.count) 个账号 · \(plan.enabledTasks.count) 个步骤")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -86,12 +84,12 @@ struct PlanEditorView: View {
                     } else {
                         ForEach(model.configuration.clients) { client in
                             VStack(alignment: .leading, spacing: 8) {
-                                Text(client.name)
+                                Text(client.displayName)
                                     .font(.caption.weight(.semibold))
                                     .foregroundStyle(.secondary)
                                 HStack(spacing: 16) {
                                     ForEach(client.accounts) { account in
-                                        Toggle(account.name, isOn: accountBinding(account.id))
+                                        Toggle(account.displayName, isOn: accountBinding(account.id))
                                             .toggleStyle(.checkbox)
                                             .disabled(!client.enabled || !account.enabled)
                                     }

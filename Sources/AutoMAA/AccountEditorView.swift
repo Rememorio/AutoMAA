@@ -19,8 +19,8 @@ struct AccountEditorView: View {
             .frame(maxWidth: 820)
             .frame(maxWidth: .infinity)
         }
-        .navigationTitle(account.name)
-        .confirmationDialog("删除 \(account.name)？", isPresented: $confirmDelete) {
+        .navigationTitle(account.displayName)
+        .confirmationDialog("删除 \(account.displayName)？", isPresented: $confirmDelete) {
             Button("删除账号", role: .destructive) {
                 model.deleteAccount(clientID: client.id, accountID: account.id)
             }
@@ -39,10 +39,8 @@ struct AccountEditorView: View {
             }
             .frame(width: 54, height: 54)
             VStack(alignment: .leading, spacing: 5) {
-                TextField("账号名称", text: $account.name)
-                    .textFieldStyle(.plain)
-                    .font(.title2.weight(.bold))
-                Text(client.name)
+                EditableDisplayNameField(label: "账号名称", placeholder: "例如：主账号", text: $account.name)
+                Text("所属客户端 · \(client.displayName)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -114,7 +112,7 @@ struct AccountEditorView: View {
                             Image(systemName: "clock.arrow.circlepath")
                                 .foregroundStyle(Color.maaAccent)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(plan.name)
+                                Text(plan.displayName)
                                     .font(.callout.weight(.medium))
                                 Text(plan.includesAllEnabledAccounts ? "自动包含所有已启用账号" : "仅包含选中的账号")
                                     .font(.caption2)

@@ -20,8 +20,8 @@ struct ClientEditorView: View {
             .frame(maxWidth: 900)
             .frame(maxWidth: .infinity)
         }
-        .navigationTitle(client.name)
-        .confirmationDialog("删除 \(client.name)？", isPresented: $confirmDeleteClient) {
+        .navigationTitle(client.displayName)
+        .confirmationDialog("删除 \(client.displayName)？", isPresented: $confirmDeleteClient) {
             Button("删除客户端", role: .destructive) {
                 model.deleteClient(client.id)
             }
@@ -41,10 +41,8 @@ struct ClientEditorView: View {
             }
             .frame(width: 58, height: 58)
             VStack(alignment: .leading, spacing: 5) {
-                TextField("客户端名称", text: $client.name)
-                    .textFieldStyle(.plain)
-                    .font(.title2.weight(.bold))
-                Text("MAA · \(client.kind.maaClientType)")
+                EditableDisplayNameField(label: "客户端名称", placeholder: "例如：晚间官服", text: $client.name)
+                Text("\(client.kind.title) · MAA \(client.kind.maaClientType)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -143,7 +141,7 @@ struct ClientEditorView: View {
                                 .frame(width: 22, height: 22)
                                 .background(Color.primary.opacity(0.05), in: Circle())
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(account.name)
+                                Text(account.displayName)
                                     .font(.callout.weight(.semibold))
                                 Text(account.enabled ? "由自动化方案安排" : "已停用")
                                     .font(.caption)

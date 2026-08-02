@@ -19,7 +19,7 @@ struct SidebarView: View {
                         HStack(spacing: 9) {
                             Image(systemName: "clock.arrow.circlepath")
                                 .foregroundStyle(Color.maaAccent)
-                            Text(plan.name)
+                            Text(plan.displayName)
                                 .lineLimit(1)
                             Spacer()
                             if plan.schedule.enabled {
@@ -62,7 +62,7 @@ struct SidebarView: View {
                             ForEach(client.accounts) { account in
                                 HStack(spacing: 9) {
                                     StatusDot(color: account.enabled ? .maaAccent : .secondary.opacity(0.5))
-                                    Text(account.name)
+                                    Text(account.displayName)
                                         .lineLimit(1)
                                 }
                                 .tag(SidebarSelection.account(client.id, account.id))
@@ -71,7 +71,14 @@ struct SidebarView: View {
                             HStack(spacing: 9) {
                                 Image(systemName: client.kind.symbol)
                                     .foregroundStyle(client.enabled ? Color.maaAccent : Color.secondary)
-                                Text(client.kind.title)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(client.displayName)
+                                        .lineLimit(1)
+                                    Text(client.kind.title)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
                                 Spacer()
                                 Text("\(client.accounts.filter(\.enabled).count)")
                                     .font(.caption2.monospacedDigit())
@@ -194,9 +201,9 @@ struct SidebarView: View {
                     model.selection = .plan(plan.id)
                 } label: {
                     if model.selectedPlanID == plan.id {
-                        Label(plan.name, systemImage: "checkmark")
+                        Label(plan.displayName, systemImage: "checkmark")
                     } else {
-                        Text(plan.name)
+                        Text(plan.displayName)
                     }
                 }
             }
@@ -204,7 +211,7 @@ struct SidebarView: View {
             HStack(spacing: 8) {
                 Image(systemName: "clock.arrow.circlepath")
                     .foregroundStyle(Color.maaAccent)
-                Text(model.selectedPlan?.name ?? "选择方案")
+                Text(model.selectedPlan?.displayName ?? "选择方案")
                     .font(.caption.weight(.semibold))
                     .lineLimit(1)
                 Spacer()

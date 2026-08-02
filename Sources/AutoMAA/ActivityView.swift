@@ -312,7 +312,7 @@ struct ActivityView: View {
     private func sessionTitle(_ session: ActivitySession) -> String {
         if let planID = session.planID,
            let plan = model.configuration.plans.first(where: { $0.id == planID }) {
-            return plan.name
+            return plan.displayName
         }
         if session.runID == nil { return "较早的运行记录" }
         return "MAA 维护"
@@ -322,10 +322,10 @@ struct ActivityView: View {
         var components: [String] = []
         if let clientID = entry.clientID,
            let client = model.configuration.clients.first(where: { $0.id == clientID }) {
-            components.append(client.name)
+            components.append(client.displayName)
             if let accountID = entry.accountID,
                let account = client.accounts.first(where: { $0.id == accountID }) {
-                components.append(account.name)
+                components.append(account.displayName)
             }
         }
         if let task = entry.task { components.append(task.title) }

@@ -16,6 +16,72 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertTrue(config.plans[1].mall.enabled)
     }
 
+    func testDisplayNamesTrimWhitespaceAndProvideContextualFallbacks() {
+        let account = AccountConfiguration(name: "  主账号  ")
+        let unnamedAccount = AccountConfiguration(name: " \n ")
+        let client = ClientConfiguration(
+            name: "  工作日官服  ",
+            kind: .official,
+            appPath: "",
+            profileName: "test",
+            accounts: []
+        )
+        let unnamedClient = ClientConfiguration(
+            name: "",
+            kind: .yoStarJP,
+            appPath: "",
+            profileName: "test-jp",
+            accounts: []
+        )
+        let plan = AutomationPlan(name: "  睡前日常  ")
+        let unnamedPlan = AutomationPlan(name: "")
+
+        XCTAssertEqual(account.displayName, "主账号")
+        XCTAssertEqual(unnamedAccount.displayName, "未命名账号")
+        XCTAssertEqual(client.displayName, "工作日官服")
+        XCTAssertEqual(unnamedClient.displayName, "日服")
+        XCTAssertEqual(plan.displayName, "睡前日常")
+        XCTAssertEqual(unnamedPlan.displayName, "未命名方案")
+    }
+
+    func testRenamingKeepsStableIdentifiersAndPlanMembership() throws {
+        let accountID = UUID()
+        let clientID = UUID()
+        let planID = UUID()
+        let account = AccountConfiguration(id: accountID, name: "旧账号")
+        let client = ClientConfiguration(
+            id: clientID,
+            name: "旧客户端",
+            kind: .official,
+            appPath: "",
+            profileName: "test",
+            accounts: [account]
+        )
+        var plan = AutomationPlan(
+            id: planID,
+            name: "旧方案",
+            includesAllEnabledAccounts: false,
+            accountIDs: [accountID]
+        )
+        var configuration = AppConfiguration(clients: [client], plans: [plan])
+
+        configuration.clients[0].name = "工作日官服"
+        configuration.clients[0].accounts[0].name = "主账号"
+        configuration.plans[0].name = "睡前日常"
+        plan = configuration.plans[0]
+
+        let data = try JSONEncoder().encode(configuration)
+        let decoded = try JSONDecoder().decode(AppConfiguration.self, from: data)
+
+        XCTAssertEqual(decoded.clients[0].id, clientID)
+        XCTAssertEqual(decoded.clients[0].accounts[0].id, accountID)
+        XCTAssertEqual(decoded.plans[0].id, planID)
+        XCTAssertTrue(decoded.plans[0].includes(decoded.clients[0].accounts[0]))
+        XCTAssertEqual(decoded.clients[0].displayName, "工作日官服")
+        XCTAssertEqual(decoded.clients[0].accounts[0].displayName, "主账号")
+        XCTAssertEqual(decoded.plans[0].displayName, "睡前日常")
+    }
+
     func testSupportedClientMappings() {
         XCTAssertEqual(ClientKind.allCases.map(\.title), [
             "简中服 · 官服", "简中服 · Bilibili", "繁中服", "国际服", "日服", "韩服",

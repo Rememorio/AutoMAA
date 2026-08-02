@@ -27,6 +27,8 @@
 
 客户端会严格按照侧边栏顺序串行运行。不要给两个客户端配置相同的 Profile。
 
+客户端、账号和自动化方案顶部都有带铅笔图标的名称框，可随时改成容易辨认的显示名称。名称只用于界面、活动记录和提示；重命名不会改变对象的内部标识，也不会让既有方案、当日断点或定时任务失效。MAA Profile 是单独的技术标识，仍需保持非空且互不重复。
+
 <figure class="guide-screenshot">
   <img class="theme-shot theme-shot-light" src="../assets/screenshots/client-settings-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="AutoMAA 客户端配置界面，包含连接信息、独立 Profile、账号队列和生命周期保护" />
   <img class="theme-shot theme-shot-dark" src="../assets/screenshots/client-settings-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="AutoMAA 客户端配置界面，包含连接信息、独立 Profile、账号队列和生命周期保护" />
@@ -36,6 +38,8 @@
 ## 3. 添加账号
 
 一个客户端可以包含任意数量账号。账号只描述“是谁、如何切换”，不再重复保存任务参数。
+
+添加账号后会直接进入账号编辑页，可以先把“新账号”改成“主账号”“小号”等仅自己看得懂的名称；不要把密码或完整手机号写进名称。
 
 - 只有一个启用账号时，“账号匹配片段”可以留空。
 - 官服、Bilibili 与繁中服有多个启用账号时，每个账号都必须填写非空、互不重复的匹配片段。
@@ -51,6 +55,8 @@
 
 - **轻量日常**：理智作战、公开招募、基建仅收菜、领取奖励；
 - **完整日常**：理智作战、公开招募、基建完整换班、信用与购物、领取奖励。
+
+方案名称同样可以直接编辑，例如改成“工作日早晨”“周末清理”或“睡前日常”。
 
 每个方案都可以：
 

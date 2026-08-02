@@ -95,7 +95,7 @@ struct DashboardView: View {
                 HStack {
                     Image(systemName: "clock.arrow.circlepath")
                         .foregroundStyle(Color.maaAccent)
-                    Text(plan.name)
+                    Text(plan.displayName)
                         .font(.headline)
                     Spacer()
                     if plan.schedule.enabled {
@@ -139,7 +139,7 @@ struct DashboardView: View {
                 if let plan = model.selectedPlan {
                     let clients = model.configuration.clients.filter { $0.enabled && $0.accounts.contains(where: plan.includes) }
                     if clients.isEmpty {
-                        Text("「\(plan.name)」还没有可执行账号")
+                        Text("「\(plan.displayName)」还没有可执行账号")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     } else {
@@ -174,7 +174,7 @@ struct DashboardView: View {
                     .font(.title2)
                     .foregroundStyle(Color.maaAccent)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(client.name)
+                    Text(client.displayName)
                         .font(.subheadline.weight(.semibold))
                     Text(client.address)
                         .font(.caption2.monospaced())
@@ -183,7 +183,7 @@ struct DashboardView: View {
             }
             HStack(spacing: 6) {
                 ForEach(client.accounts.filter(plan.includes)) { account in
-                    Text(account.name)
+                    Text(account.displayName)
                         .font(.caption.weight(.medium))
                         .padding(.horizontal, 9)
                         .padding(.vertical, 5)
@@ -199,7 +199,10 @@ struct DashboardView: View {
             sectionTitle("运行检查", detail: "以下检查针对侧边栏当前选中的方案。")
             Panel {
                 if model.readinessIssues.isEmpty {
-                    Label("「\(model.selectedPlan?.name ?? "方案")」已准备就绪", systemImage: "checkmark.seal.fill")
+                    Label(
+                        "「\(model.selectedPlan?.displayName ?? "方案")」已准备就绪",
+                        systemImage: "checkmark.seal.fill"
+                    )
                         .font(.headline)
                         .foregroundStyle(.green)
                 } else {
@@ -286,7 +289,7 @@ struct DashboardView: View {
     private func activityTitle(_ session: ActivitySession) -> String {
         if let planID = session.planID,
            let plan = model.configuration.plans.first(where: { $0.id == planID }) {
-            return plan.name
+            return plan.displayName
         }
         return session.runID == nil ? "较早的运行记录" : "MAA 维护"
     }

@@ -382,6 +382,10 @@ public struct AccountConfiguration: Codable, Identifiable, Equatable, Sendable {
         self.accountSelector = accountSelector
         self.enabled = enabled
     }
+
+    public var displayName: String {
+        ConfigurationDisplayName.resolve(name, fallback: "未命名账号")
+    }
 }
 
 public struct ClientConfiguration: Codable, Identifiable, Equatable, Sendable {
@@ -415,6 +419,10 @@ public struct ClientConfiguration: Codable, Identifiable, Equatable, Sendable {
         self.bundleIdentifier = bundleIdentifier ?? kind.defaultBundleIdentifier
         self.enabled = enabled
         self.accounts = accounts
+    }
+
+    public var displayName: String {
+        ConfigurationDisplayName.resolve(name, fallback: kind.title)
     }
 }
 
@@ -480,6 +488,10 @@ public struct AutomationPlan: Codable, Identifiable, Equatable, Sendable {
         self.policy = policy
     }
 
+    public var displayName: String {
+        ConfigurationDisplayName.resolve(name, fallback: "未命名方案")
+    }
+
     public func isEnabled(_ task: TaskKind) -> Bool {
         switch task {
         case .fight: fight.enabled
@@ -515,6 +527,13 @@ public struct AutomationPlan: Codable, Identifiable, Equatable, Sendable {
             infrast: .fullShift,
             schedule: .init(hour: 20, minute: 0)
         )
+    }
+}
+
+public enum ConfigurationDisplayName {
+    public static func resolve(_ value: String, fallback: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? fallback : trimmed
     }
 }
 

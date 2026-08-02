@@ -54,14 +54,14 @@ public final class WorkflowRunner {
             return report
         }
         guard !plan.enabledTasks.isEmpty else {
-            report.fatalError = "「\(plan.name)」没有启用任何步骤"
+            report.fatalError = "「\(plan.displayName)」没有启用任何步骤"
             emit(.failed, report.fatalError ?? "方案没有任务", 0, .error)
             return report
         }
         guard configuration.clients.contains(where: { client in
             client.enabled && client.accounts.contains(where: plan.includes)
         }) else {
-            report.fatalError = "「\(plan.name)」没有可执行的账号"
+            report.fatalError = "「\(plan.displayName)」没有可执行的账号"
             emit(.failed, report.fatalError ?? "方案没有账号", 0, .error)
             return report
         }
@@ -92,7 +92,7 @@ public final class WorkflowRunner {
         })
         var visitedSteps = 0
 
-        emit(.preparing, "正在准备「\(plan.name)」", 0, .info)
+        emit(.preparing, "正在准备「\(plan.displayName)」", 0, .info)
         if plan.policy.hotUpdateBeforeRun {
             emit(.updating, "正在热更新 MAA 资源", 0, .info)
             let result = await runCommand(
@@ -123,7 +123,7 @@ public final class WorkflowRunner {
             let clientStepCount = client.accounts.filter(plan.includes).count * plan.enabledTasks.count
             let visitedAtClientStart = visitedSteps
             if clientStepCount == 0 {
-                emit(.runningTask, "\(client.name) 没有待执行任务，未启动客户端", Double(visitedSteps) / Double(totalSteps), .info, client: client)
+                emit(.runningTask, "\(client.displayName) 没有待执行任务，未启动客户端", Double(visitedSteps) / Double(totalSteps), .info, client: client)
                 continue
             }
             let completedClientSteps = resumeToday
@@ -134,7 +134,7 @@ public final class WorkflowRunner {
                 visitedSteps += clientStepCount
                 emit(
                     .runningTask,
-                    "\(client.name) 今日任务已全部完成，未启动客户端",
+                    "\(client.displayName) 今日任务已全部完成，未启动客户端",
                     Double(visitedSteps) / Double(totalSteps),
                     .info,
                     client: client
@@ -200,7 +200,7 @@ public final class WorkflowRunner {
                     visitedSteps += enabledTasks.count
                     emit(
                         .runningTask,
-                        "\(account.name) 今日任务已全部完成，未切换账号",
+                        "\(account.displayName) 今日任务已全部完成，未切换账号",
                         Double(visitedSteps) / Double(totalSteps),
                         .info,
                         client: client,
@@ -250,7 +250,7 @@ public final class WorkflowRunner {
                         visitedSteps += 1
                         emit(
                             .runningTask,
-                            "\(account.name) · \(task.title) 今日已完成，跳过",
+                            "\(account.displayName) · \(task.title) 今日已完成，跳过",
                             Double(visitedSteps) / Double(totalSteps),
                             .info,
                             client: client,
@@ -284,7 +284,7 @@ public final class WorkflowRunner {
                         visitedSteps += 1
                         emit(
                             .runningTask,
-                            "\(account.name) · \(task.title) 失败",
+                            "\(account.displayName) · \(task.title) 失败",
                             Double(visitedSteps) / Double(totalSteps),
                             .error,
                             client: client,
@@ -318,7 +318,7 @@ public final class WorkflowRunner {
                         try? stateStore.save(state)
                         emit(
                             .runningTask,
-                            "\(account.name) · \(task.title) 完成",
+                            "\(account.displayName) · \(task.title) 完成",
                             Double(visitedSteps) / Double(totalSteps),
                             .success,
                             client: client,
@@ -329,7 +329,7 @@ public final class WorkflowRunner {
                         report.failedSteps += 1
                         emit(
                             .runningTask,
-                            "\(account.name) · \(task.title) 失败",
+                            "\(account.displayName) · \(task.title) 失败",
                             Double(visitedSteps) / Double(totalSteps),
                             .error,
                             client: client,
@@ -370,7 +370,7 @@ public final class WorkflowRunner {
                                 break taskLoop
                             }
                         } else {
-                            report.fatalError = "\(account.name) · \(task.title) 失败，已按设置停止后续步骤"
+                            report.fatalError = "\(account.displayName) · \(task.title) 失败，已按设置停止后续步骤"
                             stopAfterClosingClient = true
                             break accountLoop
                         }
@@ -398,7 +398,7 @@ public final class WorkflowRunner {
         } else if report.failedSteps > 0 {
             emit(.completed, "流程完成，\(report.failedSteps) 个步骤失败", 1, .warning)
         } else {
-            emit(.completed, "「\(plan.name)」已全部完成", 1, .success)
+            emit(.completed, "「\(plan.displayName)」已全部完成", 1, .success)
         }
         return report
     }
@@ -449,10 +449,10 @@ public final class WorkflowRunner {
 
     private func launch(_ client: ClientConfiguration) async throws {
         guard !Task.isCancelled else { throw RuntimeError.cancelled }
-        emit(.launching, "正在启动 \(client.name)", 0, .info, client: client)
+        emit(.launching, "正在启动 \(client.displayName)", 0, .info, client: client)
         _ = try PortAddress(client.address)
         guard !client.bundleIdentifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw RuntimeError.bundleIdentifierMissing(client.name)
+            throw RuntimeError.bundleIdentifierMissing(client.displayName)
         }
         guard FileManager.default.fileExists(atPath: client.appPath) else {
             throw RuntimeError.appNotFound(client.appPath)
@@ -461,7 +461,7 @@ public final class WorkflowRunner {
             guard gameController.isRunning(client) else {
                 throw RuntimeError.portOccupied(client.address)
             }
-            emit(.launching, "\(client.name) 已在运行", 0, .info, client: client)
+            emit(.launching, "\(client.displayName) 已在运行", 0, .info, client: client)
             return
         }
         let result = await runCommand(executable: "/usr/bin/open", arguments: [client.appPath], timeout: 20)
@@ -474,7 +474,7 @@ public final class WorkflowRunner {
         guard connected else {
             throw RuntimeError.connectionTimeout(client.address)
         }
-        emit(.launching, "\(client.name) 已连接 MaaTools", 0, .success, client: client)
+        emit(.launching, "\(client.displayName) 已连接 MaaTools", 0, .success, client: client)
     }
 
     private func switchAccount(
@@ -488,10 +488,10 @@ public final class WorkflowRunner {
         if client.kind.supportsAccountSwitching,
            client.accounts.filter(\.enabled).count > 1,
            selector == nil {
-            throw RuntimeError.accountSelectorMissing(account.name)
+            throw RuntimeError.accountSelectorMissing(account.displayName)
         }
 
-        emit(.switchingAccount, "正在进入 \(account.name)", 0, .info, client: client, account: account)
+        emit(.switchingAccount, "正在进入 \(account.displayName)", 0, .info, client: client, account: account)
         var arguments = ["startup", client.kind.maaClientType]
         if let selector {
             arguments += ["--account-name", selector]
@@ -504,7 +504,7 @@ public final class WorkflowRunner {
             if attempt > 1 {
                 emit(
                     .switchingAccount,
-                    "重新尝试进入 \(account.name)（\(attempt - 1)/\(attempts - 1)）",
+                    "重新尝试进入 \(account.displayName)（\(attempt - 1)/\(attempts - 1)）",
                     0,
                     .info,
                     client: client,
@@ -514,12 +514,12 @@ public final class WorkflowRunner {
             lastResult = await runCommand(executable: configuration.cliPath, arguments: arguments, timeout: 120)
             guard !lastResult.cancelled, !Task.isCancelled else { throw RuntimeError.cancelled }
             if lastResult.exitCode == 0, !lastResult.timedOut {
-                emit(.switchingAccount, "已进入 \(account.name)", 0, .success, client: client, account: account)
+                emit(.switchingAccount, "已进入 \(account.displayName)", 0, .success, client: client, account: account)
                 return
             }
             emit(
                 .switchingAccount,
-                "进入 \(account.name) 未成功\(attempt < attempts ? "，稍后重试" : "")",
+                "进入 \(account.displayName) 未成功\(attempt < attempts ? "，稍后重试" : "")",
                 0,
                 .warning,
                 client: client,
@@ -535,7 +535,7 @@ public final class WorkflowRunner {
         )
         throw ManualInterventionError(
             scope: diagnosis.scope,
-            reason: "进入 \(account.name) 失败",
+            reason: "进入 \(account.displayName) 失败",
             guidance: diagnosis.guidance
         )
     }
@@ -560,7 +560,7 @@ public final class WorkflowRunner {
             guard !Task.isCancelled else { throw RuntimeError.cancelled }
             emit(
                 .runningTask,
-                "\(account.name) · \(task.title)\(attempt > 1 ? "（重试 \(attempt - 1)）" : "")",
+                "\(account.displayName) · \(task.title)\(attempt > 1 ? "（重试 \(attempt - 1)）" : "")",
                 0,
                 .info,
                 client: client,
@@ -576,7 +576,7 @@ public final class WorkflowRunner {
             if result.exitCode == 0, !result.timedOut { return true }
             emit(
                 .runningTask,
-                "\(account.name) · \(task.title) 未完成\(attempt < attempts ? "，准备重试" : "")",
+                "\(account.displayName) · \(task.title) 未完成\(attempt < attempts ? "，准备重试" : "")",
                 0,
                 .warning,
                 client: client,
@@ -600,7 +600,7 @@ public final class WorkflowRunner {
     }
 
     private func close(_ client: ClientConfiguration, configuration: AppConfiguration) async throws {
-        emit(.closing, "正在关闭 \(client.name)", 0, .info, client: client)
+        emit(.closing, "正在关闭 \(client.displayName)", 0, .info, client: client)
         let portIsOpen = await portProbe.isOpen(client.address, observeCancellation: false)
         if portIsOpen, !Task.isCancelled {
             _ = await runCommand(
@@ -610,17 +610,17 @@ public final class WorkflowRunner {
                 ignoreCancellation: true
             )
             if await waitUntilClosed(client, timeout: 20) {
-                emit(.closing, "\(client.name) 已关闭，端口已释放", 0, .success, client: client)
+                emit(.closing, "\(client.displayName) 已关闭，端口已释放", 0, .success, client: client)
                 return
             }
         } else if !portIsOpen, !gameController.isRunning(client) {
-            emit(.closing, "\(client.name) 已关闭，端口已释放", 0, .success, client: client)
+            emit(.closing, "\(client.displayName) 已关闭，端口已释放", 0, .success, client: client)
             return
         }
 
         _ = gameController.terminate(client, force: false)
         if await waitUntilClosed(client, timeout: 10) {
-            emit(.closing, "\(client.name) 已由系统正常关闭", 0, .success, client: client)
+            emit(.closing, "\(client.displayName) 已由系统正常关闭", 0, .success, client: client)
             return
         }
 
@@ -628,7 +628,7 @@ public final class WorkflowRunner {
         guard await waitUntilClosed(client, timeout: 8) else {
             throw RuntimeError.portReleaseTimeout(client.address)
         }
-        emit(.closing, "\(client.name) 已强制关闭，端口已释放", 0, .warning, client: client)
+        emit(.closing, "\(client.displayName) 已强制关闭，端口已释放", 0, .warning, client: client)
     }
 
     private func waitUntilClosed(_ client: ClientConfiguration, timeout: TimeInterval) async -> Bool {
@@ -676,7 +676,7 @@ public final class WorkflowRunner {
             return .init(
                 scope: .client,
                 reason: reason,
-                guidance: "请手动打开 \(client.name) 并确认已进入主界面；本次将跳过该客户端"
+                guidance: "请手动打开 \(client.displayName) 并确认已进入主界面；本次将跳过该客户端"
             )
         }
         switch runtimeError {
@@ -707,7 +707,7 @@ public final class WorkflowRunner {
         case .launchFailed:
             return .init(
                 scope: .client,
-                reason: "\(client.name) 启动失败",
+                reason: "\(client.displayName) 启动失败",
                 guidance: "请手动确认所选游戏应用能够正常启动；本次将跳过该客户端"
             )
         default:

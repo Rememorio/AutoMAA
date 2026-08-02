@@ -309,7 +309,7 @@ final class AppModel: ObservableObject {
             } else if report.cancelled {
                 self.showBanner("流程已安全停止，当前客户端和连接已清理")
             } else if report.isSuccess {
-                let name = snapshot.plans.first(where: { $0.id == planID })?.name ?? "方案"
+                let name = snapshot.plans.first(where: { $0.id == planID })?.displayName ?? "方案"
                 self.showBanner("「\(name)」已全部完成")
             } else if !report.attentionMessages.isEmpty {
                 self.showBanner(self.attentionBanner(report.attentionMessages))
@@ -553,8 +553,10 @@ final class AppModel: ObservableObject {
 
     func addAccount(to clientID: UUID) {
         guard let index = configuration.clients.firstIndex(where: { $0.id == clientID }) else { return }
-        let number = configuration.clients[index].accounts.count + 1
-        let name = number == 1 ? "新账号" : "新账号 \(number)"
+        let name = uniqueName(
+            "新账号",
+            among: configuration.clients[index].accounts.map(\.name)
+        )
         let account = AccountConfiguration(name: name)
         configuration.clients[index].accounts.append(account)
         selection = .account(clientID, account.id)
@@ -563,7 +565,7 @@ final class AppModel: ObservableObject {
     func addPlan(_ template: AutomationPlan = .lightRoutine) {
         var plan = template
         plan.id = UUID()
-        plan.name = uniquePlanName(template.name)
+        plan.name = uniqueName(template.displayName, among: configuration.plans.map(\.name))
         plan.schedule.enabled = false
         configuration.plans.append(plan)
         selection = .plan(plan.id)
@@ -572,7 +574,7 @@ final class AppModel: ObservableObject {
     func duplicatePlan(_ planID: UUID) {
         guard var plan = configuration.plans.first(where: { $0.id == planID }) else { return }
         plan.id = UUID()
-        plan.name = uniquePlanName("\(plan.name) 副本")
+        plan.name = uniqueName("\(plan.displayName) 副本", among: configuration.plans.map(\.name))
         plan.schedule.enabled = false
         configuration.plans.append(plan)
         selection = .plan(plan.id)
@@ -598,7 +600,7 @@ final class AppModel: ObservableObject {
 
     func addClient() {
         let client = ClientConfiguration(
-            name: "新客户端",
+            name: uniqueName("新客户端", among: configuration.clients.map(\.name)),
             kind: .official,
             appPath: "",
             profileName: uniqueProfileName(),
@@ -669,7 +671,7 @@ final class AppModel: ObservableObject {
                     try await self.launchAgentManager.uninstall(planID: planID)
                 }
                 self.installedPlanIDs = self.launchAgentManager.installedPlanIDs
-                let name = self.configuration.plans.first(where: { $0.id == planID })?.name ?? "方案"
+                let name = self.configuration.plans.first(where: { $0.id == planID })?.displayName ?? "方案"
                 self.showBanner(enabled ? "「\(name)」定时运行已启用" : "「\(name)」定时运行已关闭")
             } catch {
                 if let index = self.configuration.plans.firstIndex(where: { $0.id == planID }) {
@@ -740,12 +742,16 @@ final class AppModel: ObservableObject {
         return "client-\(index)"
     }
 
-    private func uniquePlanName(_ base: String) -> String {
-        let used = Set(configuration.plans.map { $0.name.trimmingCharacters(in: .whitespacesAndNewlines) })
-        if !used.contains(base) { return base }
+    private func uniqueName(_ base: String, among names: [String]) -> String {
+        let trimmedBase = base.trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidate = trimmedBase.isEmpty ? "未命名" : trimmedBase
+        let used = Set(names.map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        })
+        if !used.contains(candidate.lowercased()) { return candidate }
         var index = 2
-        while used.contains("\(base) \(index)") { index += 1 }
-        return "\(base) \(index)"
+        while used.contains("\(candidate) \(index)".lowercased()) { index += 1 }
+        return "\(candidate) \(index)"
     }
 
     private func showBanner(_ message: String) {

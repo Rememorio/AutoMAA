@@ -62,7 +62,7 @@ public enum ConfigurationValidator {
                 result.append(.init(
                     id: "\(prefix)-step-order",
                     severity: .error,
-                    message: "「\(displayName(plan.name, fallback: "未命名方案"))」的步骤顺序已损坏，请重新创建该方案"
+                    message: "「\(plan.displayName)」的步骤顺序已损坏，请重新创建该方案"
                 ))
             }
             if plan.fight.enabled, plan.fight.usesCustomSettings {
@@ -78,14 +78,14 @@ public enum ConfigurationValidator {
                 result.append(.init(
                     id: "\(prefix)-mall-formation",
                     severity: .error,
-                    message: "「\(displayName(plan.name, fallback: "未命名方案"))」的信用关编队必须在 0 到 4 之间"
+                    message: "「\(plan.displayName)」的信用关编队必须在 0 到 4 之间"
                 ))
             }
             if !(0...23).contains(plan.schedule.hour) || !(0...59).contains(plan.schedule.minute) {
                 result.append(.init(
                     id: "\(prefix)-schedule-time",
                     severity: .error,
-                    message: "「\(displayName(plan.name, fallback: "未命名方案"))」的定时时间无效"
+                    message: "「\(plan.displayName)」的定时时间无效"
                 ))
             }
         }
@@ -112,7 +112,7 @@ public enum ConfigurationValidator {
             result.append(.init(id: "plan-missing", severity: .error, message: "至少需要创建一个自动化方案"))
             return result
         }
-        let planName = displayName(plan.name, fallback: "未命名方案")
+        let planName = plan.displayName
         if plan.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             result.append(.init(id: "plan-name-empty", severity: .error, message: "方案名称不能为空"))
         }
@@ -140,7 +140,7 @@ public enum ConfigurationValidator {
             result.append(.init(id: "plan-accounts-empty", severity: .error, message: "「\(planName)」没有可执行的账号"))
         }
         for client in activeClients {
-            let clientName = displayName(client.name, fallback: client.kind.title)
+            let clientName = client.displayName
             if client.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 result.append(.init(
                     id: "client-\(client.id)-name-empty",
@@ -191,7 +191,7 @@ public enum ConfigurationValidator {
                     result.append(.init(
                         id: "account-\(account.id)-selector-unsupported",
                         severity: .error,
-                        message: "\(displayName(account.name, fallback: "未命名账号")) 属于\(client.kind.title)，账号片段必须留空"
+                        message: "\(account.displayName) 属于\(client.kind.title)，账号片段必须留空"
                     ))
                 }
             } else if enabledAccounts.count > 1 {
@@ -199,7 +199,7 @@ public enum ConfigurationValidator {
                     result.append(.init(
                         id: "account-\(account.id)-selector-empty",
                         severity: .warning,
-                        message: "\(displayName(account.name, fallback: "未命名账号")) 缺少唯一账号片段，运行时会跳过该账号"
+                        message: "\(account.displayName) 缺少唯一账号片段，运行时会跳过该账号"
                     ))
                 }
                 let selectors = enabledAccounts
@@ -223,7 +223,7 @@ public enum ConfigurationValidator {
         planName: String,
         into result: inout [ConfigurationProblem]
     ) {
-        let name = displayName(planName, fallback: "未命名方案")
+        let name = ConfigurationDisplayName.resolve(planName, fallback: "未命名方案")
         let checks: [(String, Bool, String)] = [
             ("medicine", value.medicine.map { $0 >= 0 } ?? true, "理智药数量不能为负数"),
             ("medicine-expire-days", value.medicineExpireDays.map { (1...365).contains($0) } ?? true, "临期理智药天数必须在 1 到 365 之间"),
@@ -242,7 +242,7 @@ public enum ConfigurationValidator {
         planName: String,
         into result: inout [ConfigurationProblem]
     ) {
-        let name = displayName(planName, fallback: "未命名方案")
+        let name = ConfigurationDisplayName.resolve(planName, fallback: "未命名方案")
         if !(0...12).contains(value.times) {
             result.append(.init(id: "\(prefix)-times", severity: .error, message: "「\(name)」的招募次数必须在 0 到 12 之间"))
         }
@@ -264,7 +264,7 @@ public enum ConfigurationValidator {
         planName: String,
         into result: inout [ConfigurationProblem]
     ) {
-        let name = displayName(planName, fallback: "未命名方案")
+        let name = ConfigurationDisplayName.resolve(planName, fallback: "未命名方案")
         if value.mode != .customSchedule,
            (value.facilities.isEmpty || Set(value.facilities).count != value.facilities.count) {
             result.append(.init(
@@ -292,8 +292,4 @@ public enum ConfigurationValidator {
         }
     }
 
-    private static func displayName(_ value: String, fallback: String) -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? fallback : trimmed
-    }
 }
