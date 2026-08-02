@@ -62,8 +62,8 @@ struct RootView: View {
             } else {
                 ContentUnavailableView("账号不存在", systemImage: "person.crop.circle.badge.exclamationmark")
             }
-        case .logs:
-            LogsView()
+        case .activity:
+            ActivityView()
         case .settings:
             SettingsView()
         case .about:

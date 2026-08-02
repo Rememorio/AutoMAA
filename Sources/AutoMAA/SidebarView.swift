@@ -96,8 +96,8 @@ struct SidebarView: View {
                 }
 
                 Section("工具") {
-                    Label("运行日志", systemImage: "list.bullet.rectangle")
-                        .tag(SidebarSelection.logs)
+                    Label("活动记录", systemImage: "clock.arrow.circlepath")
+                        .tag(SidebarSelection.activity)
                     Label("全局设置", systemImage: "gearshape.fill")
                         .tag(SidebarSelection.settings)
                     Label("关于 AutoMAA", systemImage: "info.circle.fill")

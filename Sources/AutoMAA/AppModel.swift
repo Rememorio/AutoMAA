@@ -9,7 +9,7 @@ enum SidebarSelection: Hashable {
     case plan(UUID)
     case client(UUID)
     case account(UUID, UUID)
-    case logs
+    case activity
     case settings
     case about
 }
@@ -59,7 +59,7 @@ enum ApplicationUpdateState {
 final class AppModel: ObservableObject {
     @Published var configuration: AppConfiguration
     @Published var selection: SidebarSelection = .overview
-    @Published var logs: [LogEntry]
+    @Published var activityEntries: [LogEntry]
     @Published var phase: RunnerPhase = .idle
     @Published var statusMessage = "等待开始"
     @Published var progress = 0.0
@@ -137,7 +137,7 @@ final class AppModel: ObservableObject {
                 startupNotice = "读取配置失败：\(error.localizedDescription)"
             }
         }
-        logs = historyStore.load()
+        activityEntries = historyStore.load()
         installedPlanIDs = launchAgentManager.installedPlanIDs
         try? MAAConfigurationWriter(directories: directories).prepare(configuration)
     }
@@ -400,45 +400,15 @@ final class AppModel: ObservableObject {
             return
         }
         isRunning = true
-        phase = .updating
-        statusMessage = "正在更新 MAA 核心与基础资源"
-        progress = 0
+        let runner = WorkflowRunner(directories: directories) { [weak self] event in
+            self?.consume(event)
+        }
         workflowTask = Task { [weak self] in
             guard let self else { return }
-            let result: CommandResult
-            do {
-                result = try await self.commandRunner.run(
-                    executable: self.configuration.cliPath,
-                    arguments: ["update", "stable", "--batch"],
-                    timeout: 900
-                )
-            } catch {
-                result = CommandResult(
-                    exitCode: -1,
-                    standardOutput: "",
-                    standardError: error.localizedDescription,
-                    timedOut: false,
-                    cancelled: Task.isCancelled
-                )
-            }
-            let output = SensitiveDataRedactor.redact(result.combinedOutput)
+            _ = await runner.updateCore(cliPath: self.configuration.cliPath)
             self.isRunning = false
             self.workflowTask = nil
-            self.progress = 1
-            if result.cancelled || Task.isCancelled {
-                self.phase = .cancelled
-                self.statusMessage = "MAA 更新已停止"
-                self.showBanner("MAA 更新已停止")
-            } else if result.exitCode == 0, !result.timedOut {
-                self.phase = .completed
-                self.statusMessage = "MAA 核心与基础资源已更新"
-                self.showBanner("MAA 核心与基础资源已更新")
-            } else {
-                self.phase = .failed
-                self.statusMessage = "MAA 更新失败"
-                let detail = output.trimmingCharacters(in: .whitespacesAndNewlines)
-                self.showBanner("MAA 更新失败：\(String((detail.isEmpty ? "退出码 \(result.exitCode)" : detail).suffix(240)))")
-            }
+            self.showBanner(self.statusMessage)
             self.refreshMAAStatus()
         }
     }
@@ -572,12 +542,12 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func clearLogs() {
+    func clearActivityHistory() {
         do {
             try historyStore.clear()
-            logs = []
+            activityEntries = []
         } catch {
-            showBanner("清理日志失败：\(error.localizedDescription)")
+            showBanner("清理活动记录失败：\(error.localizedDescription)")
         }
     }
 
@@ -748,8 +718,8 @@ final class AppModel: ObservableObject {
         phase = event.phase
         statusMessage = event.message
         progress = event.progress
-        logs.append(event.log)
-        if logs.count > 1_000 { logs.removeFirst(logs.count - 1_000) }
+        activityEntries.append(event.log)
+        if activityEntries.count > 1_000 { activityEntries.removeFirst(activityEntries.count - 1_000) }
     }
 
     private func normalizedProfile(_ value: String) -> String {
@@ -759,7 +729,7 @@ final class AppModel: ObservableObject {
     private func attentionBanner(_ messages: [String]) -> String {
         guard let first = messages.first else { return "流程完成" }
         let firstLine = first.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? first
-        let suffix = messages.count > 1 ? "（另有 \(messages.count - 1) 项，请查看日志）" : ""
+        let suffix = messages.count > 1 ? "（另有 \(messages.count - 1) 项，请查看活动记录）" : ""
         return "需要手动处理：\(String(firstLine.prefix(180)))\(suffix)"
     }
 

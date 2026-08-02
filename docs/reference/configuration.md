@@ -21,8 +21,8 @@ AutoMAA 的用户数据保存在：
 | --- | --- |
 | `config.json` | 客户端、账号、自动化方案和全局设置 |
 | `execution-state.json` | 按方案隔离的当天成功任务断点 |
-| `history.json` | 图形界面最近运行记录 |
-| `Logs/` | LaunchAgent 与 Runner 输出 |
+| `history.json` | 图形界面中的结构化活动记录；新记录按每次运行分组 |
+| `Logs/` | 最近 30 次 maa-cli 诊断输出，以及 LaunchAgent 与 Runner 输出 |
 | `Updates/` | 已下载并通过校验、等待安装的 AutoMAA 更新；下次准备更新时自动清理旧内容 |
 | `update-result.json` | 更新辅助程序写入的一次性结果；App 读取提示后删除 |
 | `MAA/profiles/` | AutoMAA 生成的独立 MAA Profile |

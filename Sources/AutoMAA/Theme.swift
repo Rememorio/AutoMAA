@@ -58,6 +58,15 @@ extension LogLevel {
         case .error: .red
         }
     }
+
+    var symbol: String {
+        switch self {
+        case .info: "ellipsis"
+        case .success: "checkmark"
+        case .warning: "exclamationmark"
+        case .error: "xmark"
+        }
+    }
 }
 
 extension RunnerPhase {

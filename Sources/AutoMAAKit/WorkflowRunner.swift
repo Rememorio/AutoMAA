@@ -9,9 +9,12 @@ public final class WorkflowRunner {
     private let portProbe = PortProbe()
     private let gameController = GameProcessController()
     private let historyStore: HistoryStore
+    private let diagnosticLogStore: DiagnosticLogStore
     private let stateStore: ExecutionStateStore
     private let eventSink: EventSink
     private var currentPlanID: UUID?
+    private var currentRunID: UUID?
+    private var currentSensitiveValues: [String] = []
 
     public init(
         directories: AppDirectories = .init(),
@@ -19,6 +22,7 @@ public final class WorkflowRunner {
     ) {
         self.directories = directories
         historyStore = HistoryStore(directories: directories)
+        diagnosticLogStore = DiagnosticLogStore(directories: directories)
         stateStore = ExecutionStateStore(directories: directories)
         self.eventSink = eventSink
     }
@@ -31,6 +35,8 @@ public final class WorkflowRunner {
         var report = WorkflowReport()
         var lock: ProcessLock?
         var lease: CaffeinateLease?
+        beginActivity(sensitiveValues: configuration.clients.flatMap { $0.accounts.map(\.accountSelector) })
+        defer { endActivity() }
         currentPlanID = nil
         guard let plan = configuration.plans.first(where: { $0.id == planID }) else {
             report.fatalError = "找不到要运行的自动化方案"
@@ -99,7 +105,13 @@ public final class WorkflowRunner {
             } else if result.exitCode == 0 {
                 emit(.updating, "MAA 资源已更新", 0, .success)
             } else {
-                emit(.updating, "资源更新失败，继续使用本地资源：\(shortOutput(result))", 0, .warning)
+                emit(
+                    .updating,
+                    "资源更新失败，继续使用本地资源",
+                    0,
+                    .warning,
+                    details: shortOutput(result)
+                )
             }
         }
 
@@ -392,6 +404,8 @@ public final class WorkflowRunner {
     }
 
     public func hotUpdate(cliPath: String) async -> Bool {
+        beginActivity()
+        defer { endActivity() }
         emit(.updating, "正在热更新 MAA 资源", 0, .info)
         let result = await runCommand(executable: cliPath, arguments: ["hot-update", "--batch"], timeout: 180)
         if result.cancelled || Task.isCancelled {
@@ -401,9 +415,34 @@ public final class WorkflowRunner {
         let success = result.exitCode == 0
         emit(
             success ? .completed : .failed,
-            success ? "MAA 资源已经是最新" : "资源更新失败：\(shortOutput(result))",
+            success ? "MAA 资源已经是最新" : "资源更新失败",
             1,
-            success ? .success : .error
+            success ? .success : .error,
+            details: success ? nil : shortOutput(result)
+        )
+        return success
+    }
+
+    public func updateCore(cliPath: String) async -> Bool {
+        beginActivity()
+        defer { endActivity() }
+        emit(.updating, "正在更新 MAA 核心与基础资源", 0, .info)
+        let result = await runCommand(
+            executable: cliPath,
+            arguments: ["update", "stable", "--batch"],
+            timeout: 900
+        )
+        if result.cancelled || Task.isCancelled {
+            emit(.cancelled, "MAA 更新已停止", 1, .warning)
+            return false
+        }
+        let success = result.exitCode == 0 && !result.timedOut
+        emit(
+            success ? .completed : .failed,
+            success ? "MAA 核心与基础资源已更新" : "MAA 更新失败",
+            1,
+            success ? .success : .error,
+            details: success ? nil : shortOutput(result)
         )
         return success
     }
@@ -480,11 +519,12 @@ public final class WorkflowRunner {
             }
             emit(
                 .switchingAccount,
-                shortOutput(lastResult, sensitiveValues: [selector].compactMap { $0 }),
+                "进入 \(account.name) 未成功\(attempt < attempts ? "，稍后重试" : "")",
                 0,
                 .warning,
                 client: client,
-                account: account
+                account: account,
+                details: shortOutput(lastResult, sensitiveValues: [selector].compactMap { $0 })
             )
             if attempt < attempts { try? await Task.sleep(for: .seconds(2)) }
         }
@@ -495,7 +535,7 @@ public final class WorkflowRunner {
         )
         throw ManualInterventionError(
             scope: diagnosis.scope,
-            reason: "进入 \(account.name) 失败：\(detail)",
+            reason: "进入 \(account.name) 失败",
             guidance: diagnosis.guidance
         )
     }
@@ -536,12 +576,13 @@ public final class WorkflowRunner {
             if result.exitCode == 0, !result.timedOut { return true }
             emit(
                 .runningTask,
-                shortOutput(result, sensitiveValues: client.accounts.map(\.accountSelector)),
+                "\(account.name) · \(task.title) 未完成\(attempt < attempts ? "，准备重试" : "")",
                 0,
                 .warning,
                 client: client,
                 account: account,
-                task: task
+                task: task,
+                details: shortOutput(result, sensitiveValues: client.accounts.map(\.accountSelector))
             )
             if attempt < attempts {
                 if !(await portProbe.isOpen(client.address)) {
@@ -666,7 +707,7 @@ public final class WorkflowRunner {
         case .launchFailed:
             return .init(
                 scope: .client,
-                reason: reason,
+                reason: "\(client.name) 启动失败",
                 guidance: "请手动确认所选游戏应用能够正常启动；本次将跳过该客户端"
             )
         default:
@@ -703,7 +744,7 @@ public final class WorkflowRunner {
         guard let first = messages.first else { return "流程完成" }
         let firstLine = first.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? first
         let concise = String(firstLine.prefix(240))
-        let suffix = messages.count > 1 ? "（另有 \(messages.count - 1) 项，请查看日志）" : ""
+        let suffix = messages.count > 1 ? "（另有 \(messages.count - 1) 项，请查看活动记录）" : ""
         return "流程完成，需要手动处理：\(concise)\(suffix)"
     }
 
@@ -724,8 +765,10 @@ public final class WorkflowRunner {
         timeout: TimeInterval,
         ignoreCancellation: Bool = false
     ) async -> CommandResult {
+        let command = arguments.first(where: { !$0.hasPrefix("-") }) ?? URL(filePath: executable).lastPathComponent
+        let result: CommandResult
         do {
-            return try await commandRunner.run(
+            result = try await commandRunner.run(
                 executable: executable,
                 arguments: arguments,
                 environment: ["MAA_CONFIG_DIR": directories.maaConfig.path],
@@ -733,7 +776,7 @@ public final class WorkflowRunner {
                 observeCancellation: !ignoreCancellation
             )
         } catch {
-            return CommandResult(
+            result = CommandResult(
                 exitCode: -1,
                 standardOutput: "",
                 standardError: error.localizedDescription,
@@ -741,6 +784,27 @@ public final class WorkflowRunner {
                 cancelled: !ignoreCancellation && Task.isCancelled
             )
         }
+        if let currentRunID {
+            diagnosticLogStore.append(
+                result,
+                command: command,
+                runID: currentRunID,
+                sensitiveValues: currentSensitiveValues
+            )
+        }
+        return result
+    }
+
+    private func beginActivity(sensitiveValues: [String] = []) {
+        let runID = UUID()
+        currentRunID = runID
+        currentSensitiveValues = sensitiveValues
+        diagnosticLogStore.begin(runID: runID)
+    }
+
+    private func endActivity() {
+        currentRunID = nil
+        currentSensitiveValues = []
     }
 
     private func shortOutput(_ result: CommandResult, sensitiveValues: [String] = []) -> String {
@@ -780,17 +844,23 @@ public final class WorkflowRunner {
         _ level: LogLevel,
         client: ClientConfiguration? = nil,
         account: AccountConfiguration? = nil,
-        task: TaskKind? = nil
+        task: TaskKind? = nil,
+        details: String? = nil
     ) {
+        let normalizedProgress = min(max(progress, 0), 1)
         let log = LogEntry(
             level: level,
             message: message,
+            details: details,
+            runID: currentRunID,
+            phase: phase,
+            progress: normalizedProgress,
             planID: currentPlanID,
             clientID: client?.id,
             accountID: account?.id,
             task: task
         )
         historyStore.append(log)
-        eventSink(RunnerEvent(phase: phase, message: message, progress: min(max(progress, 0), 1), log: log))
+        eventSink(RunnerEvent(phase: phase, message: message, progress: normalizedProgress, log: log))
     }
 }

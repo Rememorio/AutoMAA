@@ -459,6 +459,150 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertTrue(redacted.contains("[已隐藏邮箱]"))
     }
 
+    func testActivityHistoryGroupsRunsAndKeepsLegacyEntriesReadable() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let firstRunID = UUID()
+        let secondRunID = UUID()
+        let base = Date(timeIntervalSince1970: 1_800_000_000)
+        let entries = [
+            LogEntry(timestamp: base, level: .info, message: "旧记录"),
+            LogEntry(
+                timestamp: base.addingTimeInterval(100),
+                level: .info,
+                message: "开始第一轮",
+                runID: firstRunID,
+                phase: .preparing,
+                progress: 0
+            ),
+            LogEntry(
+                timestamp: base.addingTimeInterval(120),
+                level: .success,
+                message: "第一轮完成",
+                runID: firstRunID,
+                phase: .completed,
+                progress: 1,
+                task: .award
+            ),
+            LogEntry(
+                timestamp: base.addingTimeInterval(200),
+                level: .error,
+                message: "第二轮失败",
+                runID: secondRunID,
+                phase: .failed,
+                progress: 0.5
+            ),
+        ]
+
+        let sessions = ActivityHistory.sessions(from: entries, calendar: calendar)
+
+        XCTAssertEqual(sessions.count, 3)
+        XCTAssertEqual(sessions[0].runID, secondRunID)
+        XCTAssertEqual(sessions[0].errorCount, 1)
+        XCTAssertEqual(sessions[1].runID, firstRunID)
+        XCTAssertEqual(sessions[1].entries.map(\.message), ["开始第一轮", "第一轮完成"])
+        XCTAssertEqual(sessions[1].completedTaskCount, 1)
+        XCTAssertNil(sessions[2].runID)
+        XCTAssertEqual(sessions[2].entries.count, 1)
+        XCTAssertEqual(sessions[2].entries.first?.message, "旧记录")
+    }
+
+    func testHistoryStoreDecodesEntriesWrittenBeforeActivitySessions() throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        try directories.prepare()
+        let id = UUID()
+        let json = """
+        [{
+          "id": "\(id.uuidString)",
+          "timestamp": "2026-08-02T08:00:00Z",
+          "level": "success",
+          "message": "旧版运行完成"
+        }]
+        """
+        try Data(json.utf8).write(to: directories.history)
+
+        let loaded = HistoryStore(directories: directories).load()
+        XCTAssertEqual(loaded.count, 1)
+        let entry = try XCTUnwrap(loaded.first)
+
+        XCTAssertEqual(entry.id, id)
+        XCTAssertEqual(entry.message, "旧版运行完成")
+        XCTAssertNil(entry.runID)
+        XCTAssertNil(entry.phase)
+        XCTAssertNil(entry.details)
+    }
+
+    func testDiagnosticLogStoreRedactsOutputAndKeepsItOutsideActivityHistory() throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        let store = DiagnosticLogStore(directories: directories)
+        let runID = UUID()
+        store.begin(runID: runID)
+        store.append(
+            CommandResult(
+                exitCode: 1,
+                standardOutput: "selector private-fragment",
+                standardError: "user@example.com 13800138000",
+                timedOut: false
+            ),
+            command: "startup",
+            runID: runID,
+            sensitiveValues: ["private-fragment"]
+        )
+
+        let contents = try String(contentsOf: store.url(for: runID), encoding: .utf8)
+
+        XCTAssertTrue(contents.contains("startup · exit 1"))
+        XCTAssertFalse(contents.contains("private-fragment"))
+        XCTAssertFalse(contents.contains("user@example.com"))
+        XCTAssertFalse(contents.contains("13800138000"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directories.history.path))
+    }
+
+    @MainActor
+    func testWorkflowEventsShareOneRunIdentityAndStructuredPhase() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var plan = AutomationPlan.lightRoutine
+        plan.policy.hotUpdateBeforeRun = false
+        let client = missingClient(
+            name: "缺失的测试客户端",
+            path: "/Applications/Definitely-Missing-Activity-Test.app",
+            port: 65528
+        )
+        let config = AppConfiguration(cliPath: "/usr/bin/true", clients: [client], plans: [plan])
+        let directories = AppDirectories(root: root)
+
+        _ = await WorkflowRunner(directories: directories).run(config, planID: plan.id, resumeToday: false)
+        let entries = HistoryStore(directories: directories).load()
+
+        XCTAssertFalse(entries.isEmpty)
+        XCTAssertEqual(Set(entries.compactMap(\.runID)).count, 1)
+        XCTAssertTrue(entries.allSatisfy { $0.runID != nil && $0.phase != nil && $0.progress != nil })
+        XCTAssertEqual(ActivityHistory.sessions(from: entries).count, 1)
+    }
+
+    @MainActor
+    func testCoreUpdateUsesTheSameActivityAndDiagnosticPipeline() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+
+        let succeeded = await WorkflowRunner(directories: directories).updateCore(cliPath: "/usr/bin/true")
+        let entries = HistoryStore(directories: directories).load()
+        let runID = try XCTUnwrap(entries.first?.runID)
+
+        XCTAssertTrue(succeeded)
+        XCTAssertEqual(entries.map(\.phase), [.updating, .completed])
+        XCTAssertTrue(entries.allSatisfy { $0.runID == runID })
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: DiagnosticLogStore(directories: directories).url(for: runID).path
+        ))
+    }
+
     func testStructuralValidationRejectsDamagedStepOrderAndInvalidSeries() {
         var config = populatedConfiguration()
         config.plans[0].stepOrder = [.fight, .fight]

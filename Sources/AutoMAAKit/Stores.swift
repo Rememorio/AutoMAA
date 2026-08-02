@@ -168,6 +168,71 @@ public struct HistoryStore: Sendable {
     }()
 }
 
+public struct DiagnosticLogStore: Sendable {
+    public let directories: AppDirectories
+
+    public init(directories: AppDirectories = .init()) {
+        self.directories = directories
+    }
+
+    public func begin(runID: UUID, keeping limit: Int = 30) {
+        try? directories.prepare()
+        prune(keeping: limit)
+        let header = "AutoMAA diagnostic session \(runID.uuidString.lowercased())\n"
+        try? Data(header.utf8).write(to: url(for: runID), options: .atomic)
+    }
+
+    public func append(
+        _ result: CommandResult,
+        command: String,
+        runID: UUID,
+        sensitiveValues: [String] = []
+    ) {
+        let output = SensitiveDataRedactor.redact(result.combinedOutput, sensitiveValues: sensitiveValues)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let body = output.isEmpty ? "(no output)" : output
+        let record = "\n[\(timestamp)] \(command) · exit \(result.exitCode)\(result.timedOut ? " · timed out" : "")\n\(body)\n"
+        let url = url(for: runID)
+        guard let data = record.data(using: .utf8) else { return }
+        if !FileManager.default.fileExists(atPath: url.path) {
+            try? data.write(to: url, options: .atomic)
+            return
+        }
+        guard let handle = try? FileHandle(forWritingTo: url) else { return }
+        defer { try? handle.close() }
+        do {
+            try handle.seekToEnd()
+            try handle.write(contentsOf: data)
+        } catch {}
+    }
+
+    public func url(for runID: UUID) -> URL {
+        directories.logs.appending(path: "maa-\(runID.uuidString.lowercased()).log")
+    }
+
+    private func prune(keeping limit: Int) {
+        guard limit > 0,
+              let urls = try? FileManager.default.contentsOfDirectory(
+                  at: directories.logs,
+                  includingPropertiesForKeys: [.contentModificationDateKey],
+                  options: [.skipsHiddenFiles]
+              )
+        else { return }
+        let candidates = urls.filter {
+            $0.lastPathComponent.hasPrefix("maa-") && $0.pathExtension == "log"
+        }
+        .sorted {
+            let lhs = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let rhs = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            return lhs > rhs
+        }
+        for url in candidates.dropFirst(limit - 1) {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+}
+
 public struct ExecutionStateStore: Sendable {
     public let directories: AppDirectories
 

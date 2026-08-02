@@ -555,6 +555,10 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
     public var timestamp: Date
     public var level: LogLevel
     public var message: String
+    public var details: String?
+    public var runID: UUID?
+    public var phase: RunnerPhase?
+    public var progress: Double?
     public var planID: UUID?
     public var clientID: UUID?
     public var accountID: UUID?
@@ -565,6 +569,10 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
         timestamp: Date = Date(),
         level: LogLevel,
         message: String,
+        details: String? = nil,
+        runID: UUID? = nil,
+        phase: RunnerPhase? = nil,
+        progress: Double? = nil,
         planID: UUID? = nil,
         clientID: UUID? = nil,
         accountID: UUID? = nil,
@@ -574,6 +582,10 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
         self.timestamp = timestamp
         self.level = level
         self.message = message
+        self.details = details
+        self.runID = runID
+        self.phase = phase
+        self.progress = progress
         self.planID = planID
         self.clientID = clientID
         self.accountID = accountID
@@ -593,6 +605,53 @@ public enum RunnerPhase: String, Codable, Sendable {
     case cancelled
     case completed
     case failed
+}
+
+public struct ActivitySession: Identifiable, Sendable, Equatable {
+    public let id: String
+    public let runID: UUID?
+    public let entries: [LogEntry]
+
+    public var startedAt: Date { entries.first?.timestamp ?? .distantPast }
+    public var endedAt: Date { entries.last?.timestamp ?? startedAt }
+    public var planID: UUID? { entries.lazy.compactMap(\.planID).first }
+    public var finalPhase: RunnerPhase? { entries.lazy.reversed().compactMap(\.phase).first }
+    public var finalLevel: LogLevel { entries.last?.level ?? .info }
+    public var warningCount: Int { entries.count { $0.level == .warning } }
+    public var errorCount: Int { entries.count { $0.level == .error } }
+    public var completedTaskCount: Int { entries.count { $0.level == .success && $0.task != nil } }
+
+    public init(id: String, runID: UUID?, entries: [LogEntry]) {
+        self.id = id
+        self.runID = runID
+        self.entries = entries.sorted { $0.timestamp < $1.timestamp }
+    }
+}
+
+public enum ActivityHistory {
+    public static func sessions(
+        from entries: [LogEntry],
+        calendar: Calendar = .current
+    ) -> [ActivitySession] {
+        var grouped: [String: (UUID?, [LogEntry])] = [:]
+
+        for entry in entries {
+            let key: String
+            if let runID = entry.runID {
+                key = "run-\(runID.uuidString.lowercased())"
+            } else {
+                let parts = calendar.dateComponents([.year, .month, .day], from: entry.timestamp)
+                let scope = entry.planID?.uuidString.lowercased() ?? "maintenance"
+                key = "legacy-\(parts.year ?? 0)-\(parts.month ?? 0)-\(parts.day ?? 0)-\(scope)"
+            }
+            grouped[key, default: (entry.runID, [])].1.append(entry)
+        }
+
+        return grouped.map { key, value in
+            ActivitySession(id: key, runID: value.0, entries: value.1)
+        }
+        .sorted { $0.startedAt > $1.startedAt }
+    }
 }
 
 public struct RunnerEvent: Sendable {

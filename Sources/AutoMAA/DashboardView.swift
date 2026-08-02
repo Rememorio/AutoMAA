@@ -220,26 +220,53 @@ struct DashboardView: View {
     }
 
     private var recentActivity: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            sectionTitle("最近活动", detail: nil)
+        let latest = ActivityHistory.sessions(from: model.activityEntries).first
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                sectionTitle("最近活动", detail: nil)
+                Spacer()
+                if latest != nil {
+                    Button("查看全部") { model.selection = .activity }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Color.maaAccent)
+                }
+            }
             Panel {
-                if model.logs.isEmpty {
+                if let latest, let lastEntry = latest.entries.last {
+                    HStack(spacing: 13) {
+                        Image(systemName: activitySymbol(latest))
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(activityTint(latest))
+                            .frame(width: 34, height: 34)
+                            .background(
+                                activityTint(latest).opacity(0.11),
+                                in: RoundedRectangle(cornerRadius: 9)
+                            )
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 7) {
+                                Text(activityTitle(latest))
+                                    .font(.callout.weight(.semibold))
+                                Text(activityStatus(latest))
+                                    .font(.caption)
+                                    .foregroundStyle(activityTint(latest))
+                            }
+                            Text(lastEntry.message)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+
+                        Spacer()
+
+                        Text(lastEntry.timestamp, format: .dateTime.month().day().hour().minute())
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
                     Text("还没有运行记录")
                         .font(.callout)
                         .foregroundStyle(.secondary)
-                } else {
-                    VStack(spacing: 10) {
-                        ForEach(model.logs.suffix(4).reversed()) { log in
-                            HStack(spacing: 10) {
-                                StatusDot(color: log.level.color)
-                                Text(log.message).font(.callout).lineLimit(1)
-                                Spacer()
-                                Text(log.timestamp, style: .time)
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -254,6 +281,31 @@ struct DashboardView: View {
 
     private func targetCount(_ plan: AutomationPlan) -> Int {
         model.configuration.clients.filter(\.enabled).flatMap { $0.accounts.filter(plan.includes) }.count
+    }
+
+    private func activityTitle(_ session: ActivitySession) -> String {
+        if let planID = session.planID,
+           let plan = model.configuration.plans.first(where: { $0.id == planID }) {
+            return plan.name
+        }
+        return session.runID == nil ? "较早的运行记录" : "MAA 维护"
+    }
+
+    private func activityStatus(_ session: ActivitySession) -> String {
+        if session.finalPhase == .completed, session.finalLevel == .warning { return "完成，需留意" }
+        return session.finalPhase?.displayName ?? "运行记录"
+    }
+
+    private func activitySymbol(_ session: ActivitySession) -> String {
+        if session.finalPhase == .completed, session.finalLevel == .warning {
+            return "exclamationmark.circle.fill"
+        }
+        return session.finalPhase?.statusSymbol ?? session.finalLevel.symbol
+    }
+
+    private func activityTint(_ session: ActivitySession) -> Color {
+        if session.finalPhase == .completed, session.finalLevel == .warning { return .orange }
+        return session.finalPhase?.statusTint ?? session.finalLevel.color
     }
 
     private var greeting: String {
