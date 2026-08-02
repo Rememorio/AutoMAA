@@ -8,6 +8,7 @@ struct AboutView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 identity
+                supportPanel
                 purposePanel
                 privacyPanel
                 openSourcePanel
@@ -32,13 +33,44 @@ struct AboutView: View {
                 Text("把重复的 MAA 日常，整理成可靠的自动化方案。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                Text("版本 \(model.currentApplicationVersion)（\(model.currentApplicationBuild)）")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
+                Text("v\(model.currentApplicationVersion)")
+                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(Color.maaAccent)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4)
+                    .background(Color.maaAccent.opacity(0.12), in: Capsule())
+                    .accessibilityLabel("AutoMAA 版本 \(model.currentApplicationVersion)")
             }
             Spacer()
         }
+    }
+
+    private var supportPanel: some View {
+        Panel {
+            HStack(alignment: .top, spacing: 24) {
+                VStack(alignment: .leading, spacing: 9) {
+                    Label("反馈与支持", systemImage: "lifepreserver.fill")
+                        .font(.headline)
+                    Text("遇到问题时，复制版本与运行环境后随问题描述一起提交。诊断信息不包含账号、账号片段、本机路径或运行日志。")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 10) {
+                    Button {
+                        model.copySupportDiagnostics()
+                    } label: {
+                        Label("复制诊断信息", systemImage: "doc.on.doc")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.maaAccent)
+                    Link("前往问题反馈", destination: model.issueReportURL)
+                        .font(.callout)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var purposePanel: some View {
@@ -51,9 +83,8 @@ struct AboutView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack {
-                    Link("使用文档", destination: documentationURL)
-                    Link("GitHub 仓库", destination: repositoryURL)
-                    Link("问题反馈", destination: repositoryURL.appending(path: "issues"))
+                    Link("使用文档", destination: model.documentationURL)
+                    Link("GitHub 仓库", destination: model.repositoryURL)
                 }
             }
         }
@@ -87,20 +118,12 @@ struct AboutView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack {
-                    Link("查看许可证", destination: repositoryURL.appending(path: "blob/main/LICENSE"))
-                    Link("完整致谢", destination: documentationURL.appending(path: "about/credits"))
+                    Link("查看许可证", destination: model.repositoryURL.appending(path: "blob/main/LICENSE"))
+                    Link("完整致谢", destination: model.documentationURL.appending(path: "about/credits"))
                     Link("MAA 项目", destination: URL(string: "https://github.com/MaaAssistantArknights/MaaAssistantArknights")!)
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var repositoryURL: URL {
-        URL(string: "https://github.com/\(model.applicationUpdateRepository)")!
-    }
-
-    private var documentationURL: URL {
-        URL(string: "https://rememorio.github.io/AutoMAA/")!
     }
 }

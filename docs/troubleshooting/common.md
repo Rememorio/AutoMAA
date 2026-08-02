@@ -98,9 +98,7 @@ AutoMAA 会记录当天已经成功的任务。如果你确认需要重跑，在
 
 在 [GitHub Issues](https://github.com/Rememorio/AutoMAA/issues) 中说明：
 
-- AutoMAA 版本；
-- macOS 版本与芯片；
-- `maa version` 输出；
+- 从“关于 AutoMAA”复制的版本、macOS、芯片及 MAA 环境信息；
 - 客户端服务器类型；
 - 预期行为、实际行为和复现步骤；
 - 已去除敏感信息的相关活动或诊断日志。

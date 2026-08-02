@@ -1,3 +1,4 @@
+import AppKit
 import AutoMAAKit
 import SwiftUI
 
@@ -21,7 +22,7 @@ struct AutoMAAApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        Window("AutoMAA", id: "main") {
             RootView()
                 .environmentObject(model)
                 .frame(minWidth: 1_020, minHeight: 680)
@@ -29,20 +30,7 @@ struct AutoMAAApp: App {
         .defaultSize(width: 1_180, height: 780)
         .windowStyle(.hiddenTitleBar)
         .commands {
-            CommandGroup(after: .appInfo) {
-                Button("检查更新…") { model.checkForApplicationUpdate() }
-                    .disabled(model.applicationUpdateState.isBusy)
-            }
-            CommandGroup(after: .newItem) {
-                Button("运行当前方案") { model.runSelectedPlan() }
-                    .keyboardShortcut("r", modifiers: [.command])
-                    .disabled(!model.canRun)
-                Button("安全停止当前流程") { model.cancelRun() }
-                    .keyboardShortcut(".", modifiers: [.command])
-                    .disabled(!model.isRunning)
-                Button("保存配置") { model.saveNow() }
-                    .keyboardShortcut("s", modifiers: [.command])
-            }
+            AutoMAACommands(model: model)
         }
     }
 
@@ -59,4 +47,50 @@ struct AutoMAAApp: App {
         return URL(filePath: arguments[index + 1], directoryHint: .isDirectory).standardizedFileURL
     }
     #endif
+}
+
+private struct AutoMAACommands: Commands {
+    @ObservedObject var model: AppModel
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some Commands {
+        CommandGroup(replacing: .appInfo) {
+            Button("关于 AutoMAA") { show(.about) }
+        }
+        CommandGroup(after: .appInfo) {
+            Button("检查更新…") {
+                show(.settings)
+                model.checkForApplicationUpdate()
+            }
+            .disabled(model.applicationUpdateState.isBusy)
+        }
+        CommandGroup(replacing: .appSettings) {
+            Button("设置…") { show(.settings) }
+                .keyboardShortcut(",", modifiers: [.command])
+        }
+        CommandGroup(after: .newItem) {
+            Button("运行当前方案") { model.runSelectedPlan() }
+                .keyboardShortcut("r", modifiers: [.command])
+                .disabled(!model.canRun)
+            Button("安全停止当前流程") { model.cancelRun() }
+                .keyboardShortcut(".", modifiers: [.command])
+                .disabled(!model.isRunning)
+            Button("保存配置") { model.saveNow() }
+                .keyboardShortcut("s", modifiers: [.command])
+        }
+        CommandGroup(replacing: .help) {
+            Button("AutoMAA 使用文档") {
+                NSWorkspace.shared.open(model.documentationURL)
+            }
+            Button("报告问题…") {
+                NSWorkspace.shared.open(model.issueReportURL)
+            }
+        }
+    }
+
+    private func show(_ selection: SidebarSelection) {
+        model.selection = selection
+        openWindow(id: "main")
+        NSApp.activate(ignoringOtherApps: true)
+    }
 }

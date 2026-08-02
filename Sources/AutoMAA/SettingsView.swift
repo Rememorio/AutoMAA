@@ -23,26 +23,22 @@ struct SettingsView: View {
         Panel {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
-                    Label("AutoMAA 更新", systemImage: "arrow.down.app.fill")
+                    Label("软件更新", systemImage: "arrow.down.app.fill")
                         .font(.headline)
-                    Spacer()
-                    Text("当前版本 v\(model.currentApplicationVersion)")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
                 }
 
                 switch model.applicationUpdateState {
                 case .idle:
                     updateRow(
-                        message: "启动时自动检查 GitHub Release，也可以随时手动检查。",
+                        message: "当前使用 v\(model.currentApplicationVersion)，启动时会自动检查正式版本。",
                         buttonTitle: "检查更新",
                         action: { model.checkForApplicationUpdate() }
                     )
                 case .checking:
-                    progressRow("正在检查 GitHub Release…")
+                    progressRow("正在为 v\(model.currentApplicationVersion) 检查更新…")
                 case .upToDate:
                     updateRow(
-                        message: "当前已经是最新版本。",
+                        message: "v\(model.currentApplicationVersion) 已是最新版本。",
                         symbol: "checkmark.circle.fill",
                         color: .green,
                         buttonTitle: "再次检查",
@@ -50,7 +46,10 @@ struct SettingsView: View {
                     )
                 case let .available(release):
                     VStack(alignment: .leading, spacing: 10) {
-                        Label("发现 v\(release.version.description)", systemImage: "sparkles")
+                        Label(
+                            "v\(release.version.description) 可用（当前 v\(model.currentApplicationVersion)）",
+                            systemImage: "sparkles"
+                        )
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(Color.maaAccent)
                         if !release.releaseNotes.isEmpty {
@@ -99,7 +98,6 @@ struct SettingsView: View {
                         HStack {
                             Spacer()
                             Button("重新检查") { model.checkForApplicationUpdate() }
-                                .disabled(model.isRunning)
                         }
                     }
                 }
@@ -128,7 +126,6 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
             Spacer()
             Button(buttonTitle, action: action)
-                .disabled(model.isRunning)
         }
     }
 

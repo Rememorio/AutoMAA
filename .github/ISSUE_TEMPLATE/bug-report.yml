@@ -8,20 +8,17 @@ body:
       value: |
         感谢反馈。请先确认问题发生在 AutoMAA 本身；MAA 识别问题通常应报告给 MAA。提交前请从日志和截图中移除账号片段、手机号、邮箱与本机私人路径。
 
-  - type: input
-    id: automaa-version
+  - type: textarea
+    id: diagnostics
     attributes:
-      label: AutoMAA 版本
-      placeholder: 例如 0.2.0
-    validations:
-      required: true
-
-  - type: input
-    id: environment
-    attributes:
-      label: 环境
-      description: macOS、芯片、maa-cli 与 MaaCore 版本
-      placeholder: macOS 26.0 / Apple Silicon / maa-cli x.y.z / MaaCore x.y.z
+      label: 版本与环境
+      description: 可直接粘贴“关于 AutoMAA”复制的诊断信息；旧版本请手动填写 AutoMAA、macOS、芯片、maa-cli 与 MaaCore 版本
+      placeholder: |
+        AutoMAA: v0.3.1 (build ...)
+        macOS: Version ...
+        架构: arm64
+        maa-cli v...
+        MaaCore v...
     validations:
       required: true
 

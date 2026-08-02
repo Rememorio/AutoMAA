@@ -179,6 +179,33 @@ final class AppModel: ObservableObject {
         configuration.plans.count(where: isPlanScheduleCurrent)
     }
 
+    var supportDiagnostics: SupportDiagnostics {
+        SupportDiagnostics(
+            applicationVersion: currentApplicationVersion,
+            applicationBuild: currentApplicationBuild,
+            operatingSystem: ProcessInfo.processInfo.operatingSystemVersionString,
+            architecture: Self.currentArchitecture,
+            maaVersionSummary: maaVersionSummary,
+            configurationSchemaVersion: AppConfiguration.currentSchemaVersion,
+            updateRepository: applicationUpdateRepository
+        )
+    }
+
+    var repositoryURL: URL {
+        URL(string: "https://github.com/\(applicationUpdateRepository)")!
+    }
+
+    var documentationURL: URL {
+        URL(string: "https://rememorio.github.io/AutoMAA/")!
+    }
+
+    var issueReportURL: URL {
+        repositoryURL
+            .appending(path: "issues")
+            .appending(path: "new")
+            .appending(path: "choose")
+    }
+
     var readinessIssues: [ReadinessIssue] {
         readinessIssues(for: selectedPlanID)
     }
@@ -463,6 +490,16 @@ final class AppModel: ObservableObject {
                 if showResult { self.showBanner("检查更新失败：\(error.localizedDescription)") }
             }
             self.applicationUpdateTask = nil
+        }
+    }
+
+    func copySupportDiagnostics() {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        if pasteboard.setString(supportDiagnostics.text, forType: .string) {
+            showBanner("诊断信息已复制，不含账号、路径和运行日志")
+        } else {
+            showBanner("无法复制诊断信息，请稍后重试")
         }
     }
 
@@ -834,5 +871,15 @@ final class AppModel: ObservableObject {
             guard !Task.isCancelled, self?.bannerMessage == message else { return }
             self?.bannerMessage = nil
         }
+    }
+
+    private static var currentArchitecture: String {
+        #if arch(arm64)
+        "arm64"
+        #elseif arch(x86_64)
+        "x86_64"
+        #else
+        "unknown"
+        #endif
     }
 }
