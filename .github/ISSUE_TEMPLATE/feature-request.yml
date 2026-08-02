@@ -1,35 +1,65 @@
 name: 功能建议
 description: 提议通用、可维护的 AutoMAA 改进
 title: "feat: "
-labels: [enhancement, needs-triage]
+labels: ["enhancement", "needs-triage"]
 body:
-  - type: textarea
-    id: scenario
+  - type: markdown
     attributes:
-      label: 使用场景
-      description: 请描述现在遇到的具体问题，而不只是期望的按钮或实现。
+      value: |
+        好的功能建议先说明用户问题和理想结果，具体实现可以留给讨论。请先搜索现有 Issue；画面识别、关卡导航和干员操作建议请提交到 [MAA](https://github.com/MaaAssistantArknights/MaaAssistantArknights/issues/new/choose)。
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 建议区域
+      options:
+        - 自动化方案与任务配置
+        - 客户端与账号编排
+        - 定时运行与完成记录
+        - 活动记录与问题诊断
+        - AutoMAA 更新与维护
+        - 界面与交互
+        - 文档与新手引导
+        - 其他
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 需要解决的问题
+      description: 描述当前场景、受影响的用户和现有流程为何不足；不要只写期望新增的按钮。
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: 理想结果
+      description: 说明完成后用户能够更安全、更清楚或更高效地做什么。
     validations:
       required: true
 
   - type: textarea
     id: proposal
     attributes:
-      label: 建议方案
-      description: 说明它如何适用于不同用户、客户端与账号，而非单一私人流程。
-    validations:
-      required: true
+      label: 可能的方案
+      description: 可选。欢迎提供交互、数据模型或实现思路，但不要求先设计完整方案。
 
   - type: textarea
     id: alternatives
     attributes:
-      label: 考虑过的替代方案
+      label: 现有替代方式与取舍
+      description: 可选。说明现在如何绕过问题，以及为什么仍值得加入产品。
 
   - type: checkboxes
-    id: boundaries
+    id: confirmation
     attributes:
-      label: 产品边界
+      label: 提交前确认
       options:
-        - label: 该建议不要求 AutoMAA 保存密码、验证码或绕过游戏登录与更新。
+        - label: 我已经搜索现有 Issue，并确认没有相同或高度相似的建议。
           required: true
-        - label: 该建议属于 MAA 工作流编排，而不是重新实现 MaaCore 的识别能力。
+        - label: 该建议不要求保存密码或验证码，也不要求绕过登录、用户协议、维护、强制更新或系统安全机制。
+          required: true
+        - label: 该建议属于 AutoMAA 可以负责的编排、配置、运行、定时、日志、更新或交互能力，而不是重新实现 MaaCore 的识别能力。
           required: true

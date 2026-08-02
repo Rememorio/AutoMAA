@@ -1,11 +1,11 @@
 blank_issues_enabled: false
 contact_links:
   - name: 使用文档与常见问题
-    url: https://rememorio.github.io/AutoMAA/
-    about: 安装、配置、定时、游戏更新和常见故障请先查阅文档站。
+    url: https://rememorio.github.io/AutoMAA/troubleshooting/common
+    about: 安装、配置、定时、游戏更新和常见故障请先从这里排查。
   - name: MAA 识别与关卡适配问题
-    url: https://github.com/MaaAssistantArknights/MaaAssistantArknights/issues
+    url: https://github.com/MaaAssistantArknights/MaaAssistantArknights/issues/new/choose
     about: 画面识别、关卡导航和干员操作由 MAA / MaaCore 提供，请向上游反馈。
   - name: 私密报告安全漏洞
     url: https://github.com/Rememorio/AutoMAA/security/advisories/new
-    about: 可能泄露账号信息或绕过安全边界的问题请勿公开提交。
+    about: 可能泄露账号信息、连接错误对象或绕过安全边界的问题请勿公开提交。

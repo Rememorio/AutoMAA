@@ -1,12 +1,31 @@
 name: Bug 报告
-description: 报告可复现的 AutoMAA 行为问题
+description: 报告可以复现的 AutoMAA 行为异常或回归
 title: "bug: "
-labels: [bug, needs-triage]
+labels: ["bug", "needs-triage"]
 body:
   - type: markdown
     attributes:
       value: |
-        感谢反馈。请先确认问题发生在 AutoMAA 本身；MAA 识别问题通常应报告给 MAA。提交前请从日志和截图中移除账号片段、手机号、邮箱与本机私人路径。
+        感谢反馈。请先搜索现有 Issue，并查看[常见问题](https://rememorio.github.io/AutoMAA/troubleshooting/common)。
+
+        画面识别、关卡导航和干员操作由 MAA / MaaCore 提供，请向 [MAA](https://github.com/MaaAssistantArknights/MaaAssistantArknights/issues/new/choose) 反馈；可能泄露账号信息或破坏安全边界的漏洞请使用[私密安全报告](https://github.com/Rememorio/AutoMAA/security/advisories/new)。
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 问题区域
+      description: 请选择最接近的一项，维护者可以在确认后调整分类。
+      options:
+        - 安装、启动或 AutoMAA 更新
+        - 配置与界面
+        - 客户端或账号编排
+        - 任务参数生成与 MAA 调用
+        - 定时运行与完成记录
+        - 活动记录与诊断日志
+        - 文档
+        - 其他
+    validations:
+      required: true
 
   - type: textarea
     id: diagnostics
@@ -22,18 +41,11 @@ body:
     validations:
       required: true
 
-  - type: dropdown
-    id: area
+  - type: textarea
+    id: actual
     attributes:
-      label: 问题区域
-      options:
-        - 配置与界面
-        - 任务参数生成
-        - 客户端或账号编排
-        - 定时与断点
-        - 更新与安装
-        - 文档
-        - 其他
+      label: 实际行为
+      description: 请具体说明你看到了什么，包括界面状态、错误文案和发生阶段。
     validations:
       required: true
 
@@ -41,17 +53,33 @@ body:
     id: steps
     attributes:
       label: 复现步骤
+      description: 从可重复问题的最小起点开始；不要粘贴完整配置或账号信息。
       placeholder: |
-        1. …
-        2. …
-        3. …
+        1. 打开 …
+        2. 配置 …
+        3. 点击 …
+        4. 出现 …
     validations:
       required: true
 
   - type: textarea
     id: expected
     attributes:
-      label: 预期与实际结果
+      label: 预期行为
+      description: 说明你认为正确的结果，以及它与实际行为的差异。
+    validations:
+      required: true
+
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: 复现频率
+      options:
+        - 每次都能复现
+        - 经常复现
+        - 偶尔复现
+        - 只发生过一次
+        - 尚未找到稳定复现方式
     validations:
       required: true
 
@@ -59,16 +87,16 @@ body:
     id: logs
     attributes:
       label: 已脱敏的日志或截图
-      description: 可直接拖入附件；不要粘贴用户配置、账号片段或完整手机号。
+      description: 可直接拖入附件。AutoMAA 会尽力遮盖敏感字段，但提交前仍请人工检查；不要上传完整配置或整个数据目录。
 
   - type: checkboxes
     id: confirmation
     attributes:
       label: 提交前确认
       options:
-        - label: 我使用的是最新正式版本，并已查看文档站的常见问题。
+        - label: 我已经搜索现有 Issue，并确认这不是同一问题的重复报告。
           required: true
-        - label: 我已经移除账号、手机号、邮箱、密码、验证码和私人路径。
+        - label: 我已经从文字、截图和附件中移除账号、账号片段、手机号、邮箱、密码、验证码、令牌和私人路径。
           required: true
-        - label: 我没有为了复现问题关闭系统安全机制或让 AutoMAA 操作无权使用的账号。
+        - label: 我确认问题发生在 AutoMAA 的编排、配置、运行、定时、日志、更新或交互范围内，而不是单纯的 MAA 识别或关卡适配问题。
           required: true

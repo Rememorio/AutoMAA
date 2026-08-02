@@ -1,0 +1,65 @@
+name: 使用问题
+description: 询问 AutoMAA 的安装、配置、运行或定时用法
+title: "question: "
+labels: ["question", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提问前请先查看[使用文档与常见问题](https://rememorio.github.io/AutoMAA/troubleshooting/common)，并搜索现有 Issue。
+
+        画面识别、关卡导航和干员操作由 MAA / MaaCore 提供，请到 [MAA](https://github.com/MaaAssistantArknights/MaaAssistantArknights/issues/new/choose) 寻求帮助；安全漏洞请使用[私密安全报告](https://github.com/Rememorio/AutoMAA/security/advisories/new)。
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 问题区域
+      options:
+        - 下载、安装与首次启动
+        - maa-cli、MaaCore 与资源
+        - 客户端与账号配置
+        - 自动化方案与任务参数
+        - 定时运行与完成记录
+        - 活动记录与问题诊断
+        - AutoMAA 更新
+        - 其他
+    validations:
+      required: true
+
+  - type: textarea
+    id: question
+    attributes:
+      label: 你的问题
+      description: 请说明你想完成什么，以及具体卡在了哪里。
+    validations:
+      required: true
+
+  - type: textarea
+    id: attempts
+    attributes:
+      label: 已经尝试过什么
+      description: 请列出查阅过的文档、尝试过的设置或命令，以及对应结果。
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 版本与环境
+      description: 如果问题与本机环境有关，可粘贴“关于 AutoMAA”复制的诊断信息；不要上传完整配置或整个数据目录。
+      placeholder: |
+        AutoMAA: v... (build ...)
+        macOS: Version ...
+        架构: arm64
+        maa-cli v...
+        MaaCore v...
+
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已经查看相关文档并搜索现有 Issue。
+          required: true
+        - label: 我已经从文字、截图和附件中移除账号、账号片段、手机号、邮箱、密码、验证码、令牌和私人路径。
+          required: true
