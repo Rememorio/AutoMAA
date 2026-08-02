@@ -112,6 +112,29 @@ struct StatusDot: View {
     }
 }
 
+struct WorkflowProgressView: View {
+    let progress: Double
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ProgressView(value: normalizedProgress)
+                .progressViewStyle(.linear)
+            Text(normalizedProgress, format: .percent.precision(.fractionLength(0)))
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 30, alignment: .trailing)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("运行进度")
+        .accessibilityValue(normalizedProgress.formatted(.percent.precision(.fractionLength(0))))
+    }
+
+    private var normalizedProgress: Double {
+        guard progress.isFinite else { return 0 }
+        return min(max(progress, 0), 1)
+    }
+}
+
 struct TaskIcon: View {
     let task: TaskKind
     var enabled = true

@@ -102,7 +102,7 @@ struct SidebarView: View {
                     }
                 }
 
-                Section("工具") {
+                Section("应用") {
                     Label("活动记录", systemImage: "clock.arrow.circlepath")
                         .tag(SidebarSelection.activity)
                     Label("全局设置", systemImage: "gearshape.fill")
@@ -143,8 +143,7 @@ struct SidebarView: View {
             workflowStatus
 
             if model.isRunning {
-                ProgressView(value: model.progress)
-                    .progressViewStyle(.linear)
+                WorkflowProgressView(progress: model.progress)
 
                 Button { model.cancelRun() } label: {
                     Label(

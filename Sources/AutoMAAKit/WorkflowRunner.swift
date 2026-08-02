@@ -1,5 +1,19 @@
 import Foundation
 
+struct MonotonicProgress {
+    private(set) var value = 0.0
+
+    mutating func reset() {
+        value = 0
+    }
+
+    mutating func advance(to proposedValue: Double) -> Double {
+        let normalized = proposedValue.isFinite ? min(max(proposedValue, 0), 1) : 0
+        value = max(value, normalized)
+        return value
+    }
+}
+
 @MainActor
 public final class WorkflowRunner {
     public typealias EventSink = @MainActor @Sendable (RunnerEvent) -> Void
@@ -15,6 +29,7 @@ public final class WorkflowRunner {
     private var currentPlanID: UUID?
     private var currentRunID: UUID?
     private var currentSensitiveValues: [String] = []
+    private var runProgress = MonotonicProgress()
 
     public init(
         directories: AppDirectories = .init(),
@@ -799,6 +814,7 @@ public final class WorkflowRunner {
         let runID = UUID()
         currentRunID = runID
         currentSensitiveValues = sensitiveValues
+        runProgress.reset()
         diagnosticLogStore.begin(runID: runID)
     }
 
@@ -840,14 +856,14 @@ public final class WorkflowRunner {
     private func emit(
         _ phase: RunnerPhase,
         _ message: String,
-        _ progress: Double,
+        _ proposedProgress: Double,
         _ level: LogLevel,
         client: ClientConfiguration? = nil,
         account: AccountConfiguration? = nil,
         task: TaskKind? = nil,
         details: String? = nil
     ) {
-        let normalizedProgress = min(max(progress, 0), 1)
+        let normalizedProgress = runProgress.advance(to: proposedProgress)
         let log = LogEntry(
             level: level,
             message: message,

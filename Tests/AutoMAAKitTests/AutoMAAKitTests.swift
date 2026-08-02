@@ -651,6 +651,20 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertEqual(ActivityHistory.sessions(from: entries).count, 1)
     }
 
+    func testWorkflowProgressDoesNotMoveBackwardAcrossContextEvents() {
+        var progress = MonotonicProgress()
+
+        XCTAssertEqual(progress.advance(to: -1), 0)
+        XCTAssertEqual(progress.advance(to: 0.4), 0.4)
+        XCTAssertEqual(progress.advance(to: 0), 0.4)
+        XCTAssertEqual(progress.advance(to: 0.75), 0.75)
+        XCTAssertEqual(progress.advance(to: 2), 1)
+        XCTAssertEqual(progress.advance(to: .nan), 1)
+
+        progress.reset()
+        XCTAssertEqual(progress.value, 0)
+    }
+
     @MainActor
     func testCoreUpdateUsesTheSameActivityAndDiagnosticPipeline() async throws {
         let root = temporaryRoot()

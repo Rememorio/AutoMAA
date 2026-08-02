@@ -24,11 +24,9 @@ private struct DisplayActivitySession: Identifiable {
 
 struct ActivityView: View {
     @EnvironmentObject private var model: AppModel
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var search = ""
     @State private var filter: ActivityFilter = .all
     @State private var expandedSessionIDs: Set<String> = []
-    @State private var followsLatest = true
     @State private var showingClearConfirmation = false
 
     private var sessions: [ActivitySession] {
@@ -87,14 +85,6 @@ struct ActivityView: View {
 
             Spacer()
 
-            if model.isRunning {
-                Toggle(isOn: $followsLatest) {
-                    Label("跟随最新", systemImage: "arrow.down.to.line.compact")
-                }
-                .toggleStyle(.button)
-                .help("有新活动时自动滚动到当前运行位置")
-            }
-
             Menu {
                 Button {
                     try? model.directories.prepare()
@@ -122,55 +112,43 @@ struct ActivityView: View {
     }
 
     private var activityContent: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 16) {
-                    explanation
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                explanation
 
-                    if model.isRunning {
-                        currentActivity
-                    }
+                if model.isRunning {
+                    currentActivity
+                }
 
-                    if displayedSessions.isEmpty {
-                        ContentUnavailableView(
-                            model.activityEntries.isEmpty ? "还没有活动记录" : "没有匹配的活动",
-                            systemImage: model.activityEntries.isEmpty ? "clock.arrow.circlepath" : "magnifyingglass",
-                            description: Text(model.activityEntries.isEmpty
-                                ? "运行方案或更新 MAA 后，这里会按每次运行整理进度与结果。"
-                                : "试试其他关键词，或切换到“全部”。")
-                        )
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 64)
-                    } else {
-                        ForEach(displayedSessions) { item in
-                            sessionCard(item)
-                        }
+                if displayedSessions.isEmpty {
+                    ContentUnavailableView(
+                        model.activityEntries.isEmpty ? "还没有活动记录" : "没有匹配的活动",
+                        systemImage: model.activityEntries.isEmpty ? "clock.arrow.circlepath" : "magnifyingglass",
+                        description: Text(model.activityEntries.isEmpty
+                            ? "运行方案或更新 MAA 后，这里会按每次运行整理进度与结果。"
+                            : "试试其他关键词，或切换到“全部”。")
+                    )
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 64)
+                } else {
+                    ForEach(displayedSessions) { item in
+                        sessionCard(item)
                     }
                 }
-                .padding(20)
             }
-            .onAppear {
-                if let first = displayedSessions.first {
-                    expandedSessionIDs.insert(first.id)
-                }
-                if model.isRunning, let runID = model.activityEntries.last?.runID,
-                   let current = sessions.first(where: { $0.runID == runID }) {
-                    expandedSessionIDs.insert(current.id)
-                }
+            .padding(20)
+        }
+        .onAppear {
+            if let first = displayedSessions.first {
+                expandedSessionIDs.insert(first.id)
             }
-            .onChange(of: displayedSessions.first?.id) { _, id in
-                if let id { expandedSessionIDs.insert(id) }
+            if model.isRunning, let runID = model.activityEntries.last?.runID,
+               let current = sessions.first(where: { $0.runID == runID }) {
+                expandedSessionIDs.insert(current.id)
             }
-            .onChange(of: model.activityEntries.count) { _, _ in
-                guard followsLatest, model.isRunning,
-                      let entry = model.activityEntries.last,
-                      let session = sessions.first(where: { $0.entries.contains(where: { $0.id == entry.id }) })
-                else { return }
-                expandedSessionIDs.insert(session.id)
-                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
-                    proxy.scrollTo(entry.id, anchor: .bottom)
-                }
-            }
+        }
+        .onChange(of: displayedSessions.first?.id) { _, id in
+            if let id { expandedSessionIDs.insert(id) }
         }
     }
 
@@ -208,8 +186,7 @@ struct ActivityView: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
-                    ProgressView(value: model.progress)
-                        .progressViewStyle(.linear)
+                    WorkflowProgressView(progress: model.progress)
                 }
 
                 Button(role: .destructive) { model.cancelRun() } label: {
