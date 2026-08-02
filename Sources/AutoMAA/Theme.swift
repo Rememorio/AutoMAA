@@ -175,7 +175,7 @@ extension RunnerPhase {
         case .preparing: "准备中"
         case .updating: "更新资源"
         case .launching: "启动客户端"
-        case .switchingAccount: "切换账号"
+        case .switchingAccount: "准备账号"
         case .runningTask: "任务进行中"
         case .closing: "关闭客户端"
         case .attention: "需要手动处理"

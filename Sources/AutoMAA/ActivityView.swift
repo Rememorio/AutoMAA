@@ -27,28 +27,30 @@ struct ActivityView: View {
     @State private var search = ""
     @State private var filter: ActivityFilter = .all
     @State private var expandedSessionIDs: Set<String> = []
+    @State private var followsLiveActivity = true
     @State private var showingClearConfirmation = false
 
     private var sessions: [ActivitySession] {
-        var sessions = ActivityHistory.sessions(from: model.activityEntries)
-        guard model.isRunning, let runID = model.activityEntries.last?.runID,
-              let index = sessions.firstIndex(where: { $0.runID == runID }), index != 0
-        else { return sessions }
-        let current = sessions.remove(at: index)
-        sessions.insert(current, at: 0)
-        return sessions
+        ActivityHistory.sessions(from: model.activityEntries)
+    }
+
+    private var currentRunID: UUID? {
+        model.isRunning ? model.activityEntries.last?.runID : nil
+    }
+
+    private var currentSession: ActivitySession? {
+        guard let currentRunID else { return nil }
+        return sessions.first { $0.runID == currentRunID }
+    }
+
+    private var historicalSessions: [ActivitySession] {
+        guard let currentRunID else { return sessions }
+        return sessions.filter { $0.runID != currentRunID }
     }
 
     private var displayedSessions: [DisplayActivitySession] {
-        sessions.compactMap { session in
-            let entries = session.entries.filter { entry in
-                let matchesLevel = filter == .all || entry.level == .warning || entry.level == .error
-                let matchesSearch = search.isEmpty
-                    || entry.message.localizedCaseInsensitiveContains(search)
-                    || entry.details?.localizedCaseInsensitiveContains(search) == true
-                    || entry.task?.title.localizedCaseInsensitiveContains(search) == true
-                return matchesLevel && matchesSearch
-            }
+        historicalSessions.compactMap { session in
+            let entries = filteredEntries(in: session)
             return entries.isEmpty ? nil : DisplayActivitySession(session: session, entries: entries)
         }
     }
@@ -118,18 +120,25 @@ struct ActivityView: View {
 
                 if model.isRunning {
                     currentActivity
+                    if !displayedSessions.isEmpty {
+                        Text("历史运行")
+                            .font(.headline)
+                            .padding(.top, 4)
+                    }
                 }
 
                 if displayedSessions.isEmpty {
-                    ContentUnavailableView(
-                        model.activityEntries.isEmpty ? "还没有活动记录" : "没有匹配的活动",
-                        systemImage: model.activityEntries.isEmpty ? "clock.arrow.circlepath" : "magnifyingglass",
-                        description: Text(model.activityEntries.isEmpty
-                            ? "运行方案或更新 MAA 后，这里会按每次运行整理进度与结果。"
-                            : "试试其他关键词，或切换到“全部”。")
-                    )
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 64)
+                    if !model.isRunning {
+                        ContentUnavailableView(
+                            model.activityEntries.isEmpty ? "还没有活动记录" : "没有匹配的活动",
+                            systemImage: model.activityEntries.isEmpty ? "clock.arrow.circlepath" : "magnifyingglass",
+                            description: Text(model.activityEntries.isEmpty
+                                ? "运行方案或更新 MAA 后，这里会按每次运行整理进度与结果。"
+                                : "试试其他关键词，或切换到“全部”。")
+                        )
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 64)
+                    }
                 } else {
                     ForEach(displayedSessions) { item in
                         sessionCard(item)
@@ -141,10 +150,6 @@ struct ActivityView: View {
         .onAppear {
             if let first = displayedSessions.first {
                 expandedSessionIDs.insert(first.id)
-            }
-            if model.isRunning, let runID = model.activityEntries.last?.runID,
-               let current = sessions.first(where: { $0.runID == runID }) {
-                expandedSessionIDs.insert(current.id)
             }
         }
         .onChange(of: displayedSessions.first?.id) { _, id in
@@ -166,35 +171,101 @@ struct ActivityView: View {
     }
 
     private var currentActivity: some View {
-        Panel {
-            HStack(spacing: 14) {
-                Image(systemName: model.phase.statusSymbol)
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(model.phase.statusTint)
-                    .frame(width: 40, height: 40)
-                    .background(model.phase.statusTint.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+        let entries = currentSession.map(filteredEntries(in:)) ?? []
 
-                VStack(alignment: .leading, spacing: 7) {
-                    HStack {
-                        Text("当前运行")
-                            .font(.headline)
-                        Text(model.phase.displayName)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(model.phase.statusTint)
+        return Panel {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 14) {
+                    Image(systemName: model.phase.statusSymbol)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(model.phase.statusTint)
+                        .frame(width: 40, height: 40)
+                        .background(model.phase.statusTint.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+
+                    VStack(alignment: .leading, spacing: 7) {
+                        HStack {
+                            Text("当前运行")
+                                .font(.headline)
+                            Text(model.phase.displayName)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(model.phase.statusTint)
+                        }
+                        Text(model.statusMessage)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                        WorkflowProgressView(progress: model.progress)
                     }
-                    Text(model.statusMessage)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                    WorkflowProgressView(progress: model.progress)
+
+                    Button(role: .destructive) { model.cancelRun() } label: {
+                        Label(model.runningPlanID == nil ? "停止更新" : "安全停止", systemImage: "stop.fill")
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
                 }
 
-                Button(role: .destructive) { model.cancelRun() } label: {
-                    Label(model.runningPlanID == nil ? "停止更新" : "安全停止", systemImage: "stop.fill")
-                }
-                .buttonStyle(.bordered)
-                .tint(.red)
+                Divider()
+                liveActivityFeed(entries)
             }
+        }
+    }
+
+    private func liveActivityFeed(_ entries: [LogEntry]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("实时活动", systemImage: "waveform.path.ecg")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Toggle(isOn: $followsLiveActivity) {
+                    Label("跟随最新", systemImage: "arrow.down.to.line.compact")
+                }
+                .toggleStyle(.button)
+                .controlSize(.small)
+                .help("开启后，新活动只会在当前运行卡内滚动到最新位置")
+            }
+
+            if entries.isEmpty {
+                Text(search.isEmpty && filter == .all ? "正在等待第一条活动…" : "当前运行没有匹配的活动")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 72)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                                ActivityEventRow(
+                                    entry: entry,
+                                    context: context(for: entry),
+                                    drawsConnector: index < entries.count - 1
+                                )
+                            }
+                        }
+                        .padding(.trailing, 8)
+                    }
+                    .frame(height: 210)
+                    .task(id: entries.last?.id) {
+                        guard followsLiveActivity, let id = entries.last?.id else { return }
+                        await Task.yield()
+                        proxy.scrollTo(id, anchor: .bottom)
+                    }
+                    .onChange(of: followsLiveActivity) { _, follows in
+                        guard follows, let id = entries.last?.id else { return }
+                        proxy.scrollTo(id, anchor: .bottom)
+                    }
+                }
+            }
+        }
+    }
+
+    private func filteredEntries(in session: ActivitySession) -> [LogEntry] {
+        session.entries.filter { entry in
+            let matchesLevel = filter == .all || entry.level == .warning || entry.level == .error
+            let matchesSearch = search.isEmpty
+                || entry.message.localizedCaseInsensitiveContains(search)
+                || entry.details?.localizedCaseInsensitiveContains(search) == true
+                || entry.task?.title.localizedCaseInsensitiveContains(search) == true
+            return matchesLevel && matchesSearch
         }
     }
 
@@ -305,7 +376,6 @@ struct ActivityView: View {
                 components.append(account.displayName)
             }
         }
-        if let task = entry.task { components.append(task.title) }
         return components.isEmpty ? nil : components.joined(separator: " · ")
     }
 

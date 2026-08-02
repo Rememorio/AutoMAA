@@ -23,12 +23,12 @@ public enum RuntimeError: LocalizedError {
         case let .invalidAddress(value): "连接地址无效：\(value)"
         case let .portOccupied(value): "端口 \(value) 已被其他程序占用"
         case let .appNotFound(path): "找不到游戏：\(path)"
-        case let .bundleIdentifierMissing(client): "\(client) 缺少 Bundle Identifier"
+        case let .bundleIdentifierMissing(client): "客户端「\(client)」缺少 Bundle Identifier"
         case let .launchFailed(message): "游戏启动失败：\(message)"
         case let .connectionTimeout(address): "等待 MaaTools \(address) 超时"
-        case let .accountSelectorMissing(account): "\(account) 尚未填写唯一账号片段"
-        case let .accountSwitchFailed(account): "切换到 \(account) 失败"
-        case let .taskFailed(task): "\(task) 执行失败"
+        case let .accountSelectorMissing(account): "账号「\(account)」尚未填写唯一账号片段"
+        case let .accountSwitchFailed(account): "账号「\(account)」准备失败"
+        case let .taskFailed(task): "任务「\(task)」执行失败"
         case let .portReleaseTimeout(address): "客户端关闭后端口 \(address) 仍未释放"
         }
     }
