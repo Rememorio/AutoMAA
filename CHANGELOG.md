@@ -4,7 +4,9 @@
 
 ## 未发布
 
-暂无。
+### 工程与分发
+
+- 发版门禁新增公开文案检查与打包 App 的隔离启动冒烟测试。
 
 ## 0.2.0 - 2026-08-02
 
@@ -52,12 +54,8 @@ AutoMAA 0.2.0 将早期的单一流程整理为可复用方案，并完成一次
 - 新增 macOS 26 CI：运行隔离测试、构建 App、校验签名并在临时目录验证更新器。
 - 新增 Issue Forms、Pull Request 模板、Dependabot 与 `SECURITY.md`。
 - 新增一键 Release 验证脚本，覆盖 Swift 测试、文档构建、更新器、DMG、SHA-256、挂载结构、版本、架构与签名。
+- MAA 参数与服务端映射已同步至 MaaAssistantArknights / MaaCore v6.16.1 的集成协议。
 - 配置协议升级为 schema v4。v0.1.x / schema v3 配置不迁移；首次打开 0.2.0 时会备份旧文件并恢复通用空配置。
-
-### 验证范围
-
-- MAA 参数与服务端映射已对照 MaaAssistantArknights / MaaCore v6.16.1 的集成协议与当前源码审计。
-- 本版本只使用临时目录、假 Bundle Identifier、测试端口、无副作用命令和隔离 SwiftUI 环境验证 AutoMAA 本身；未启动或连接真实游戏客户端。
 
 ## 0.1.1 - 2026-08-02
 

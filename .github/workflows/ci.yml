@@ -22,6 +22,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Check public content
+        run: ./scripts/check-public-content.sh
+
       - name: Show toolchain
         run: swift --version
 

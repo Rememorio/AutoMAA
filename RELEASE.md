@@ -42,7 +42,7 @@ gh release view "vX.Y.Z"
 在 `scripts/Info.plist` 中更新：
 
 - `CFBundleShortVersionString` 为 `X.Y.Z`；
-- `CFBundleVersion` 由构建脚本生成，不需要手动修改。
+- `CFBundleVersion` 由 `build-app.sh` 写入 UTC 时间戳构建号；`scripts/Info.plist` 中的值只是构建前占位符，不需要手动修改。
 
 在 `CHANGELOG.md` 顶部增加本次版本、发布日期和用户可见变化。优先使用以下分类：
 
@@ -69,13 +69,13 @@ npm run docs:build
 
 ## 3. 完整发布验证
 
-`verify-release.sh` 是正式发版的唯一完整验收入口。它只使用临时目录和伪对象，不连接真实游戏：
+`verify-release.sh` 是正式发版的唯一完整验收入口。它要求工作区干净，并只使用临时目录和隔离对象：
 
 ```bash
 ./scripts/verify-release.sh
 ```
 
-脚本会依次验证 Swift 测试、Release App 构建、更新器替换、文档站、DMG、SHA-256、只读挂载结构、版本、Bundle ID、arm64 架构和代码签名。还需人工确认：
+脚本会依次检查公开文案，验证 Swift 测试、Release App 构建、更新器替换、文档站、DMG、SHA-256、只读挂载结构、版本、Bundle ID、arm64 架构、代码签名，并从 DMG 启动使用临时用户目录的 App。还需人工确认：
 
 - 测试使用临时目录、假 Bundle Identifier 和测试专用高位端口；
 - 不存在连接默认 MaaTools 地址、调用系统 LaunchAgent 或启动真实游戏的测试；
@@ -95,7 +95,7 @@ npm run docs:build
 7. 深浅色、较窄窗口、键盘导航、VoiceOver 标签和“减少动态效果”；
 8. 文档截图使用通用假数据，不含维护者路径或账号信息。
 
-真实游戏验证不是自动化 Release 门禁。只有维护者主动授权时才能在自有账号上执行，并且必须在 Release Notes 中精确记录范围；未执行时明确写“未进行真实游戏测试”，不能把生成配置或隔离 UI 验收描述成真机通过。
+真实游戏验证不属于自动化 Release 门禁，也不能替代隔离测试。若某项能力存在会影响普通用户的已知限制，应以产品行为描述写入更新日志；本机验收过程、账号范围和协作背景不进入面向用户的发布文案。
 
 隔离验收结束后退出 QA App、删除临时数据，并确认没有游戏客户端被测试过程启动。
 
@@ -130,7 +130,8 @@ hdiutil verify "dist/AutoMAA-X.Y.Z-macOS-arm64.dmg"
 - App 和 `AutoMAARunner` 都是 arm64；
 - App 内包含可执行的 `AutoMAAUpdater`，并已通过隔离临时目录中的替换冒烟测试；
 - Info.plist 版本正确；
-- 从 DMG 中能够实际启动 App，退出后能够正常卸载镜像。
+- `smoke-test-app.sh` 能从 DMG 启动 App，在临时用户目录生成空白配置并完整退出，不读取默认 AutoMAA 数据或安装系统 LaunchAgent；
+- 退出 App 后能够正常卸载镜像。
 
 由于当前没有 Developer ID 与公证，`spctl --assess` 预期会拒绝。README 和 Release Notes 必须明确说明 Finder 右键“打开”以及“系统设置 → 隐私与安全性 → 仍要打开”的正常流程，不提供绕过 Gatekeeper 的破坏性命令。
 
@@ -154,7 +155,16 @@ git ls-remote origin refs/heads/main
 
 ## 7. 创建 GitHub Release
 
-从 `CHANGELOG.md` 复制当前版本章节到一个临时 Release Notes 文件，内容应包含用户影响、已知限制、签名状态和安装提示。不要把整个历史更新日志重复粘贴到每个 Release。
+以 `CHANGELOG.md` 当前版本章节为事实来源，整理一份面向下载者的 Release Notes。它应包含用户可感知的变化、升级影响、兼容性、已知限制、签名状态和安装提示，但不机械复制工程记录或整个历史更新日志。
+
+Release Notes、README、更新日志与文档站必须脱离维护协作语境独立成立。不要写入协作指令、批准过程、代理或工具名称、本机验收经过、测试账号、临时路径，以及“做了或没做某项私人测试”之类对用户没有帮助的信息。确有产品风险时，直接说明触发条件、用户影响和规避方法。
+
+创建 Release 前检查仓库公开文案与临时 Notes：
+
+```bash
+./scripts/check-public-content.sh
+./scripts/check-public-content.sh /tmp/automaa-release-notes.md
+```
 
 ```bash
 gh release create "vX.Y.Z" \
@@ -176,13 +186,13 @@ gh release view "vX.Y.Z" --repo Rememorio/AutoMAA
 git ls-remote origin "refs/tags/vX.Y.Z"
 ```
 
-重新下载两个附件，在独立临时目录中执行 `.sha256` 校验，并与本地已验证的 DMG 做字节比较。最后从未登录状态打开 Release 页面，确认 README 徽章、下载链接、说明和附件均可访问。
+重新下载两个附件，在独立临时目录中执行 `.sha256` 校验，并与本地已验证的 DMG 做字节比较。挂载下载的 DMG，把 App 复制到临时 `Applications` 目录，再用 `smoke-test-app.sh` 完成隔离启动；不要覆盖维护者正在使用的 `/Applications/AutoMAA.app`。最后从未登录状态打开 Release 页面，确认 README 徽章、下载链接、说明和附件均可访问。
 
 应用内更新依赖 Release 附件的固定命名和公开元数据。发布后还要确认 `releases/latest` 指向本次版本，DMG 与 `.sha256` 的名称、大小和下载地址均正确；不要静默替换已经公开的附件。
 
 ## 8. 发布后处理
 
-- 在支持的 macOS 版本上从 Release 下载并安装一次；
+- 在支持的 macOS 版本上从 Release 下载，并在临时安装目录完成一次隔离启动；
 - 观察 Issue 和崩溃反馈，确认没有普遍的启动、配置或连接回归；
 - 将下一版本的计划改动记录到 `CHANGELOG.md` 的未发布部分或 Issue；
 - 如发现严重问题，立即在 Release 描述中标注，不移动既有 tag，也不静默替换附件；修复后发布新的补丁版本；
@@ -193,15 +203,18 @@ git ls-remote origin "refs/tags/vX.Y.Z"
 - [ ] `main` 与远端同步，工作区干净
 - [ ] 版本号和 `CHANGELOG.md` 已更新
 - [ ] README 与实际能力、限制和签名状态一致
+- [ ] 公开文案和 Release Notes 不含协作背景、本机验收记录或私人信息
 - [ ] 文档站构建通过，安装与常见问题页面已同步
 - [ ] 仓库不含用户配置、敏感信息或构建产物
 - [ ] `./scripts/verify-release.sh` 完整通过
 - [ ] 更新器替换冒烟测试通过
 - [ ] Release App 构建和代码签名校验通过
+- [ ] DMG 中的 App 已使用临时用户目录完成隔离启动
 - [ ] 隔离界面验收范围与未验证项已记录
 - [ ] DMG、挂载结构和 SHA-256 校验通过
 - [ ] 发布提交已推送到 `main`
 - [ ] tag 指向正确提交
 - [ ] Release 附件上传完成并重新下载验证
+- [ ] 从公开附件复制的 App 已在临时安装目录完成隔离启动
 - [ ] Release 页面、下载链接和安装说明可公开访问
 - [ ] GitHub Pages 部署成功且线上关键页面可访问

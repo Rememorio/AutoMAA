@@ -19,6 +19,12 @@ trap cleanup EXIT INT TERM
 
 cd "$PROJECT_DIR"
 
+if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
+    print -u2 "Release verification requires a clean worktree"
+    exit 2
+fi
+
+./scripts/check-public-content.sh
 swift test --parallel
 ./scripts/build-app.sh >/dev/null
 ./scripts/test-updater.sh
@@ -43,6 +49,7 @@ APP_PATH="$MOUNT_DIR/AutoMAA.app"
 /usr/bin/file "$APP_PATH/Contents/MacOS/AutoMAA" | /usr/bin/grep -q arm64
 /usr/bin/file "$APP_PATH/Contents/MacOS/AutoMAARunner" | /usr/bin/grep -q arm64
 /usr/bin/file "$APP_PATH/Contents/MacOS/AutoMAAUpdater" | /usr/bin/grep -q arm64
+./scripts/smoke-test-app.sh "$APP_PATH"
 
 /usr/bin/hdiutil detach "$MOUNT_DIR" >/dev/null
 MOUNTED=false
