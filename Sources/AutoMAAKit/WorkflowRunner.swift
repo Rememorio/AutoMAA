@@ -445,14 +445,16 @@ public final class WorkflowRunner {
         policy: ExecutionPolicy
     ) async throws {
         guard !Task.isCancelled else { throw RuntimeError.cancelled }
-        let selector = account.accountSelector.trimmingCharacters(in: .whitespacesAndNewlines)
-        if client.accounts.filter(\.enabled).count > 1, selector.isEmpty {
+        let selector = client.kind.maaAccountSelector(from: account.accountSelector)
+        if client.kind.supportsAccountSwitching,
+           client.accounts.filter(\.enabled).count > 1,
+           selector == nil {
             throw RuntimeError.accountSelectorMissing(account.name)
         }
 
         emit(.switchingAccount, "正在进入 \(account.name)", 0, .info, client: client, account: account)
         var arguments = ["startup", client.kind.maaClientType]
-        if !selector.isEmpty {
+        if let selector {
             arguments += ["--account-name", selector]
         }
         arguments += commonArguments(client)
@@ -478,7 +480,7 @@ public final class WorkflowRunner {
             }
             emit(
                 .switchingAccount,
-                shortOutput(lastResult, sensitiveValues: [selector]),
+                shortOutput(lastResult, sensitiveValues: [selector].compactMap { $0 }),
                 0,
                 .warning,
                 client: client,
@@ -486,10 +488,10 @@ public final class WorkflowRunner {
             )
             if attempt < attempts { try? await Task.sleep(for: .seconds(2)) }
         }
-        let detail = shortOutput(lastResult, sensitiveValues: [selector])
+        let detail = shortOutput(lastResult, sensitiveValues: [selector].compactMap { $0 })
         let diagnosis = StartupFailureClassifier.diagnose(
             output: detail,
-            hasAccountSelector: !selector.isEmpty
+            hasAccountSelector: selector != nil
         )
         throw ManualInterventionError(
             scope: diagnosis.scope,

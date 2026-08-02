@@ -126,20 +126,7 @@ struct DashboardView: View {
                 HStack {
                     Button("编辑") { model.selection = .plan(plan.id) }
                     Spacer()
-                    if model.canRun(planID: plan.id) {
-                        Button {
-                            model.runPlan(plan.id)
-                        } label: {
-                            Label("运行", systemImage: "play.fill")
-                        }
-                        .buttonStyle(.borderedProminent)
-                    } else {
-                        Button {} label: {
-                            Label("配置未完成", systemImage: "exclamationmark.circle")
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(true)
-                    }
+                    PlanRunButton(planID: plan.id)
                 }
             }
         }

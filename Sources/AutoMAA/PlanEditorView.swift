@@ -59,23 +59,8 @@ struct PlanEditorView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            if model.canRun(planID: plan.id) {
-                Button {
-                    model.runPlan(plan.id)
-                } label: {
-                    Label("立即运行", systemImage: "play.fill")
-                        .fontWeight(.semibold)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-            } else {
-                Button {} label: {
-                    Label("配置未完成", systemImage: "exclamationmark.circle")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .disabled(true)
-            }
+            PlanRunButton(planID: plan.id, readyTitle: "立即运行", controlSize: .large)
+                .fontWeight(.semibold)
         }
     }
 

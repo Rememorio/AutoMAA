@@ -16,6 +16,27 @@ enum SidebarSelection: Hashable {
 
 typealias ReadinessIssue = ConfigurationProblem
 
+enum PlanRunState: Equatable {
+    case ready
+    case running
+    case anotherPlanRunning
+    case maintenanceRunning
+    case configurationIncomplete
+
+    static func resolve(
+        planID: UUID?,
+        isRunning: Bool,
+        runningPlanID: UUID?,
+        hasReadinessError: Bool
+    ) -> Self {
+        if isRunning {
+            guard let runningPlanID else { return .maintenanceRunning }
+            return runningPlanID == planID ? .running : .anotherPlanRunning
+        }
+        return hasReadinessError ? .configurationIncomplete : .ready
+    }
+}
+
 enum ApplicationUpdateState {
     case idle
     case checking
@@ -166,7 +187,16 @@ final class AppModel: ObservableObject {
     }
 
     func canRun(planID: UUID?) -> Bool {
-        !isRunning && !readinessIssues(for: planID).contains { $0.severity == .error }
+        planRunState(planID: planID) == .ready
+    }
+
+    func planRunState(planID: UUID?) -> PlanRunState {
+        PlanRunState.resolve(
+            planID: planID,
+            isRunning: isRunning,
+            runningPlanID: runningPlanID,
+            hasReadinessError: readinessIssues(for: planID).contains { $0.severity == .error }
+        )
     }
 
     func isPlanScheduleCurrent(_ plan: AutomationPlan) -> Bool {

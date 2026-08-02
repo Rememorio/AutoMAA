@@ -45,8 +45,8 @@ features:
   </div>
 
   <figure class="product-shot product-shot-wide">
-    <img class="theme-shot theme-shot-light" src="./assets/screenshots/overview-light.webp" width="2360" height="1560" alt="AutoMAA 今日总览：展示简中服与日文服两个客户端、三个演示账号和两套日常方案" />
-    <img class="theme-shot theme-shot-dark" src="./assets/screenshots/overview-dark.webp" width="2360" height="1560" alt="AutoMAA 今日总览：展示简中服与日文服两个客户端、三个演示账号和两套日常方案" />
+    <img class="theme-shot theme-shot-light" src="./assets/screenshots/overview-light.webp" width="2360" height="1560" alt="AutoMAA 今日总览：展示简中服与日服两个客户端、三个演示账号和两套日常方案" />
+    <img class="theme-shot theme-shot-dark" src="./assets/screenshots/overview-dark.webp" width="2360" height="1560" alt="AutoMAA 今日总览：展示简中服与日服两个客户端、三个演示账号和两套日常方案" />
     <figcaption><strong>今日总览</strong><span>先确认顺序与安全检查，再开始完整工作流。</span></figcaption>
   </figure>
 

@@ -59,7 +59,11 @@ struct AccountEditorView: View {
                     Label("账号切换", systemImage: "person.text.rectangle")
                         .font(.headline)
                     Spacer()
-                    if requiresSelector && account.accountSelector.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    if !client.kind.supportsAccountSwitching {
+                        Text("不支持")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    } else if requiresSelector && account.accountSelector.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         Label("必填", systemImage: "exclamationmark.circle.fill")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.red)
@@ -69,13 +73,24 @@ struct AccountEditorView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                TextField("填写登录页能唯一匹配该账号的片段", text: $account.accountSelector)
-                    .textFieldStyle(.roundedBorder)
-                Text(requiresSelector
-                     ? "同一客户端启用了多个账号，每个账号都必须填写不同且唯一的匹配片段。"
-                     : "单账号可以留空；填写后 MAA 会在已登录账号中按该片段进行匹配。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                if client.kind.supportsAccountSwitching {
+                    TextField("填写登录页能唯一匹配该账号的片段", text: $account.accountSelector)
+                        .textFieldStyle(.roundedBorder)
+                    Text(requiresSelector
+                         ? "同一客户端启用了多个账号，每个账号都必须填写不同且唯一的匹配片段。"
+                         : "单账号可以留空；填写后 MAA 会在已登录账号中按该片段进行匹配。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("MAA 当前不支持\(client.kind.title)自动切换账号。请只启用一个账号，AutoMAA 会使用游戏当前已登录账号。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if !account.accountSelector.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Button("清空账号片段") {
+                            account.accountSelector = ""
+                        }
+                    }
+                }
             }
         }
     }
@@ -125,7 +140,7 @@ struct AccountEditorView: View {
     }
 
     private var requiresSelector: Bool {
-        client.accounts.filter(\.enabled).count > 1
+        client.kind.supportsAccountSwitching && client.accounts.filter(\.enabled).count > 1
     }
 
     private func membershipBinding(_ planID: UUID) -> Binding<Bool> {

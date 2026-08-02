@@ -37,5 +37,9 @@ let package = Package(
             name: "AutoMAAKitTests",
             dependencies: ["AutoMAAKit"]
         ),
+        .testTarget(
+            name: "AutoMAATests",
+            dependencies: ["AutoMAA"]
+        ),
     ]
 )

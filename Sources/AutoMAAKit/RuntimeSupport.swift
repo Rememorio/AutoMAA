@@ -275,10 +275,26 @@ public struct GameProcessController {
     }
 
     private func applications(for client: ClientConfiguration) -> [NSRunningApplication] {
-        let expected = URL(filePath: client.appPath).standardizedFileURL.resolvingSymlinksInPath().path
         return NSRunningApplication.runningApplications(withBundleIdentifier: client.bundleIdentifier).filter { application in
             guard let bundleURL = application.bundleURL else { return false }
-            return bundleURL.standardizedFileURL.resolvingSymlinksInPath().path == expected
+            return Self.matchesApplication(client, bundleURL: bundleURL, executableURL: application.executableURL)
         }
+    }
+
+    static func matchesApplication(
+        _ client: ClientConfiguration,
+        bundleURL: URL,
+        executableURL: URL?
+    ) -> Bool {
+        let configuredBundleURL = URL(filePath: client.appPath, directoryHint: .isDirectory)
+        if canonicalPath(configuredBundleURL) == canonicalPath(bundleURL) { return true }
+        guard let configuredExecutableURL = Bundle(url: configuredBundleURL)?.executableURL,
+              let executableURL
+        else { return false }
+        return canonicalPath(configuredExecutableURL) == canonicalPath(executableURL)
+    }
+
+    private static func canonicalPath(_ url: URL) -> String {
+        url.standardizedFileURL.resolvingSymlinksInPath().path
     }
 }

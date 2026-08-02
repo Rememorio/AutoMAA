@@ -150,7 +150,14 @@ struct ClientEditorView: View {
                                     .foregroundStyle(.secondary)
                             }
                             Spacer()
-                            if client.accounts.filter(\.enabled).count > 1 && account.accountSelector.isEmpty {
+                            if !client.kind.supportsAccountSwitching,
+                               client.accounts.filter(\.enabled).count > 1 {
+                                Text("不支持多账号切换")
+                                    .font(.caption)
+                                    .foregroundStyle(.red)
+                            } else if client.kind.supportsAccountSwitching,
+                                      client.accounts.filter(\.enabled).count > 1,
+                                      account.accountSelector.isEmpty {
                                 Text("缺少账号片段")
                                     .font(.caption)
                                     .foregroundStyle(.red)
@@ -177,6 +184,11 @@ struct ClientEditorView: View {
                     }
                     .padding(11)
                     .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
+                }
+                if !client.kind.supportsAccountSwitching {
+                    Text("MAA 当前不支持\(client.kind.title)自动切换账号；请只启用一个账号，并在游戏中保持该账号已登录。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
@@ -213,9 +225,11 @@ struct ClientEditorView: View {
                 Label("生命周期保护", systemImage: "shield.lefthalf.filled")
                     .font(.headline)
                 Label("启动后等待 MaaTools 端口就绪", systemImage: "checkmark.circle.fill")
-                Label("账号按上方顺序串行执行", systemImage: "checkmark.circle.fill")
+                Label(client.kind.supportsAccountSwitching ? "账号按上方顺序串行执行" : "使用游戏当前已登录的单个账号", systemImage: "checkmark.circle.fill")
                 Label("结束后关闭客户端并确认端口释放", systemImage: "checkmark.circle.fill")
-                Text("端口被未知进程占用、账号片段为空或客户端关闭失败时，流程会立即停止在安全位置。")
+                Text(client.kind.supportsAccountSwitching
+                     ? "端口被未知进程占用、账号片段为空或客户端关闭失败时，流程会立即停止在安全位置。"
+                     : "启用多个账号、填写账号片段、端口被未知进程占用或客户端关闭失败时，流程会在安全位置停止。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.top, 3)

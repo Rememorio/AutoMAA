@@ -179,7 +179,22 @@ public enum ConfigurationValidator {
                     message: "\(clientName) 中的账号名称不能为空"
                 ))
             }
-            if enabledAccounts.count > 1 {
+            if !client.kind.supportsAccountSwitching {
+                if enabledAccounts.count > 1 {
+                    result.append(.init(
+                        id: "client-\(client.id)-account-switch-unsupported",
+                        severity: .error,
+                        message: "\(clientName) 的\(client.kind.title)不支持自动切换账号，请只启用一个账号"
+                    ))
+                }
+                for account in targetAccounts where !account.accountSelector.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    result.append(.init(
+                        id: "account-\(account.id)-selector-unsupported",
+                        severity: .error,
+                        message: "\(displayName(account.name, fallback: "未命名账号")) 属于\(client.kind.title)，账号片段必须留空"
+                    ))
+                }
+            } else if enabledAccounts.count > 1 {
                 for account in targetAccounts where account.accountSelector.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     result.append(.init(
                         id: "account-\(account.id)-selector-empty",

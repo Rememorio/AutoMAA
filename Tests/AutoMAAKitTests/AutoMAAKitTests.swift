@@ -17,12 +17,68 @@ final class AutoMAAKitTests: XCTestCase {
     }
 
     func testSupportedClientMappings() {
+        XCTAssertEqual(ClientKind.allCases.map(\.title), [
+            "简中服 · 官服", "简中服 · Bilibili", "繁中服", "国际服", "日服", "韩服",
+        ])
         XCTAssertEqual(ClientKind.allCases.map(\.maaClientType), [
             "Official", "Bilibili", "Txwy", "YoStarEN", "YoStarJP", "YoStarKR",
+        ])
+        XCTAssertEqual(ClientKind.allCases.map(\.supportsAccountSwitching), [
+            true, true, true, false, false, false,
         ])
         XCTAssertEqual(ClientKind.txwy.maaTaskClientType, "txwy")
         XCTAssertEqual(ClientKind.yoStarEN.serverCode, "US")
         XCTAssertEqual(ClientKind.txwy.resourceName, "txwy")
+        XCTAssertEqual(ClientKind.official.maaAccountSelector(from: " 1234 "), "1234")
+        XCTAssertNil(ClientKind.yoStarJP.maaAccountSelector(from: "private-fragment"))
+    }
+
+    @MainActor
+    func testGameProcessMatchingFollowsPlayCoverExecutableSymlinks() throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let actualBundle = root.appending(path: "Applications/dev.automaa.tests.game.app", directoryHint: .isDirectory)
+        let linkedBundle = root.appending(path: "Games/Test Game.app", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: actualBundle, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: linkedBundle, withIntermediateDirectories: true)
+
+        let executable = actualBundle.appending(path: "TestGame")
+        XCTAssertTrue(FileManager.default.createFile(atPath: executable.path, contents: Data()))
+        let info: [String: Any] = [
+            "CFBundleExecutable": "TestGame",
+            "CFBundleIdentifier": "dev.automaa.tests.game",
+            "CFBundlePackageType": "APPL",
+        ]
+        let infoData = try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+        try infoData.write(to: actualBundle.appending(path: "Info.plist"))
+        try FileManager.default.createSymbolicLink(
+            at: linkedBundle.appending(path: "Info.plist"),
+            withDestinationURL: actualBundle.appending(path: "Info.plist")
+        )
+        try FileManager.default.createSymbolicLink(
+            at: linkedBundle.appending(path: "TestGame"),
+            withDestinationURL: executable
+        )
+
+        let client = ClientConfiguration(
+            name: "测试客户端",
+            kind: .official,
+            appPath: linkedBundle.path,
+            profileName: "test",
+            bundleIdentifier: "dev.automaa.tests.game",
+            accounts: [AccountConfiguration(name: "测试账号")]
+        )
+
+        XCTAssertTrue(GameProcessController.matchesApplication(
+            client,
+            bundleURL: actualBundle,
+            executableURL: executable
+        ))
+        XCTAssertFalse(GameProcessController.matchesApplication(
+            client,
+            bundleURL: root.appending(path: "Applications/other.app"),
+            executableURL: root.appending(path: "Applications/other.app/Other")
+        ))
     }
 
     func testFightStagePresetsMatchCurrentMAANavigationProtocol() {
@@ -605,6 +661,31 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertTrue(report.fatalError?.contains("账号片段不能重复") == true)
         XCTAssertTrue(report.attentionMessages.isEmpty)
         XCTAssertEqual(report.skippedSteps, 0)
+    }
+
+    func testUnsupportedClientAccountSwitchingIsRejectedBeforeRunning() {
+        let first = AccountConfiguration(name: "测试账号一", accountSelector: "first")
+        let second = AccountConfiguration(name: "测试账号二", accountSelector: "second")
+        let client = ClientConfiguration(
+            name: "日服测试客户端",
+            kind: .yoStarJP,
+            appPath: "/Applications/Definitely-Missing-YoStarJP.app",
+            address: "127.0.0.1:65529",
+            profileName: "unsupported-account-switch",
+            bundleIdentifier: "dev.automaa.tests.yostar-jp",
+            accounts: [first, second]
+        )
+        let plan = AutomationPlan.lightRoutine
+        let config = AppConfiguration(cliPath: "/usr/bin/true", clients: [client], plans: [plan])
+
+        let problems = ConfigurationValidator.readinessProblems(in: config, planID: plan.id)
+
+        XCTAssertTrue(problems.contains {
+            $0.severity == .error && $0.message.contains("日服不支持自动切换账号")
+        })
+        XCTAssertTrue(problems.contains {
+            $0.severity == .error && $0.message.contains("账号片段必须留空")
+        })
     }
 
     private func populatedConfiguration() -> AppConfiguration {

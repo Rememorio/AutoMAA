@@ -15,9 +15,9 @@ public enum ClientKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .official: "简中服 · 官服"
         case .bilibili: "简中服 · Bilibili"
         case .txwy: "繁中服"
-        case .yoStarEN: "英文服"
-        case .yoStarJP: "日文服"
-        case .yoStarKR: "韩文服"
+        case .yoStarEN: "国际服"
+        case .yoStarJP: "日服"
+        case .yoStarKR: "韩服"
         }
     }
 
@@ -53,6 +53,19 @@ public enum ClientKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .yoStarJP: "JP"
         case .yoStarKR: "KR"
         }
+    }
+
+    public var supportsAccountSwitching: Bool {
+        switch self {
+        case .official, .bilibili, .txwy: true
+        case .yoStarEN, .yoStarJP, .yoStarKR: false
+        }
+    }
+
+    public func maaAccountSelector(from value: String) -> String? {
+        guard supportsAccountSwitching else { return nil }
+        let selector = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return selector.isEmpty ? nil : selector
     }
 
     public var defaultBundleIdentifier: String {
