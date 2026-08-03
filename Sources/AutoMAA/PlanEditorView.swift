@@ -134,7 +134,7 @@ struct PlanEditorView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                Text("由 macOS LaunchAgent 在用户登录期间唤起；手动运行与定时运行使用完全相同的方案。")
+                Text("macOS 会在登录会话中独立唤起，无需保持 AutoMAA 打开。若需准时执行，请接通电源、保持系统唤醒且不要停留在锁屏；显示器可以单独熄灭。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

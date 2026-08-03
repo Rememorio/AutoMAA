@@ -6,13 +6,25 @@
 
 ## 启用条件
 
-- 用户保持登录状态；LaunchAgent 限制在 Aqua 图形会话中运行。
-- Mac 没有关机；到点时如果系统处于睡眠，LaunchAgent 通常会在系统恢复到可运行状态后触发，关机期间错过的运行不会补回。
+- AutoMAA 主窗口可以关闭；每个已启用方案都由独立的 `AutoMAARunner` 在后台启动。
+- 用户保持登录状态，并为 PlayCover 保留可交互的图形会话；不要注销、切换到登录窗口，建议不要停留在锁屏界面。
+- 若要在设定时间准时开始，Mac 必须保持系统唤醒。显示器可以单独熄灭，但需要开启“显示器关闭时防止自动进入睡眠”，避免把息屏同时变成系统睡眠。
+- Mac 没有关机。到点时如果系统已经睡眠，`StartCalendarInterval` 通常会在唤醒后补触发，而不是保证原定时间运行；关机期间错过的运行不会补回。
 - 游戏无需更新、重新登录、验证码或协议确认。
 - `maa-cli`、游戏 App、Bundle Identifier 和连接地址保持有效。
 - 官服、Bilibili 与繁中服的多账号匹配片段已经过人工验证；YoStar 英/日/韩服只启用一个账号且游戏保持该账号已登录。
 
-睡眠补触发遵循 [Apple 对 `StartCalendarInterval` 的说明](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/ScheduledJobs.html)，但仍不应把睡眠期间的运行当作精确到分钟的保证。
+| 到点时的状态 | 预期行为 |
+| --- | --- |
+| AutoMAA 已退出，用户已登录且 Mac 唤醒 | 后台 Runner 正常启动 |
+| 显示器已熄灭，但系统没有睡眠 | 可以运行 |
+| 屏幕已锁定 | LaunchAgent 可能启动，但 PlayCover 的图形操作不保证可用，不建议依赖 |
+| 系统睡眠或 MacBook 合盖进入睡眠 | 不能保证准时；一般在系统完全唤醒后补触发 |
+| 用户已注销或 Mac 已关机 | 不会运行；关机期间错过的任务不会补回 |
+
+如果希望无人值守任务准时运行，建议接通电源，并在“系统设置 → 电池 → 选项”（台式 Mac 为“节能”）中开启“显示器关闭时防止自动进入睡眠”。不需要让屏幕一直亮着，也不要把“网络访问唤醒”或 Power Nap 当作可交互游戏自动化的保证。可对照 [Apple 的睡眠设置说明](https://support.apple.com/guide/mac-help/mchle41a6ccd/mac)和 [`StartCalendarInterval` 行为](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/ScheduledJobs.html)。
+
+Runner 启动后会使用 `caffeinate` 防止流程中途自动休眠；它无法阻止 Mac 在触发前已经进入睡眠，因此不能替代上述系统设置。
 
 ## 为方案设置时间
 
@@ -36,6 +48,8 @@ AutoMAA 会阻止新增完全相同的定时时间。即使时间不同，前一
 - 使用 `caffeinate` 避免工作流中途休眠；
 - 继续使用当前方案当天的断点；
 - 将可读进度写入“活动记录”，并把完整输出写入 AutoMAA 的诊断日志目录。
+
+定时运行不要求 AutoMAA 当时处于打开状态。下次打开 AutoMAA，或从其他 App 返回 AutoMAA 后，“自动化总览”和“活动记录”会载入后台 Runner 写入的最新结果。
 
 ## 游戏更新后的建议
 

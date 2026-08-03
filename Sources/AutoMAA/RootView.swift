@@ -3,6 +3,7 @@ import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         NavigationSplitView {
@@ -32,6 +33,16 @@ struct RootView: View {
         .animation(.easeInOut(duration: 0.2), value: model.bannerMessage)
         .onChange(of: model.configuration) { _, _ in
             model.scheduleSave()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                model.reloadActivityHistory()
+            }
+        }
+        .onChange(of: model.selection) { _, selection in
+            if selection == .overview || selection == .activity {
+                model.reloadActivityHistory()
+            }
         }
         .task {
             model.prepareApplication()

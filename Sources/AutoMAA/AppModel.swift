@@ -608,6 +608,12 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func reloadActivityHistory() {
+        let entries = historyStore.load()
+        guard entries != activityEntries else { return }
+        activityEntries = entries
+    }
+
     func addAccount(to clientID: UUID) {
         guard let index = configuration.clients.firstIndex(where: { $0.id == clientID }) else { return }
         let name = uniqueName(
