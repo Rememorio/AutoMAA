@@ -19,6 +19,18 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertTrue(config.plans[1].mall.enabled)
         XCTAssertEqual(config.plans[1].schedule.hour, 21)
         XCTAssertEqual(config.plans[1].schedule.minute, 0)
+        XCTAssertFalse(config.notifications.importantEventsEnabled)
+    }
+
+    func testConfigurationWithoutNotificationSettingsUsesDisabledDefault() throws {
+        let data = try JSONEncoder().encode(populatedConfiguration())
+        var payload = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        payload.removeValue(forKey: "notifications")
+
+        let legacyData = try JSONSerialization.data(withJSONObject: payload)
+        let decoded = try JSONDecoder().decode(AppConfiguration.self, from: legacyData)
+
+        XCTAssertFalse(decoded.notifications.importantEventsEnabled)
     }
 
     func testDisplayNamesTrimWhitespaceAndProvideContextualFallbacks() {
@@ -812,6 +824,40 @@ final class AutoMAAKitTests: XCTestCase {
         let notice = WorkflowNotice(message: "公招发现 6★ 组合")
 
         XCTAssertTrue(WorkflowReport(notices: [notice]).isSuccess)
+    }
+
+    func testImportantNotificationComposerKeepsAlertsRareAndPrivate() {
+        XCTAssertNil(WorkflowNotificationComposer.notification(for: WorkflowReport()))
+        XCTAssertNil(WorkflowNotificationComposer.notification(for: WorkflowReport(cancelled: true)))
+
+        let recruit = WorkflowReport(notices: [WorkflowNotice(
+            message: "账号「测试账号」：公招发现 6★ 组合，请前往游戏确认",
+            details: "识别标签：高级资深干员、输出",
+            kind: .highRarityRecruit(level: 6)
+        )])
+        let recruitNotification = WorkflowNotificationComposer.notification(for: recruit)
+
+        XCTAssertEqual(recruitNotification?.title, "公开招募发现 6★ 组合")
+        XCTAssertFalse(recruitNotification?.body.contains("测试账号") == true)
+        XCTAssertFalse(recruitNotification?.body.contains("高级资深干员") == true)
+
+        let failed = WorkflowNotificationComposer.notification(for: WorkflowReport(failedSteps: 2))
+        XCTAssertEqual(failed?.title, "自动化流程有步骤失败")
+        XCTAssertEqual(failed?.body, "有 2 个步骤未完成，请打开 AutoMAA 查看活动记录。")
+    }
+
+    func testImportantNotificationComposerCombinesRecruitAndWorkflowAttention() {
+        let report = WorkflowReport(
+            attentionMessages: ["客户端需要更新"],
+            notices: [WorkflowNotice(message: "公招命中保留标签", kind: .preservedRecruitTag)]
+        )
+
+        let notification = WorkflowNotificationComposer.notification(for: report)
+
+        XCTAssertEqual(notification?.title, "公开招募需要确认")
+        XCTAssertTrue(notification?.body.contains("1 项稀有或保留标签结果") == true)
+        XCTAssertTrue(notification?.body.contains("另有情况需要手动处理") == true)
+        XCTAssertFalse(notification?.body.contains("客户端需要更新") == true)
     }
 
     func testActivityWarningCountDoesNotCountCompletionSummaryTwice() {

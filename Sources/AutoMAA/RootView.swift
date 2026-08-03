@@ -37,6 +37,7 @@ struct RootView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 model.reloadActivityHistory()
+                model.refreshNotificationAuthorization()
             }
         }
         .onChange(of: model.selection) { _, selection in

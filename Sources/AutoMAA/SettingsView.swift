@@ -9,6 +9,7 @@ struct SettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 applicationUpdatePanel
+                notificationPanel
                 maaPanel
                 storagePanel
             }
@@ -145,6 +146,76 @@ struct SettingsView: View {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty && !$0.hasPrefix("#") && !$0.hasPrefix("本项目遵循") }
         return lines.prefix(3).joined(separator: " ")
+    }
+
+    private var notificationPanel: some View {
+        Panel {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    Label("重要通知", systemImage: "bell.badge.fill")
+                        .font(.headline)
+                    Spacer()
+                    Toggle("", isOn: Binding(
+                        get: { model.configuration.notifications.importantEventsEnabled },
+                        set: { model.setImportantNotificationsEnabled($0) }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .disabled(model.isRequestingNotificationAuthorization)
+                    .accessibilityLabel("启用重要通知")
+                }
+
+                Text("仅通知需要确认的公招稀有或保留标签、人工处理、流程中止与步骤失败；普通完成不会打扰你。通知只显示概括，账号名称、识别标签和错误详情仍留在活动记录中。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                notificationAuthorizationRow
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var notificationAuthorizationRow: some View {
+        if model.isRequestingNotificationAuthorization {
+            progressRow("正在等待 macOS 通知权限…")
+        } else if !model.configuration.notifications.importantEventsEnabled {
+            Label("未开启", systemImage: "bell.slash")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else {
+            HStack(spacing: 10) {
+                switch model.notificationAuthorizationState {
+                case .authorized:
+                    Label("macOS 已允许横幅与声音", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                case .provisional:
+                    Label("macOS 当前以静默方式投递", systemImage: "bell.and.waves.left.and.right")
+                        .foregroundStyle(.secondary)
+                case .notDetermined:
+                    Label("尚未授予 macOS 通知权限", systemImage: "questionmark.circle")
+                        .foregroundStyle(.orange)
+                    Spacer()
+                    Button("继续授权") { model.requestNotificationAuthorization() }
+                case .denied:
+                    Label("macOS 已关闭 AutoMAA 通知", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Spacer()
+                    Button("打开通知设置") { openNotificationSettings() }
+                }
+            }
+            .font(.caption)
+        }
+    }
+
+    private func openNotificationSettings() {
+        var components = URLComponents(
+            string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
+        )
+        if let bundleIdentifier = Bundle.main.bundleIdentifier {
+            components?.queryItems = [URLQueryItem(name: "id", value: bundleIdentifier)]
+        }
+        if let url = components?.url, NSWorkspace.shared.open(url) { return }
+        NSWorkspace.shared.open(URL(filePath: "/System/Applications/System Settings.app", directoryHint: .isDirectory))
     }
 
     private var maaPanel: some View {

@@ -540,6 +540,14 @@ public enum ConfigurationDisplayName {
     }
 }
 
+public struct NotificationConfiguration: Codable, Equatable, Sendable {
+    public var importantEventsEnabled: Bool
+
+    public init(importantEventsEnabled: Bool = false) {
+        self.importantEventsEnabled = importantEventsEnabled
+    }
+}
+
 public struct AppConfiguration: Codable, Equatable, Sendable {
     public static let currentSchemaVersion = 4
 
@@ -547,21 +555,50 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
     public var cliPath: String
     public var clients: [ClientConfiguration]
     public var plans: [AutomationPlan]
+    public var notifications: NotificationConfiguration
 
     public init(
         schemaVersion: Int = Self.currentSchemaVersion,
         cliPath: String = "/opt/homebrew/bin/maa",
         clients: [ClientConfiguration],
-        plans: [AutomationPlan] = [.lightRoutine, .completeRoutine]
+        plans: [AutomationPlan] = [.lightRoutine, .completeRoutine],
+        notifications: NotificationConfiguration = .init()
     ) {
         self.schemaVersion = schemaVersion
         self.cliPath = cliPath
         self.clients = clients
         self.plans = plans
+        self.notifications = notifications
     }
 
     public static var defaults: AppConfiguration {
         AppConfiguration(clients: [])
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case cliPath
+        case clients
+        case plans
+        case notifications
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        cliPath = try container.decode(String.self, forKey: .cliPath)
+        clients = try container.decode([ClientConfiguration].self, forKey: .clients)
+        plans = try container.decode([AutomationPlan].self, forKey: .plans)
+        notifications = try container.decodeIfPresent(NotificationConfiguration.self, forKey: .notifications) ?? .init()
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(schemaVersion, forKey: .schemaVersion)
+        try container.encode(cliPath, forKey: .cliPath)
+        try container.encode(clients, forKey: .clients)
+        try container.encode(plans, forKey: .plans)
+        try container.encode(notifications, forKey: .notifications)
     }
 }
 
@@ -690,13 +727,21 @@ public struct RunnerEvent: Sendable {
     }
 }
 
+public enum WorkflowNoticeKind: Equatable, Sendable {
+    case highRarityRecruit(level: Int)
+    case preservedRecruitTag
+    case specialRecruitTag
+}
+
 public struct WorkflowNotice: Equatable, Sendable {
     public var message: String
     public var details: String?
+    public var kind: WorkflowNoticeKind?
 
-    public init(message: String, details: String? = nil) {
+    public init(message: String, details: String? = nil, kind: WorkflowNoticeKind? = nil) {
         self.message = message
         self.details = details
+        self.kind = kind
     }
 }
 

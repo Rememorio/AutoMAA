@@ -78,6 +78,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var maaVersionSummary = "尚未检测"
     @Published private(set) var isCheckingMAAEnvironment = false
     @Published private(set) var applicationUpdateState: ApplicationUpdateState = .idle
+    @Published private(set) var notificationAuthorizationState: NotificationAuthorizationState = .notDetermined
+    @Published private(set) var isRequestingNotificationAuthorization = false
 
     let directories: AppDirectories
     let currentApplicationVersion: String
@@ -89,11 +91,13 @@ final class AppModel: ObservableObject {
     private let launchAgentManager: LaunchAgentManager
     private let softwareUpdateService: SoftwareUpdateService
     private let softwareUpdateResultStore: SoftwareUpdateResultStore
+    private let importantNotificationCenter: ImportantNotificationCenter
     private let commandRunner = CommandRunner()
     private let configuredRunnerExecutableURL: URL?
     private var saveTask: Task<Void, Never>?
     private var workflowTask: Task<Void, Never>?
     private var applicationUpdateTask: Task<Void, Never>?
+    private var notificationTask: Task<Void, Never>?
     private var scheduleSynchronizationTask: Task<Void, Never>?
     private var scheduleSynchronizationRevision = 0
     private var didPrepareApplication = false
@@ -129,6 +133,7 @@ final class AppModel: ObservableObject {
             repository: applicationUpdateRepository
         )
         softwareUpdateResultStore = SoftwareUpdateResultStore(directories: directories)
+        importantNotificationCenter = ImportantNotificationCenter()
         do {
             configuration = try configurationStore.load()
             startupNotice = nil
@@ -158,6 +163,7 @@ final class AppModel: ObservableObject {
         saveTask?.cancel()
         workflowTask?.cancel()
         applicationUpdateTask?.cancel()
+        notificationTask?.cancel()
         scheduleSynchronizationTask?.cancel()
     }
 
@@ -356,6 +362,7 @@ final class AppModel: ObservableObject {
             self.runningPlanID = nil
             self.workflowTask = nil
             _ = self.saveNow(showConfirmation: false)
+            await self.postImportantNotification(for: report, planID: planID)
             if let fatalError = report.fatalError {
                 self.showBanner(fatalError)
             } else if report.cancelled {
@@ -403,6 +410,7 @@ final class AppModel: ObservableObject {
         guard !didPrepareApplication else { return }
         didPrepareApplication = true
         synchronizeSchedules()
+        refreshNotificationAuthorization()
         if let startupNotice {
             showBanner(startupNotice)
         }
@@ -416,6 +424,64 @@ final class AppModel: ObservableObject {
         if checksForUpdatesAutomatically {
             checkForApplicationUpdate(showResult: false)
         }
+    }
+
+    func setImportantNotificationsEnabled(_ enabled: Bool) {
+        configuration.notifications.importantEventsEnabled = enabled
+        scheduleSave()
+        if enabled {
+            requestNotificationAuthorization()
+        } else {
+            refreshNotificationAuthorization()
+        }
+    }
+
+    func requestNotificationAuthorization() {
+        notificationTask?.cancel()
+        isRequestingNotificationAuthorization = true
+        notificationTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                self.isRequestingNotificationAuthorization = false
+                self.notificationTask = nil
+            }
+            do {
+                let state = try await self.importantNotificationCenter.requestAuthorization()
+                guard !Task.isCancelled else { return }
+                self.notificationAuthorizationState = state
+                if state.canDeliver {
+                    self.showBanner("重要通知已开启")
+                } else {
+                    self.showBanner("macOS 未允许通知，可前往系统设置开启")
+                }
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.notificationAuthorizationState = await self.importantNotificationCenter.authorizationState()
+                self.showBanner("无法请求通知权限：\(error.localizedDescription)")
+            }
+        }
+    }
+
+    func refreshNotificationAuthorization() {
+        notificationTask?.cancel()
+        notificationTask = Task { [weak self] in
+            guard let self else { return }
+            let state = await self.importantNotificationCenter.authorizationState()
+            guard !Task.isCancelled else { return }
+            self.notificationAuthorizationState = state
+            self.notificationTask = nil
+        }
+    }
+
+    private func postImportantNotification(for report: WorkflowReport, planID: UUID) async {
+        guard configuration.notifications.importantEventsEnabled else { return }
+        let state = await importantNotificationCenter.authorizationState()
+        notificationAuthorizationState = state
+        guard state.canDeliver else { return }
+        _ = try? await importantNotificationCenter.post(
+            report: report,
+            planID: planID
+        )
     }
 
     func refreshMAAStatus(showResult: Bool = false) {

@@ -658,16 +658,19 @@ public final class WorkflowRunner {
             case let .highRarity(level, tags):
                 return WorkflowNotice(
                     message: "\(accountText(account))：公招发现 \(level)★ 组合，请前往游戏确认",
-                    details: "识别标签：\(tags.joined(separator: "、"))"
+                    details: "识别标签：\(tags.joined(separator: "、"))",
+                    kind: .highRarityRecruit(level: level)
                 )
             case let .preservedTag(tag, tags):
                 return WorkflowNotice(
                     message: "\(accountText(account))：公招命中保留标签「\(tag)」，已跳过该槽位",
-                    details: "识别标签：\(tags.joined(separator: "、"))"
+                    details: "识别标签：\(tags.joined(separator: "、"))",
+                    kind: .preservedRecruitTag
                 )
             case let .specialTag(tag):
                 return WorkflowNotice(
-                    message: "\(accountText(account))：公招发现特殊标签「\(tag)」，请前往游戏确认"
+                    message: "\(accountText(account))：公招发现特殊标签「\(tag)」，请前往游戏确认",
+                    kind: .specialRecruitTag
                 )
             }
         }

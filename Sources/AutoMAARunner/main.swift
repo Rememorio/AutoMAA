@@ -18,6 +18,16 @@ enum AutoMAARunnerMain {
                 fflush(stdout)
             }
             let report = await runner.run(configuration, planID: planID, resumeToday: true)
+            if configuration.notifications.importantEventsEnabled {
+                do {
+                    try await ImportantNotificationCenter().post(
+                        report: report,
+                        planID: planID
+                    )
+                } catch {
+                    fputs("AutoMAA Runner: 重要通知投递失败：\(error.localizedDescription)\n", stderr)
+                }
+            }
             exit(report.isSuccess ? EXIT_SUCCESS : EXIT_FAILURE)
         } catch {
             fputs("AutoMAA Runner: \(error.localizedDescription)\n", stderr)

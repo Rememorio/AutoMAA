@@ -28,6 +28,8 @@ AutoMAA 的用户数据保存在：
 | `MAA/profiles/` | AutoMAA 生成的独立 MAA Profile |
 | `MAA/tasks/` | AutoMAA 按方案、客户端和账号生成的任务文件 |
 
+`config.json` 中的 `notifications.importantEventsEnabled` 记录用户是否希望接收重要通知。它不代表 macOS 已经授权；系统权限仍由“系统设置 → 通知 → AutoMAA”独立控制。旧的 schema v4 配置缺少该字段时按关闭处理，不会重置或改写其他配置。
+
 ## 哪些文件可以编辑
 
 优先在 AutoMAA 界面修改配置。`MAA/` 中的文件会在保存配置时重新生成，不应手工编辑。
