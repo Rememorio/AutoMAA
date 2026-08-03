@@ -162,7 +162,6 @@ final class AutoMAAKitTests: XCTestCase {
         ])
         XCTAssertEqual(ClientKind.txwy.maaTaskClientType, "txwy")
         XCTAssertEqual(ClientKind.yoStarEN.serverCode, "US")
-        XCTAssertEqual(ClientKind.txwy.resourceName, "txwy")
         XCTAssertEqual(ClientKind.official.maaAccountSelector(from: " 1234 "), "1234")
         XCTAssertNil(ClientKind.yoStarJP.maaAccountSelector(from: "private-fragment"))
     }
@@ -592,18 +591,37 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertFalse(manager.isInstalled(planID: plan.id))
     }
 
-    func testGeneratedProfilesUseServerResources() throws {
+    func testGeneratedTasksSelectServerResources() throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let config = populatedConfiguration()
+        let writer = MAAConfigurationWriter(directories: AppDirectories(root: root))
 
-        try MAAConfigurationWriter(directories: AppDirectories(root: root)).prepare(config)
+        try writer.prepare(config)
 
         let first = try String(contentsOf: root.appending(path: "MAA/profiles/client-1.toml"), encoding: .utf8)
         let second = try String(contentsOf: root.appending(path: "MAA/profiles/client-2.toml"), encoding: .utf8)
         XCTAssertTrue(first.contains("preset = \"PlayCover\""))
         XCTAssertFalse(first.contains("global_resource"))
-        XCTAssertTrue(second.contains("global_resource = \"YoStarJP\""))
+        XCTAssertFalse(second.contains("global_resource"))
+
+        for (client, expectedClientType) in zip(config.clients, ["Official", "YoStarJP"]) {
+            for plan in config.plans {
+                for account in client.accounts {
+                    for task in TaskKind.allCases {
+                        let name = writer.taskName(
+                            planID: plan.id,
+                            clientID: client.id,
+                            accountID: account.id,
+                            task: task
+                        )
+                        let data = try Data(contentsOf: root.appending(path: "MAA/tasks/\(name).json"))
+                        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+                        XCTAssertEqual(payload["client_type"] as? String, expectedClientType)
+                    }
+                }
+            }
+        }
     }
 
     func testGeneratedProfileEscapesTOMLControlCharacters() throws {

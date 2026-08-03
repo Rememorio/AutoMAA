@@ -36,16 +36,6 @@ public enum ClientKind: String, Codable, CaseIterable, Identifiable, Sendable {
         self == .txwy ? "txwy" : maaClientType
     }
 
-    public var resourceName: String? {
-        switch self {
-        case .official, .bilibili: nil
-        case .txwy: "txwy"
-        case .yoStarEN: "YoStarEN"
-        case .yoStarJP: "YoStarJP"
-        case .yoStarKR: "YoStarKR"
-        }
-    }
-
     public var serverCode: String {
         switch self {
         case .official, .bilibili, .txwy: "CN"

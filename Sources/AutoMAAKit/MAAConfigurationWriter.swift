@@ -52,17 +52,12 @@ public struct MAAConfigurationWriter: Sendable {
     }
 
     private func writeProfile(for client: ClientConfiguration) throws {
-        var lines = [
+        let lines = [
             "[connection]",
             "preset = \"PlayCover\"",
             "address = \"\(escaped(client.address))\"",
+            "",
         ]
-        if let globalResource = client.kind.resourceName {
-            lines.append("")
-            lines.append("[resource]")
-            lines.append("global_resource = \"\(globalResource)\"")
-        }
-        lines.append("")
         let url = directories.maaConfig
             .appending(path: "profiles")
             .appending(path: "\(safeName(client.profileName)).toml")
@@ -226,6 +221,7 @@ public struct MAAConfigurationWriter: Sendable {
         }
 
         let payload: [String: Any] = [
+            "client_type": client.kind.maaClientType,
             "tasks": [[
                 "name": task.title,
                 "type": maaTaskType(task),
