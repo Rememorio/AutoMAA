@@ -275,6 +275,14 @@ public enum ConfigurationValidator {
         }
         if !(0...1).contains(value.threshold) {
             result.append(.init(id: "\(prefix)-threshold", severity: .error, message: "「\(name)」的基建心情阈值必须在 0 到 1 之间"))
+        } else if value.mode == .fullShift,
+                  value.threshold < InfrastConfiguration.dailyFullShiftThreshold {
+            let percentage = Int((value.threshold * 100).rounded())
+            result.append(.init(
+                id: "\(prefix)-threshold-fatigue-risk",
+                severity: .warning,
+                message: "「\(name)」的上岗最低心情为 \(percentage)%；阈值只在换班时筛选候选干员，每天一次完整换班建议使用 90%，否则干员可能在下次换班前疲劳"
+            ))
         }
         if value.customSchedulePlanIndex < 0 {
             result.append(.init(id: "\(prefix)-plan-index", severity: .error, message: "「\(name)」的基建排班方案序号不能为负数"))

@@ -15,6 +15,7 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertEqual(config.plans[0].schedule.minute, 0)
         XCTAssertEqual(config.plans[1].name, "完整日常")
         XCTAssertEqual(config.plans[1].infrast.mode, .fullShift)
+        XCTAssertEqual(config.plans[1].infrast.threshold, 0.9)
         XCTAssertTrue(config.plans[1].mall.enabled)
         XCTAssertEqual(config.plans[1].schedule.hour, 21)
         XCTAssertEqual(config.plans[1].schedule.minute, 0)
@@ -238,6 +239,7 @@ final class AutoMAAKitTests: XCTestCase {
         let infrast = try generatedParams(.infrast, plan: plan, client: client, account: account, writer: writer, root: root)
         XCTAssertEqual(infrast["mode"] as? Int, 0)
         XCTAssertEqual((infrast["facility"] as? [String])?.count, 9)
+        XCTAssertEqual(infrast["threshold"] as? Double, 0.3)
 
         let mall = try generatedParams(.mall, plan: plan, client: client, account: account, writer: writer, root: root)
         XCTAssertEqual(mall["visit_friends"] as? Bool, true)
@@ -261,6 +263,24 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertEqual(light["drones"] as? String, "Money")
         XCTAssertEqual(complete["mode"] as? Int, 0)
         XCTAssertEqual((complete["facility"] as? [String])?.count, 9)
+        XCTAssertEqual(complete["threshold"] as? Double, 0.9)
+    }
+
+    func testLowFullShiftThresholdProducesNonBlockingFatigueWarning() {
+        var config = populatedConfiguration()
+        config.plans[1].infrast.threshold = 0.3
+
+        let problems = ConfigurationValidator.structuralProblems(in: config)
+        let warning = problems.first { $0.id.contains("threshold-fatigue-risk") }
+
+        XCTAssertEqual(warning?.severity, .warning)
+        XCTAssertTrue(warning?.message.contains("上岗最低心情为 30%") == true)
+        XCTAssertFalse(problems.contains { $0.severity == .error && $0.id.contains("threshold") })
+
+        config.plans[1].infrast.threshold = 0.9
+        XCTAssertFalse(ConfigurationValidator.structuralProblems(in: config).contains {
+            $0.id.contains("threshold-fatigue-risk")
+        })
     }
 
     func testMallParametersMatchCurrentMAAProtocol() throws {

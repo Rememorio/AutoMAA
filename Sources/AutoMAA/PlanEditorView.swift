@@ -287,8 +287,11 @@ struct PlanEditorView: View {
                 }
                 if plan.infrast.mode == .fullShift {
                     Divider()
-                    Text("换班心情阈值：\(Int(plan.infrast.threshold * 100))%")
+                    Text("上岗最低心情：\(Int(plan.infrast.threshold * 100))%")
                     Slider(value: $plan.infrast.threshold, in: 0...1, step: 0.05)
+                    Text("仅筛选本次换班时的候选干员，不会在心情降到该值时自动换班。每天完整换班一次建议 90%；降低阈值会增加可选干员，但可能在下次换班前疲劳。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Toggle("宿舍空位补信赖未满干员", isOn: $plan.infrast.dormTrust)
                     Toggle("不将已进驻干员放入宿舍", isOn: $plan.infrast.dormNotStationed)
                     Toggle("源石碎片自动补货", isOn: $plan.infrast.replenish)
@@ -583,7 +586,7 @@ private struct PlanTaskCard<Content: View>: View {
         switch task {
         case .fight: "MAA 推荐默认：当前/上次关卡，不使用理智药或源石，不限制次数。"
         case .recruit: "MAA 推荐默认：4 次、不加急，自动确认 3★/4★/5★并保留支援机械。"
-        case .infrast: "MAA 推荐默认：对全部设施执行常规换班，不使用无人机。"
+        case .infrast: "MAA 推荐默认：对全部设施执行常规换班，不使用无人机，上岗最低心情为 30%。"
         case .mall: "MAA 推荐默认：访友领信用并按推荐清单购物。"
         case .award: "MAA 推荐默认：只领取每日与每周任务奖励。"
         }

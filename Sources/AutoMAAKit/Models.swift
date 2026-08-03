@@ -294,12 +294,15 @@ public struct RecruitConfiguration: Codable, Equatable, Sendable {
 }
 
 public struct InfrastConfiguration: Codable, Equatable, Sendable {
+    public static let maaDefaultThreshold = 0.3
+    public static let dailyFullShiftThreshold = 0.9
+
     public var enabled = true
     public var settingsMode = TaskSettingsMode.custom
     public var mode = InfrastMode.collectOnly
     public var facilities: [InfrastFacility] = [.manufacturing, .trading, .reception]
     public var drones = DroneUsage.money
-    public var threshold = 0.3
+    public var threshold = InfrastConfiguration.dailyFullShiftThreshold
     public var replenish = false
     public var dormNotStationed = false
     public var dormTrust = false

@@ -165,7 +165,7 @@ public struct MAAConfigurationWriter: Sendable {
                         "Office", "Dorm", "Processing", "Training",
                     ],
                     "drones": "_NotUse",
-                    "threshold": 0.3,
+                    "threshold": InfrastConfiguration.maaDefaultThreshold,
                     "replenish": false,
                     "dorm_notstationed_enabled": false,
                     "dorm_trust_enabled": false,
