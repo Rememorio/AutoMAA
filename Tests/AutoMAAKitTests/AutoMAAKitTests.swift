@@ -2,6 +2,57 @@ import Foundation
 import XCTest
 @testable import AutoMAAKit
 
+private extension ClientShutdownPolicy {
+    static let immediate = ClientShutdownPolicy(
+        maaGracePeriod: 0,
+        systemGracePeriod: 0,
+        forcedGracePeriod: 0
+    )
+}
+
+@MainActor
+private final class StubClientRuntime: PortProbing, GameProcessControlling {
+    var isClientRunning = true
+    var isPortOpen = true
+    let closesOnForce: Bool
+    private(set) var terminationRequests: [Bool] = []
+    private(set) var events: [RunnerEvent] = []
+
+    init(closesOnForce: Bool) {
+        self.closesOnForce = closesOnForce
+    }
+
+    func isOpen(_ value: String, observeCancellation: Bool) async -> Bool {
+        isPortOpen
+    }
+
+    func wait(
+        forOpen shouldBeOpen: Bool,
+        address: String,
+        timeout: TimeInterval,
+        observeCancellation: Bool
+    ) async -> Bool {
+        isPortOpen == shouldBeOpen
+    }
+
+    func isRunning(_ client: ClientConfiguration) -> Bool {
+        isClientRunning
+    }
+
+    func terminate(_ client: ClientConfiguration, force: Bool) -> Bool {
+        terminationRequests.append(force)
+        if force, closesOnForce {
+            isClientRunning = false
+            isPortOpen = false
+        }
+        return true
+    }
+
+    func record(_ event: RunnerEvent) {
+        events.append(event)
+    }
+}
+
 final class AutoMAAKitTests: XCTestCase {
     func testFirstLaunchUsesBlankIdentitiesAndTwoEditableRoutineTemplates() {
         let config = AppConfiguration.defaults
@@ -162,6 +213,73 @@ final class AutoMAAKitTests: XCTestCase {
             bundleURL: root.appending(path: "Applications/other.app"),
             executableURL: root.appending(path: "Applications/other.app/Other")
         ))
+    }
+
+    @MainActor
+    func testConfirmedFallbackShutdownIsReportedAsSuccess() async throws {
+        let (report, runtime) = try await runShutdownScenario(
+            closesOnForce: true,
+            address: "127.0.0.1:65490",
+            clientName: "测试客户端"
+        )
+
+        XCTAssertTrue(report.isSuccess)
+        XCTAssertEqual(runtime.terminationRequests, [false, true])
+        let closingEvents = runtime.events.filter { $0.phase == .closing }
+        let completion = try XCTUnwrap(closingEvents.last)
+        XCTAssertEqual(completion.log.level, .success)
+        XCTAssertEqual(completion.message, "客户端「测试客户端」已关闭，MaaTools 连接已释放")
+        XCTAssertEqual(completion.log.details, "客户端未响应常规退出请求，已由 macOS 完成进程清理。")
+        XCTAssertFalse(closingEvents.contains { $0.log.level == .warning })
+    }
+
+    @MainActor
+    func testShutdownStillFailsWhenProcessOrPortCannotBeReleased() async throws {
+        let (report, runtime) = try await runShutdownScenario(
+            closesOnForce: false,
+            address: "127.0.0.1:65491",
+            clientName: "无法关闭的客户端"
+        )
+
+        XCTAssertEqual(runtime.terminationRequests, [false, true])
+        XCTAssertEqual(report.fatalError, "客户端关闭后端口 127.0.0.1:65491 仍未释放")
+        XCTAssertTrue(runtime.events.contains { $0.phase == .failed && $0.log.level == .error })
+    }
+
+    @MainActor
+    private func runShutdownScenario(
+        closesOnForce: Bool,
+        address: String,
+        clientName: String
+    ) async throws -> (WorkflowReport, StubClientRuntime) {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = root.appending(path: "Applications/Test Game.app", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        let account = AccountConfiguration(name: "测试账号")
+        let client = ClientConfiguration(
+            name: clientName,
+            kind: .official,
+            appPath: app.path,
+            address: address,
+            profileName: "shutdown-test",
+            bundleIdentifier: "dev.automaa.tests.shutdown",
+            accounts: [account]
+        )
+        var plan = AutomationPlan.lightRoutine
+        plan.policy.hotUpdateBeforeRun = false
+        let configuration = AppConfiguration(cliPath: "/usr/bin/true", clients: [client], plans: [plan])
+        let runtime = StubClientRuntime(closesOnForce: closesOnForce)
+        let runner = WorkflowRunner(
+            directories: AppDirectories(root: root),
+            portProbe: runtime,
+            gameController: runtime,
+            shutdownPolicy: .immediate,
+            eventSink: runtime.record
+        )
+
+        let report = await runner.run(configuration, planID: plan.id, resumeToday: false)
+        return (report, runtime)
     }
 
     func testFightStagePresetsMatchCurrentMAANavigationProtocol() {

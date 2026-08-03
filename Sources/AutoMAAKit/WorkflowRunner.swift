@@ -19,14 +19,27 @@ private struct TaskRunOutcome {
     let notices: [WorkflowNotice]
 }
 
+struct ClientShutdownPolicy: Sendable, Equatable {
+    let maaGracePeriod: TimeInterval
+    let systemGracePeriod: TimeInterval
+    let forcedGracePeriod: TimeInterval
+
+    static let playCover = ClientShutdownPolicy(
+        maaGracePeriod: 5,
+        systemGracePeriod: 5,
+        forcedGracePeriod: 8
+    )
+}
+
 @MainActor
 public final class WorkflowRunner {
     public typealias EventSink = @MainActor @Sendable (RunnerEvent) -> Void
 
     private let directories: AppDirectories
     private let commandRunner = CommandRunner()
-    private let portProbe = PortProbe()
-    private let gameController = GameProcessController()
+    private let portProbe: any PortProbing
+    private let gameController: any GameProcessControlling
+    private let shutdownPolicy: ClientShutdownPolicy
     private let historyStore: HistoryStore
     private let diagnosticLogStore: DiagnosticLogStore
     private let stateStore: ExecutionStateStore
@@ -36,11 +49,30 @@ public final class WorkflowRunner {
     private var currentSensitiveValues: [String] = []
     private var runProgress = MonotonicProgress()
 
-    public init(
+    public convenience init(
         directories: AppDirectories = .init(),
         eventSink: @escaping EventSink = { _ in }
     ) {
+        self.init(
+            directories: directories,
+            portProbe: PortProbe(),
+            gameController: GameProcessController(),
+            shutdownPolicy: .playCover,
+            eventSink: eventSink
+        )
+    }
+
+    init(
+        directories: AppDirectories,
+        portProbe: any PortProbing,
+        gameController: any GameProcessControlling,
+        shutdownPolicy: ClientShutdownPolicy,
+        eventSink: @escaping EventSink = { _ in }
+    ) {
         self.directories = directories
+        self.portProbe = portProbe
+        self.gameController = gameController
+        self.shutdownPolicy = shutdownPolicy
         historyStore = HistoryStore(directories: directories)
         diagnosticLogStore = DiagnosticLogStore(directories: directories)
         stateStore = ExecutionStateStore(directories: directories)
@@ -686,26 +718,40 @@ public final class WorkflowRunner {
                 timeout: 60,
                 ignoreCancellation: true
             )
-            if await waitUntilClosed(client, timeout: 20) {
-                emit(.closing, "\(clientText(client))已关闭，MaaTools 连接已释放", 0, .success, client: client)
+            if await waitUntilClosed(client, timeout: shutdownPolicy.maaGracePeriod) {
+                emitClientClosed(client)
                 return
             }
         } else if !portIsOpen, !gameController.isRunning(client) {
-            emit(.closing, "\(clientText(client))已关闭，MaaTools 连接已释放", 0, .success, client: client)
+            emitClientClosed(client)
             return
         }
 
         _ = gameController.terminate(client, force: false)
-        if await waitUntilClosed(client, timeout: 10) {
-            emit(.closing, "\(clientText(client))已由系统正常关闭", 0, .success, client: client)
+        if await waitUntilClosed(client, timeout: shutdownPolicy.systemGracePeriod) {
+            emitClientClosed(client)
             return
         }
 
         _ = gameController.terminate(client, force: true)
-        guard await waitUntilClosed(client, timeout: 8) else {
+        guard await waitUntilClosed(client, timeout: shutdownPolicy.forcedGracePeriod) else {
             throw RuntimeError.portReleaseTimeout(client.address)
         }
-        emit(.closing, "\(clientText(client))已强制关闭，MaaTools 连接已释放", 0, .warning, client: client)
+        emitClientClosed(
+            client,
+            details: "客户端未响应常规退出请求，已由 macOS 完成进程清理。"
+        )
+    }
+
+    private func emitClientClosed(_ client: ClientConfiguration, details: String? = nil) {
+        emit(
+            .closing,
+            "\(clientText(client))已关闭，MaaTools 连接已释放",
+            0,
+            .success,
+            client: client,
+            details: details
+        )
     }
 
     private func waitUntilClosed(_ client: ClientConfiguration, timeout: TimeInterval) async -> Bool {

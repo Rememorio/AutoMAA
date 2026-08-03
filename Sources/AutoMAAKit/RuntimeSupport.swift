@@ -260,6 +260,42 @@ public struct PortProbe: Sendable {
 }
 
 @MainActor
+protocol PortProbing {
+    func isOpen(_ value: String, observeCancellation: Bool) async -> Bool
+    func wait(
+        forOpen shouldBeOpen: Bool,
+        address: String,
+        timeout: TimeInterval,
+        observeCancellation: Bool
+    ) async -> Bool
+}
+
+extension PortProbing {
+    func isOpen(_ value: String) async -> Bool {
+        await isOpen(value, observeCancellation: true)
+    }
+
+    func wait(forOpen shouldBeOpen: Bool, address: String, timeout: TimeInterval) async -> Bool {
+        await wait(
+            forOpen: shouldBeOpen,
+            address: address,
+            timeout: timeout,
+            observeCancellation: true
+        )
+    }
+}
+
+extension PortProbe: PortProbing {}
+
+@MainActor
+protocol GameProcessControlling {
+    func isRunning(_ client: ClientConfiguration) -> Bool
+
+    @discardableResult
+    func terminate(_ client: ClientConfiguration, force: Bool) -> Bool
+}
+
+@MainActor
 public struct GameProcessController {
     public init() {}
 
@@ -298,3 +334,5 @@ public struct GameProcessController {
         url.standardizedFileURL.resolvingSymlinksInPath().path
     }
 }
+
+extension GameProcessController: GameProcessControlling {}
