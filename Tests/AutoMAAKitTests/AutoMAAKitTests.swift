@@ -71,6 +71,7 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertEqual(config.plans[1].schedule.hour, 21)
         XCTAssertEqual(config.plans[1].schedule.minute, 0)
         XCTAssertFalse(config.notifications.importantEventsEnabled)
+        XCTAssertFalse(config.applicationUpdates.automaticallyDownloadsUpdates)
     }
 
     func testConfigurationWithoutNotificationSettingsUsesDisabledDefault() throws {
@@ -82,6 +83,19 @@ final class AutoMAAKitTests: XCTestCase {
         let decoded = try JSONDecoder().decode(AppConfiguration.self, from: legacyData)
 
         XCTAssertFalse(decoded.notifications.importantEventsEnabled)
+    }
+
+    func testConfigurationWithoutApplicationUpdateSettingsUsesManualDownloadDefault() throws {
+        var config = populatedConfiguration()
+        config.applicationUpdates.automaticallyDownloadsUpdates = true
+        let data = try JSONEncoder().encode(config)
+        var payload = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        payload.removeValue(forKey: "applicationUpdates")
+
+        let legacyData = try JSONSerialization.data(withJSONObject: payload)
+        let decoded = try JSONDecoder().decode(AppConfiguration.self, from: legacyData)
+
+        XCTAssertFalse(decoded.applicationUpdates.automaticallyDownloadsUpdates)
     }
 
     func testDisplayNamesTrimWhitespaceAndProvideContextualFallbacks() {

@@ -16,6 +16,13 @@ enum AutoMAAUpdaterMain {
         let resultStore = SoftwareUpdateResultStore(url: arguments.resultURL)
         do {
             try await waitForExit(pid: arguments.parentPID)
+            let workflowLock: ProcessLock
+            do {
+                workflowLock = try ProcessLock(url: arguments.lockURL)
+            } catch {
+                throw SoftwareUpdateError.workflowRunning
+            }
+            _ = workflowLock
             try await SoftwareUpdateInstaller().install(
                 SoftwareUpdateInstallationRequest(
                     currentApplicationURL: arguments.currentApplicationURL,
@@ -76,6 +83,7 @@ private struct UpdaterArguments {
     let stagedApplicationURL: URL
     let expectedVersion: String
     let resultURL: URL
+    let lockURL: URL
     let relaunch: Bool
 
     init(_ arguments: [String]) throws {
@@ -90,7 +98,8 @@ private struct UpdaterArguments {
               let stagedPath = value(after: "--new-app"),
               let expectedVersion = value(after: "--expected-version"),
               SoftwareVersion(expectedVersion) != nil,
-              let resultPath = value(after: "--result")
+              let resultPath = value(after: "--result"),
+              let lockPath = value(after: "--lock")
         else {
             throw SoftwareUpdateError.invalidApplication("更新辅助程序参数不完整")
         }
@@ -99,6 +108,7 @@ private struct UpdaterArguments {
         stagedApplicationURL = URL(filePath: stagedPath).standardizedFileURL
         self.expectedVersion = expectedVersion
         resultURL = URL(filePath: resultPath).standardizedFileURL
+        lockURL = URL(filePath: lockPath).standardizedFileURL
         relaunch = !arguments.contains("--no-relaunch")
     }
 }

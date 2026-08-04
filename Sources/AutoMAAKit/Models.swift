@@ -538,6 +538,14 @@ public struct NotificationConfiguration: Codable, Equatable, Sendable {
     }
 }
 
+public struct ApplicationUpdateConfiguration: Codable, Equatable, Sendable {
+    public var automaticallyDownloadsUpdates: Bool
+
+    public init(automaticallyDownloadsUpdates: Bool = false) {
+        self.automaticallyDownloadsUpdates = automaticallyDownloadsUpdates
+    }
+}
+
 public struct AppConfiguration: Codable, Equatable, Sendable {
     public static let currentSchemaVersion = 4
 
@@ -546,19 +554,22 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
     public var clients: [ClientConfiguration]
     public var plans: [AutomationPlan]
     public var notifications: NotificationConfiguration
+    public var applicationUpdates: ApplicationUpdateConfiguration
 
     public init(
         schemaVersion: Int = Self.currentSchemaVersion,
         cliPath: String = "/opt/homebrew/bin/maa",
         clients: [ClientConfiguration],
         plans: [AutomationPlan] = [.lightRoutine, .completeRoutine],
-        notifications: NotificationConfiguration = .init()
+        notifications: NotificationConfiguration = .init(),
+        applicationUpdates: ApplicationUpdateConfiguration = .init()
     ) {
         self.schemaVersion = schemaVersion
         self.cliPath = cliPath
         self.clients = clients
         self.plans = plans
         self.notifications = notifications
+        self.applicationUpdates = applicationUpdates
     }
 
     public static var defaults: AppConfiguration {
@@ -571,6 +582,7 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
         case clients
         case plans
         case notifications
+        case applicationUpdates
     }
 
     public init(from decoder: Decoder) throws {
@@ -580,6 +592,10 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
         clients = try container.decode([ClientConfiguration].self, forKey: .clients)
         plans = try container.decode([AutomationPlan].self, forKey: .plans)
         notifications = try container.decodeIfPresent(NotificationConfiguration.self, forKey: .notifications) ?? .init()
+        applicationUpdates = try container.decodeIfPresent(
+            ApplicationUpdateConfiguration.self,
+            forKey: .applicationUpdates
+        ) ?? .init()
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -589,6 +605,7 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
         try container.encode(clients, forKey: .clients)
         try container.encode(plans, forKey: .plans)
         try container.encode(notifications, forKey: .notifications)
+        try container.encode(applicationUpdates, forKey: .applicationUpdates)
     }
 }
 

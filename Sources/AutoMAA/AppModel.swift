@@ -53,6 +53,13 @@ enum ApplicationUpdateState {
         default: false
         }
     }
+
+    var blocksWorkflow: Bool {
+        switch self {
+        case .downloading, .installing: true
+        default: false
+        }
+    }
 }
 
 private enum ScheduleSynchronizationFeedback {
@@ -96,7 +103,7 @@ final class AppModel: ObservableObject {
     private let historyStore: HistoryStore
     private let executionStateStore: ExecutionStateStore
     private let launchAgentManager: LaunchAgentManager
-    private let softwareUpdateService: SoftwareUpdateService
+    private let softwareUpdateService: any SoftwareUpdateServing
     private let softwareUpdateResultStore: SoftwareUpdateResultStore
     private let importantNotificationCenter: ImportantNotificationCenter
     private let commandRunner = CommandRunner()
@@ -106,20 +113,25 @@ final class AppModel: ObservableObject {
     private var applicationUpdateTask: Task<Void, Never>?
     private var notificationTask: Task<Void, Never>?
     private var scheduleSynchronizationTask: Task<Void, Never>?
+    private var applicationUpdateInstallLock: ProcessLock?
     private var scheduleSynchronizationRevision = 0
     private var didPrepareApplication = false
     private let startupNotice: String?
     private let checksForUpdatesAutomatically: Bool
+    private let applicationUpdateAvailabilityValidator: (@MainActor () throws -> Void)?
 
     init(
         directories: AppDirectories = .init(),
         launchAgentsDirectory: URL? = nil,
         managesSystemLaunchAgents: Bool = true,
         checksForUpdatesAutomatically: Bool = true,
-        runnerExecutableURL: URL? = nil
+        runnerExecutableURL: URL? = nil,
+        softwareUpdateService: (any SoftwareUpdateServing)? = nil,
+        applicationUpdateAvailabilityValidator: (@MainActor () throws -> Void)? = nil
     ) {
         self.directories = directories
         self.checksForUpdatesAutomatically = checksForUpdatesAutomatically
+        self.applicationUpdateAvailabilityValidator = applicationUpdateAvailabilityValidator
         configuredRunnerExecutableURL = runnerExecutableURL
         configurationStore = ConfigurationStore(directories: directories)
         historyStore = HistoryStore(directories: directories)
@@ -135,7 +147,7 @@ final class AppModel: ObservableObject {
             ?? "local"
         applicationUpdateRepository = Bundle.main.object(forInfoDictionaryKey: "AutoMAAUpdateRepository") as? String
             ?? SoftwareUpdateService.defaultRepository
-        softwareUpdateService = SoftwareUpdateService(
+        self.softwareUpdateService = softwareUpdateService ?? SoftwareUpdateService(
             currentVersion: currentApplicationVersion,
             repository: applicationUpdateRepository
         )
@@ -249,7 +261,7 @@ final class AppModel: ObservableObject {
     func planRunState(planID: UUID?) -> PlanRunState {
         PlanRunState.resolve(
             planID: planID,
-            isRunning: isRunning,
+            isRunning: isRunning || applicationUpdateState.blocksWorkflow,
             runningPlanID: runningPlanID,
             hasReadinessError: readinessIssues(for: planID).contains { $0.severity == .error }
         )
@@ -387,6 +399,7 @@ final class AppModel: ObservableObject {
                 let suffix = report.notices.isEmpty ? "" : "，另有 \(report.notices.count) 项公招结果需要确认"
                 self.showBanner("流程完成，但有 \(report.failedSteps) 个步骤失败\(suffix)")
             }
+            self.resumeAutomaticApplicationUpdateIfNeeded()
         }
     }
 
@@ -399,7 +412,7 @@ final class AppModel: ObservableObject {
     }
 
     func hotUpdate() {
-        guard !isRunning else { return }
+        guard !isRunning, !applicationUpdateState.blocksWorkflow else { return }
         isRunning = true
         let runner = WorkflowRunner(directories: directories) { [weak self] event in
             self?.consume(event)
@@ -410,6 +423,7 @@ final class AppModel: ObservableObject {
             self.isRunning = false
             self.workflowTask = nil
             if Task.isCancelled { self.showBanner("资源更新已停止") }
+            self.resumeAutomaticApplicationUpdateIfNeeded()
         }
     }
 
@@ -429,7 +443,7 @@ final class AppModel: ObservableObject {
         }
         refreshMAAStatus()
         if checksForUpdatesAutomatically {
-            checkForApplicationUpdate(showResult: false)
+            restorePreparedApplicationUpdateOrCheck()
         }
     }
 
@@ -524,7 +538,7 @@ final class AppModel: ObservableObject {
     }
 
     func updateMAACore() {
-        guard !isRunning else { return }
+        guard !isRunning, !applicationUpdateState.blocksWorkflow else { return }
         guard FileManager.default.isExecutableFile(atPath: configuration.cliPath) else {
             showBanner("找不到可执行的 maa-cli")
             return
@@ -540,11 +554,77 @@ final class AppModel: ObservableObject {
             self.workflowTask = nil
             self.showBanner(self.statusMessage)
             self.refreshMAAStatus()
+            self.resumeAutomaticApplicationUpdateIfNeeded()
         }
     }
 
     private func synchronizeSchedules() {
         enqueueScheduleSynchronization(debounce: false)
+    }
+
+    private func restorePreparedApplicationUpdateOrCheck() {
+        guard !applicationUpdateState.isBusy else { return }
+        applicationUpdateState = .checking
+        applicationUpdateTask = Task { [weak self] in
+            guard let self else { return }
+            if let prepared = await self.softwareUpdateService.restorePreparedUpdate(directories: self.directories) {
+                self.applicationUpdateState = .ready(prepared)
+            } else {
+                await self.performApplicationUpdateCheck(showResult: false)
+            }
+            self.applicationUpdateTask = nil
+            self.resumeAutomaticApplicationUpdateIfNeeded()
+        }
+    }
+
+    private func performApplicationUpdateCheck(showResult: Bool) async {
+        do {
+            if let release = try await softwareUpdateService.check() {
+                applicationUpdateState = .available(release)
+                if configuration.applicationUpdates.automaticallyDownloadsUpdates {
+                    if isRunning {
+                        showBanner("发现 AutoMAA v\(release.version)，将在当前流程结束后自动下载")
+                    } else {
+                        showBanner("发现 AutoMAA v\(release.version)，正在自动下载并校验")
+                        await prepareApplicationUpdate(release)
+                    }
+                } else {
+                    showBanner("发现 AutoMAA v\(release.version)，可在全局设置中更新")
+                }
+            } else {
+                applicationUpdateState = .upToDate
+                if showResult { showBanner("AutoMAA 已是最新版本") }
+            }
+        } catch is CancellationError {
+            applicationUpdateState = .idle
+        } catch {
+            applicationUpdateState = showResult ? .failed(error.localizedDescription) : .idle
+            if showResult { showBanner("检查更新失败：\(error.localizedDescription)") }
+        }
+    }
+
+    private func prepareApplicationUpdate(_ release: SoftwareUpdateRelease) async {
+        do {
+            try validateAutomaticUpdateAvailability()
+            applicationUpdateState = .downloading(release)
+            let prepared = try await softwareUpdateService.prepare(release, directories: directories)
+            applicationUpdateState = .ready(prepared)
+            showBanner("v\(release.version) 已下载并通过校验，可以重启更新")
+        } catch is CancellationError {
+            applicationUpdateState = .available(release)
+        } catch {
+            applicationUpdateState = .failed(error.localizedDescription)
+            showBanner("下载更新失败：\(error.localizedDescription)")
+        }
+    }
+
+    private func resumeAutomaticApplicationUpdateIfNeeded() {
+        guard configuration.applicationUpdates.automaticallyDownloadsUpdates,
+              !isRunning,
+              applicationUpdateTask == nil,
+              case let .available(release) = applicationUpdateState
+        else { return }
+        downloadApplicationUpdate(release)
     }
 
     func checkForApplicationUpdate(showResult: Bool = true) {
@@ -553,22 +633,16 @@ final class AppModel: ObservableObject {
         applicationUpdateState = .checking
         applicationUpdateTask = Task { [weak self] in
             guard let self else { return }
-            do {
-                if let release = try await self.softwareUpdateService.check() {
-                    self.applicationUpdateState = .available(release)
-                    self.showBanner("发现 AutoMAA v\(release.version)，可在全局设置中更新")
-                } else {
-                    self.applicationUpdateState = .upToDate
-                    if showResult { self.showBanner("AutoMAA 已是最新版本") }
-                }
-            } catch is CancellationError {
-                self.applicationUpdateState = .idle
-            } catch {
-                self.applicationUpdateState = showResult ? .failed(error.localizedDescription) : .idle
-                if showResult { self.showBanner("检查更新失败：\(error.localizedDescription)") }
-            }
+            await self.performApplicationUpdateCheck(showResult: showResult)
             self.applicationUpdateTask = nil
+            self.resumeAutomaticApplicationUpdateIfNeeded()
         }
+    }
+
+    func setAutomaticApplicationUpdatesEnabled(_ enabled: Bool) {
+        configuration.applicationUpdates.automaticallyDownloadsUpdates = enabled
+        scheduleSave()
+        if enabled { resumeAutomaticApplicationUpdateIfNeeded() }
     }
 
     func copySupportDiagnostics() {
@@ -583,28 +657,17 @@ final class AppModel: ObservableObject {
 
     func downloadApplicationUpdate(_ release: SoftwareUpdateRelease) {
         guard !isRunning, !applicationUpdateState.isBusy else { return }
-        do {
-            try validateAutomaticUpdateAvailability()
-        } catch {
-            applicationUpdateState = .failed(error.localizedDescription)
-            showBanner(error.localizedDescription)
-            return
-        }
-        applicationUpdateState = .downloading(release)
+        applicationUpdateTask?.cancel()
         applicationUpdateTask = Task { [weak self] in
             guard let self else { return }
-            do {
-                let prepared = try await self.softwareUpdateService.prepare(release, directories: self.directories)
-                self.applicationUpdateState = .ready(prepared)
-                self.showBanner("v\(release.version) 已下载并通过校验，可以重启更新")
-            } catch is CancellationError {
-                self.applicationUpdateState = .available(release)
-            } catch {
-                self.applicationUpdateState = .failed(error.localizedDescription)
-                self.showBanner("下载更新失败：\(error.localizedDescription)")
-            }
+            await self.prepareApplicationUpdate(release)
             self.applicationUpdateTask = nil
         }
+    }
+
+    func cancelApplicationUpdateDownload() {
+        guard case .downloading = applicationUpdateState else { return }
+        applicationUpdateTask?.cancel()
     }
 
     func restartAndInstallApplicationUpdate(_ prepared: PreparedSoftwareUpdate) {
@@ -612,6 +675,11 @@ final class AppModel: ObservableObject {
         do {
             saveNow(showConfirmation: false)
             try validateAutomaticUpdateAvailability()
+            do {
+                applicationUpdateInstallLock = try ProcessLock(url: directories.lock)
+            } catch {
+                throw SoftwareUpdateError.workflowRunning
+            }
             let helperSource = bundledUpdaterURL
             guard FileManager.default.isExecutableFile(atPath: helperSource.path) else {
                 throw SoftwareUpdateError.installerUnavailable
@@ -634,6 +702,7 @@ final class AppModel: ObservableObject {
                 "--new-app", prepared.applicationURL.path,
                 "--expected-version", prepared.release.version.description,
                 "--result", softwareUpdateResultStore.url.path,
+                "--lock", directories.lock.path,
             ]
             process.standardOutput = logHandle
             process.standardError = logHandle
@@ -647,6 +716,7 @@ final class AppModel: ObservableObject {
             applicationUpdateState = .installing(prepared.release)
             NSApplication.shared.terminate(nil)
         } catch {
+            applicationUpdateInstallLock = nil
             applicationUpdateState = .failed(error.localizedDescription)
             showBanner("无法开始更新：\(error.localizedDescription)")
         }
@@ -907,6 +977,10 @@ final class AppModel: ObservableObject {
     }
 
     private func validateAutomaticUpdateAvailability() throws {
+        if let applicationUpdateAvailabilityValidator {
+            try applicationUpdateAvailabilityValidator()
+            return
+        }
         try SoftwareUpdateInstaller.validateInstallLocation(Bundle.main.bundleURL)
         guard FileManager.default.isExecutableFile(atPath: bundledUpdaterURL.path) else {
             throw SoftwareUpdateError.installerUnavailable

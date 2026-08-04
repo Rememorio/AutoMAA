@@ -86,6 +86,47 @@ final class SoftwareUpdateTests: XCTestCase {
         XCTAssertNil(store.loadAndClear())
     }
 
+    func testPreparedUpdateStoreRoundTripsOnlyInsideUpdatesDirectory() throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        let release = try XCTUnwrap(
+            SoftwareUpdateReleaseResolver.newerRelease(from: releaseJSON(version: "0.2.0"), currentVersion: "0.1.1")
+        )
+        let workingDirectory = root
+            .appending(path: "Updates", directoryHint: .isDirectory)
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let applicationURL = workingDirectory.appending(path: "AutoMAA.app", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: applicationURL, withIntermediateDirectories: true)
+        let prepared = PreparedSoftwareUpdate(
+            release: release,
+            applicationURL: applicationURL,
+            workingDirectory: workingDirectory
+        )
+        let store = PreparedSoftwareUpdateStore(directories: directories)
+
+        try store.save(prepared)
+
+        XCTAssertEqual(try store.load(), prepared)
+    }
+
+    func testPreparedUpdateStoreRejectsWorkingDirectoryOutsideUpdatesRoot() throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        let release = try XCTUnwrap(
+            SoftwareUpdateReleaseResolver.newerRelease(from: releaseJSON(version: "0.2.0"), currentVersion: "0.1.1")
+        )
+        let workingDirectory = root.appending(path: "Outside", directoryHint: .isDirectory)
+        let prepared = PreparedSoftwareUpdate(
+            release: release,
+            applicationURL: workingDirectory.appending(path: "AutoMAA.app", directoryHint: .isDirectory),
+            workingDirectory: workingDirectory
+        )
+
+        XCTAssertThrowsError(try PreparedSoftwareUpdateStore(directories: directories).save(prepared))
+    }
+
     private func releaseJSON(version: String, host: String = "github.com") -> Data {
         Data(
             """

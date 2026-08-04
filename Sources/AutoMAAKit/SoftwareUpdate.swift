@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-public struct SoftwareVersion: Comparable, CustomStringConvertible, Sendable {
+public struct SoftwareVersion: Codable, Comparable, CustomStringConvertible, Sendable {
     public let major: Int
     public let minor: Int
     public let patch: Int
@@ -33,7 +33,7 @@ public struct SoftwareVersion: Comparable, CustomStringConvertible, Sendable {
     }
 }
 
-public struct SoftwareUpdateAsset: Equatable, Sendable {
+public struct SoftwareUpdateAsset: Codable, Equatable, Sendable {
     public let name: String
     public let size: Int
     public let downloadURL: URL
@@ -45,7 +45,7 @@ public struct SoftwareUpdateAsset: Equatable, Sendable {
     }
 }
 
-public struct SoftwareUpdateRelease: Equatable, Sendable {
+public struct SoftwareUpdateRelease: Codable, Equatable, Sendable {
     public let version: SoftwareVersion
     public let tagName: String
     public let releaseNotes: String
@@ -82,6 +82,86 @@ public struct PreparedSoftwareUpdate: Equatable, Sendable {
     }
 }
 
+public struct PreparedSoftwareUpdateStore: Sendable {
+    private struct Manifest: Codable {
+        let release: SoftwareUpdateRelease
+        let workingDirectoryName: String
+    }
+
+    public let directories: AppDirectories
+
+    public init(directories: AppDirectories) {
+        self.directories = directories
+    }
+
+    public func save(_ prepared: PreparedSoftwareUpdate) throws {
+        try SoftwareUpdateReleaseResolver.validate(prepared.release)
+        try directories.prepare()
+        try FileManager.default.createDirectory(at: updatesRoot, withIntermediateDirectories: true)
+        let workingDirectory = prepared.workingDirectory.standardizedFileURL
+        guard workingDirectory.deletingLastPathComponent() == updatesRoot,
+              prepared.applicationURL.standardizedFileURL
+                  == workingDirectory.appending(path: "AutoMAA.app", directoryHint: .isDirectory)
+        else {
+            throw SoftwareUpdateError.invalidDownload("待安装更新不在 AutoMAA 更新目录中")
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let manifest = Manifest(
+            release: prepared.release,
+            workingDirectoryName: workingDirectory.lastPathComponent
+        )
+        try encoder.encode(manifest).write(to: manifestURL, options: .atomic)
+    }
+
+    public func load() throws -> PreparedSoftwareUpdate? {
+        guard let data = try? Data(contentsOf: manifestURL) else { return nil }
+        let manifest = try JSONDecoder().decode(Manifest.self, from: data)
+        try SoftwareUpdateReleaseResolver.validate(manifest.release)
+        guard let workingDirectory = workingDirectory(named: manifest.workingDirectoryName) else {
+            throw SoftwareUpdateError.invalidDownload("待安装更新目录无效")
+        }
+        let values = try workingDirectory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        guard values.isDirectory == true, values.isSymbolicLink != true else {
+            throw SoftwareUpdateError.invalidDownload("待安装更新目录不是安全的本地目录")
+        }
+        let applicationURL = workingDirectory.appending(path: "AutoMAA.app", directoryHint: .isDirectory)
+        guard FileManager.default.fileExists(atPath: applicationURL.path) else {
+            throw SoftwareUpdateError.invalidDownload("待安装的 AutoMAA.app 已不存在")
+        }
+        return PreparedSoftwareUpdate(
+            release: manifest.release,
+            applicationURL: applicationURL,
+            workingDirectory: workingDirectory
+        )
+    }
+
+    public func clear() {
+        if let data = try? Data(contentsOf: manifestURL),
+           let manifest = try? JSONDecoder().decode(Manifest.self, from: data),
+           let workingDirectory = workingDirectory(named: manifest.workingDirectoryName) {
+            try? FileManager.default.removeItem(at: workingDirectory)
+        }
+        try? FileManager.default.removeItem(at: manifestURL)
+    }
+
+    private var updatesRoot: URL {
+        directories.root.appending(path: "Updates", directoryHint: .isDirectory).standardizedFileURL
+    }
+
+    private var manifestURL: URL {
+        updatesRoot.appending(path: "prepared-update.json")
+    }
+
+    private func workingDirectory(named name: String) -> URL? {
+        guard !name.isEmpty, name != ".", name != "..", !name.contains("/"), !name.contains("\\") else {
+            return nil
+        }
+        let url = updatesRoot.appending(path: name, directoryHint: .isDirectory).standardizedFileURL
+        return url.deletingLastPathComponent() == updatesRoot ? url : nil
+    }
+}
+
 public enum SoftwareUpdateError: Equatable, LocalizedError, Sendable {
     case invalidCurrentVersion(String)
     case invalidRelease(String)
@@ -97,6 +177,7 @@ public enum SoftwareUpdateError: Equatable, LocalizedError, Sendable {
     case unsupportedInstallLocation(String)
     case installerUnavailable
     case installerLaunchFailed(String)
+    case workflowRunning
     case updateTimedOut
 
     public var errorDescription: String? {
@@ -129,6 +210,8 @@ public enum SoftwareUpdateError: Equatable, LocalizedError, Sendable {
             "当前 AutoMAA.app 中缺少更新辅助程序，请手动安装最新版本"
         case let .installerLaunchFailed(message):
             "无法启动更新辅助程序：\(message)"
+        case .workflowRunning:
+            "当前有手动或定时流程正在运行，请结束后再安装更新"
         case .updateTimedOut:
             "等待 AutoMAA 退出超时，更新已取消"
         }
@@ -169,13 +252,7 @@ public enum SoftwareUpdateReleaseResolver {
         else {
             throw SoftwareUpdateError.invalidDownloadURL
         }
-        guard diskImage.size > 0, diskImage.size <= 250 * 1_024 * 1_024,
-              checksum.size > 0, checksum.size <= 64 * 1_024
-        else {
-            throw SoftwareUpdateError.invalidRelease("附件大小超出安全范围")
-        }
-
-        return SoftwareUpdateRelease(
+        let release = SoftwareUpdateRelease(
             version: version,
             tagName: response.tagName,
             releaseNotes: (response.body ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
@@ -183,9 +260,32 @@ public enum SoftwareUpdateReleaseResolver {
             diskImage: SoftwareUpdateAsset(name: diskImage.name, size: diskImage.size, downloadURL: diskImageURL),
             checksum: SoftwareUpdateAsset(name: checksum.name, size: checksum.size, downloadURL: checksumURL)
         )
+        try validate(release)
+        return release
     }
 
-    private static func isTrustedGitHubURL(_ url: URL) -> Bool {
+    static func validate(_ release: SoftwareUpdateRelease) throws {
+        let diskImageName = "AutoMAA-\(release.version)-macOS-arm64.dmg"
+        guard SoftwareVersion(release.tagName) == release.version,
+              release.diskImage.name == diskImageName,
+              release.checksum.name == "\(diskImageName).sha256"
+        else {
+            throw SoftwareUpdateError.invalidRelease("版本号或附件名称不匹配")
+        }
+        guard isTrustedGitHubURL(release.pageURL),
+              isTrustedGitHubURL(release.diskImage.downloadURL),
+              isTrustedGitHubURL(release.checksum.downloadURL)
+        else {
+            throw SoftwareUpdateError.invalidDownloadURL
+        }
+        guard release.diskImage.size > 0, release.diskImage.size <= 250 * 1_024 * 1_024,
+              release.checksum.size > 0, release.checksum.size <= 64 * 1_024
+        else {
+            throw SoftwareUpdateError.invalidRelease("附件大小超出安全范围")
+        }
+    }
+
+    static func isTrustedGitHubURL(_ url: URL) -> Bool {
         url.scheme == "https" && ["github.com", "api.github.com"].contains(url.host?.lowercased() ?? "")
     }
 }
@@ -220,7 +320,13 @@ public enum SoftwareUpdateVerifier {
     }
 }
 
-public actor SoftwareUpdateService {
+public protocol SoftwareUpdateServing: Sendable {
+    func check() async throws -> SoftwareUpdateRelease?
+    func prepare(_ release: SoftwareUpdateRelease, directories: AppDirectories) async throws -> PreparedSoftwareUpdate
+    func restorePreparedUpdate(directories: AppDirectories) async -> PreparedSoftwareUpdate?
+}
+
+public actor SoftwareUpdateService: SoftwareUpdateServing {
     public static let defaultRepository = "Rememorio/AutoMAA"
 
     private let currentVersion: String
@@ -297,14 +403,44 @@ public actor SoftwareUpdateService {
                 in: workingDirectory,
                 expectedVersion: release.version.description
             )
-            return PreparedSoftwareUpdate(
+            let prepared = PreparedSoftwareUpdate(
                 release: release,
                 applicationURL: stagedApplication,
                 workingDirectory: workingDirectory
             )
+            try PreparedSoftwareUpdateStore(directories: directories).save(prepared)
+            return prepared
         } catch {
             try? FileManager.default.removeItem(at: workingDirectory)
+            if Task.isCancelled { throw CancellationError() }
             throw error
+        }
+    }
+
+    public func restorePreparedUpdate(directories: AppDirectories) async -> PreparedSoftwareUpdate? {
+        let store = PreparedSoftwareUpdateStore(directories: directories)
+        let prepared: PreparedSoftwareUpdate
+        do {
+            guard let stored = try store.load() else { return nil }
+            prepared = stored
+        } catch {
+            store.clear()
+            return nil
+        }
+        guard let current = SoftwareVersion(currentVersion) else { return nil }
+        guard prepared.release.version > current else {
+            store.clear()
+            return nil
+        }
+        do {
+            try await SoftwareUpdateApplicationValidator().validate(
+                prepared.applicationURL,
+                expectedVersion: prepared.release.version.description
+            )
+            return prepared
+        } catch {
+            store.clear()
+            return nil
         }
     }
 

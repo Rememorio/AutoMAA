@@ -23,12 +23,14 @@ AutoMAA 的用户数据保存在：
 | `execution-state.json` | 按方案隔离的当天成功任务断点 |
 | `history.json` | 图形界面中的结构化活动记录；新记录按每次运行分组 |
 | `Logs/` | 最近 30 次 maa-cli 诊断输出，以及 LaunchAgent 与 Runner 输出 |
-| `Updates/` | 已下载并通过校验、等待安装的 AutoMAA 更新；下次准备更新时自动清理旧内容 |
+| `Updates/` | 已下载并通过校验、等待安装的 AutoMAA 更新及准备清单；App 重启后会再次校验 |
 | `update-result.json` | 更新辅助程序写入的一次性结果；App 读取提示后删除 |
 | `MAA/profiles/` | AutoMAA 生成的独立 MAA Profile |
 | `MAA/tasks/` | AutoMAA 按方案、客户端和账号生成的任务文件 |
 
 `config.json` 中的 `notifications.importantEventsEnabled` 记录用户是否希望接收重要通知。它不代表 macOS 已经授权；系统权限仍由“系统设置 → 通知 → AutoMAA”独立控制。旧的 schema v4 配置缺少该字段时按关闭处理，不会重置或改写其他配置。
+
+`applicationUpdates.automaticallyDownloadsUpdates` 记录是否在 AutoMAA 打开且空闲时自动下载并准备正式版本。它不允许 App 静默重启，也不会让后台定时 Runner 下载或安装更新。旧的 schema v4 配置缺少该字段时按关闭处理。
 
 ## 哪些文件可以编辑
 

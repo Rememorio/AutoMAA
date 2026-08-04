@@ -7,6 +7,7 @@ TEST_ROOT="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/automaa-updater-test.XXXXXX")"
 CURRENT_APP="$TEST_ROOT/Installed/AutoMAA.app"
 STAGED_APP="$TEST_ROOT/Staged/AutoMAA.app"
 RESULT_PATH="$TEST_ROOT/update-result.json"
+LOCK_PATH="$TEST_ROOT/runner.lock"
 
 cleanup() {
     /bin/rm -rf -- "$TEST_ROOT"
@@ -26,6 +27,7 @@ trap cleanup EXIT INT TERM
     --new-app "$STAGED_APP" \
     --expected-version "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$STAGED_APP/Contents/Info.plist")" \
     --result "$RESULT_PATH" \
+    --lock "$LOCK_PATH" \
     --no-relaunch
 
 /bin/test -f "$CURRENT_APP/Contents/Resources/updater-test-marker"

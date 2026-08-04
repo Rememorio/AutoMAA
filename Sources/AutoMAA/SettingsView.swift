@@ -28,6 +28,19 @@ struct SettingsView: View {
                         .font(.headline)
                 }
 
+                VStack(alignment: .leading, spacing: 3) {
+                    Toggle("自动下载并准备更新", isOn: Binding(
+                        get: { model.configuration.applicationUpdates.automaticallyDownloadsUpdates },
+                        set: { model.setAutomaticApplicationUpdatesEnabled($0) }
+                    ))
+                    .font(.subheadline.weight(.medium))
+                    .toggleStyle(.switch)
+                    .accessibilityHint("发现正式版本后，在 AutoMAA 空闲时下载并完成安全校验；安装前仍需确认重启")
+                    Text("发现正式版本后，仅在 AutoMAA 空闲时下载并完成安全校验；安装前仍需确认重启。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 switch model.applicationUpdateState {
                 case .idle:
                     updateRow(
@@ -68,7 +81,11 @@ struct SettingsView: View {
                         }
                     }
                 case let .downloading(release):
-                    progressRow("正在下载并校验 v\(release.version)…")
+                    HStack(spacing: 10) {
+                        progressRow("正在下载并校验 v\(release.version)…")
+                        Spacer()
+                        Button("停止下载") { model.cancelApplicationUpdateDownload() }
+                    }
                 case let .ready(prepared):
                     VStack(alignment: .leading, spacing: 10) {
                         Label("v\(prepared.release.version.description) 已准备好", systemImage: "checkmark.shield.fill")
@@ -246,15 +263,19 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                     Spacer()
                     Button("检测环境") { model.refreshMAAStatus(showResult: true) }
-                        .disabled(model.isRunning || model.isCheckingMAAEnvironment)
+                        .disabled(
+                            model.isRunning
+                                || model.applicationUpdateState.blocksWorkflow
+                                || model.isCheckingMAAEnvironment
+                        )
                     Button("更新核心与基础资源") { model.updateMAACore() }
-                        .disabled(model.isRunning)
+                        .disabled(model.isRunning || model.applicationUpdateState.blocksWorkflow)
                     Button {
                         model.hotUpdate()
                     } label: {
                         Label("热更新识别资源", systemImage: "arrow.triangle.2.circlepath")
                     }
-                    .disabled(model.isRunning)
+                    .disabled(model.isRunning || model.applicationUpdateState.blocksWorkflow)
                 }
             }
         }
