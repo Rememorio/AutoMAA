@@ -210,7 +210,7 @@ AutoMAA 建立在 MAA 社区长期积累的成果之上，谨向以下项目及�
 
 - [MaaAssistantArknights](https://github.com/MaaAssistantArknights/MaaAssistantArknights)：提供 MaaCore、任务协议、资源和完整的自动化能力。没有 MAA，就没有 AutoMAA。
 - [maa-cli](https://github.com/MaaAssistantArknights/maa-cli)：提供 macOS 上可靠的命令行工作流、Core/资源管理和 Profile/Task 配置机制。
-- [MaaMacGui](https://github.com/MaaAssistantArknights/MaaAssistantArknights/tree/dev-v2/src/MaaMacGui)：AutoMAA 的部分任务参数语义与 macOS 交互设计参考了其开源实现。
+- [MaaMacGui](https://github.com/MaaAssistantArknights/MaaMacGui)：AutoMAA 的部分任务参数语义与 macOS 交互设计参考了其开源实现。
 - [PlayCover](https://github.com/PlayCover/PlayCover) 与 MaaTools 相关贡献者：为当前 macOS 原生游戏连接方案提供基础能力。
 
 AutoMAA 是独立的社区项目，与 MAA 官方、鹰角网络、Hypergryph、Yostar 或《明日方舟》的运营方均无隶属、合作或背书关系。项目名称中的 “MAA” 用于说明其依赖和服务对象；MAA 的名称、Logo、代码与其他资产仍归各自权利人所有，并遵循 [MAA 的许可证与用户协议](https://github.com/MaaAssistantArknights/MaaAssistantArknights#声明)。

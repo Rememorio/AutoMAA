@@ -6,7 +6,7 @@ AutoMAA 是面向 MAA 的独立社区工作流编排器。它负责客户端与�
 
 - [MaaAssistantArknights](https://github.com/MaaAssistantArknights/MaaAssistantArknights)：提供 MaaCore、任务协议、资源和完整自动化能力。
 - [maa-cli](https://github.com/MaaAssistantArknights/maa-cli)：提供 macOS 上的命令行入口、Core/资源管理与 Profile/Task 机制。
-- [MaaMacGui](https://github.com/MaaAssistantArknights/MaaAssistantArknights/tree/dev-v2/src/MaaMacGui)：AutoMAA 的部分参数语义与 macOS 交互设计参考了其开源实现。
+- [MaaMacGui](https://github.com/MaaAssistantArknights/MaaMacGui)：AutoMAA 的部分参数语义与 macOS 交互设计参考了其开源实现。
 - [PlayCover](https://github.com/PlayCover/PlayCover) 与 MaaTools 相关贡献者：为当前 macOS 原生游戏连接方案提供基础能力。
 
 AutoMAA 不复制 MaaCore，不把 MAA 打包进仓库，也不改变这些项目各自的许可证和用户协议。
