@@ -40,6 +40,10 @@ features:
     details: 每个方案都有独立的 macOS LaunchAgent，也可以随时手动运行或安全停止。
 ---
 
+<figure class="slogan-artwork">
+  <img src="/automaa-slogan.webp" width="1836" height="856" loading="lazy" decoding="async" alt="直到日常变成一次运行。Till the Dailies Become One Run." />
+</figure>
+
 <section class="product-showcase" aria-labelledby="product-tour-title">
   <div class="showcase-heading">
     <span class="showcase-kicker">PRODUCT TOUR</span>

@@ -8,6 +8,7 @@ struct AboutView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 identity
+                sloganArtwork
                 supportPanel
                 purposePanel
                 privacyPanel
@@ -42,6 +43,22 @@ struct AboutView: View {
                     .accessibilityLabel("AutoMAA 版本 \(model.currentApplicationVersion)")
             }
             Spacer()
+        }
+    }
+
+    @ViewBuilder
+    private var sloganArtwork: some View {
+        if let url = Bundle.main.url(forResource: "AutoMAA-slogan", withExtension: "png"),
+           let image = NSImage(contentsOf: url)
+        {
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFit()
+                .frame(maxWidth: 680)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+                .accessibilityLabel("直到日常变成一次运行")
+                .accessibilityHint("AutoMAA 装饰标语")
         }
     }
 
@@ -113,7 +130,7 @@ struct AboutView: View {
             VStack(alignment: .leading, spacing: 11) {
                 Label("开源与致谢", systemImage: "heart.fill")
                     .font(.headline)
-                Text("AutoMAA 源代码与文档采用 MIT License；应用图标及角色视觉资产不在该许可范围内。项目建立在 MAA、MaaCore、maa-cli 及其社区长期积累的成果之上，是独立的非官方社区项目。")
+                Text("AutoMAA 源代码与文档采用 MIT License；应用图标及宣传视觉资产不在该许可范围内。项目建立在 MAA、MaaCore、maa-cli 及其社区长期积累的成果之上，是独立的非官方社区项目。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

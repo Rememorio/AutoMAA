@@ -15,4 +15,4 @@ AutoMAA 不复制 MaaCore，不把 MAA 打包进仓库，也不改变这些项�
 
 AutoMAA 与 MAA 官方、鹰角网络、Hypergryph、Yostar 或《明日方舟》的运营方均无隶属、合作或背书关系。项目名称中的 “MAA” 只用于说明依赖和服务对象。
 
-源代码与文档采用 [MIT License](https://github.com/Rememorio/AutoMAA/blob/main/LICENSE)。AutoMAA 应用图标不属于 MIT License；角色名称、形象和相关知识产权归其权利人所有。
+源代码与文档采用 [MIT License](https://github.com/Rememorio/AutoMAA/blob/main/LICENSE)。AutoMAA 应用图标与宣传视觉资产不属于 MIT License；图标涉及的角色名称、形象和相关知识产权归其权利人所有。宣传字图是独立制作的非官方项目视觉，不包含官方 Logo、角色形象或原始活动素材，也不代表任何官方合作或背书。
