@@ -171,7 +171,7 @@ struct SidebarView: View {
                       ? "停止当前 MAA 维护命令"
                       : "停止当前 MAA 命令，关闭客户端并释放连接")
             } else {
-                planPicker
+                currentPlanPicker
 
                 if model.canRun {
                     Button {
@@ -205,35 +205,42 @@ struct SidebarView: View {
         }
     }
 
-    private var planPicker: some View {
-        Menu {
-            ForEach(model.configuration.plans) { plan in
-                Button {
-                    model.selection = .plan(plan.id)
-                } label: {
-                    if model.selectedPlanID == plan.id {
-                        Label(plan.displayName, systemImage: "checkmark")
-                    } else {
-                        Text(plan.displayName)
+    private var currentPlanPicker: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("当前运行方案")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            Menu {
+                ForEach(model.configuration.plans) { plan in
+                    Button {
+                        model.selectCurrentPlan(plan.id)
+                    } label: {
+                        if model.currentPlanID == plan.id {
+                            Label(plan.displayName, systemImage: "checkmark")
+                        } else {
+                            Text(plan.displayName)
+                        }
                     }
                 }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .foregroundStyle(Color.maaAccent)
+                    Text(model.currentPlan?.displayName ?? "选择方案")
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                    Spacer()
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
             }
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "clock.arrow.circlepath")
-                    .foregroundStyle(Color.maaAccent)
-                Text(model.selectedPlan?.displayName ?? "选择方案")
-                    .font(.caption.weight(.semibold))
-                    .lineLimit(1)
-                Spacer()
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            .contentShape(Rectangle())
+            .menuStyle(.borderlessButton)
+            .disabled(model.configuration.plans.isEmpty)
+            .help("切换运行与检查的方案，不会打开编辑页")
         }
-        .menuStyle(.borderlessButton)
-        .disabled(model.configuration.plans.isEmpty)
     }
 
     private var workflowStatus: some View {
@@ -279,7 +286,7 @@ struct SidebarView: View {
     private var statusDetail: String {
         if model.isRunning { return model.statusMessage }
         if model.readinessIssues.isEmpty {
-            let plan = model.selectedPlan
+            let plan = model.currentPlan
             let accounts = model.configuration.clients.filter(\.enabled).flatMap { $0.accounts.filter { plan?.includes($0) == true } }.count
             return "\(accounts) 个账号 · \(plan?.enabledTasks.count ?? 0) 个步骤"
         }

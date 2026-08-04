@@ -64,7 +64,14 @@ private enum ScheduleSynchronizationFeedback {
 @MainActor
 final class AppModel: ObservableObject {
     @Published var configuration: AppConfiguration
-    @Published var selection: SidebarSelection = .overview
+    @Published var selection: SidebarSelection = .overview {
+        didSet {
+            if case let .plan(planID) = selection {
+                selectCurrentPlan(planID)
+            }
+        }
+    }
+    @Published private(set) var currentPlanID: UUID?
     @Published var activityEntries: [LogEntry]
     @Published var phase: RunnerPhase = .idle
     @Published var statusMessage = "等待开始"
@@ -156,6 +163,7 @@ final class AppModel: ObservableObject {
         }
         activityEntries = historyStore.load()
         installedPlanIDs = launchAgentManager.installedPlanIDs
+        currentPlanID = configuration.plans.first?.id
         try? MAAConfigurationWriter(directories: directories).prepare(configuration)
     }
 
@@ -213,19 +221,12 @@ final class AppModel: ObservableObject {
     }
 
     var readinessIssues: [ReadinessIssue] {
-        readinessIssues(for: selectedPlanID)
+        readinessIssues(for: currentPlanID)
     }
 
-    var selectedPlanID: UUID? {
-        if case let .plan(id) = selection, configuration.plans.contains(where: { $0.id == id }) {
-            return id
-        }
-        return configuration.plans.first?.id
-    }
-
-    var selectedPlan: AutomationPlan? {
-        guard let selectedPlanID else { return nil }
-        return configuration.plans.first(where: { $0.id == selectedPlanID })
+    var currentPlan: AutomationPlan? {
+        guard let currentPlanID else { return nil }
+        return configuration.plans.first(where: { $0.id == currentPlanID })
     }
 
     func readinessIssues(for planID: UUID?) -> [ReadinessIssue] {
@@ -233,7 +234,12 @@ final class AppModel: ObservableObject {
     }
 
     var canRun: Bool {
-        canRun(planID: selectedPlanID)
+        canRun(planID: currentPlanID)
+    }
+
+    func selectCurrentPlan(_ planID: UUID) {
+        guard configuration.plans.contains(where: { $0.id == planID }) else { return }
+        currentPlanID = planID
     }
 
     func canRun(planID: UUID?) -> Bool {
@@ -340,6 +346,7 @@ final class AppModel: ObservableObject {
     }
 
     func runPlan(_ planID: UUID, resumeToday: Bool = true) {
+        selectCurrentPlan(planID)
         let issues = readinessIssues(for: planID)
         guard canRun(planID: planID) else {
             showBanner(issues.first(where: { $0.severity == .error })?.message ?? "当前方案无法运行")
@@ -384,11 +391,11 @@ final class AppModel: ObservableObject {
     }
 
     func runSelectedPlan(resumeToday: Bool = true) {
-        guard let selectedPlanID else {
+        guard let currentPlanID else {
             showBanner("请先创建自动化方案")
             return
         }
-        runPlan(selectedPlanID, resumeToday: resumeToday)
+        runPlan(currentPlanID, resumeToday: resumeToday)
     }
 
     func hotUpdate() {
@@ -711,6 +718,9 @@ final class AppModel: ObservableObject {
 
     func deletePlan(_ planID: UUID) {
         configuration.plans.removeAll { $0.id == planID }
+        if currentPlanID == planID {
+            currentPlanID = configuration.plans.first?.id
+        }
         selection = .overview
         guard saveNow(showConfirmation: false) else { return }
         enqueueScheduleSynchronization(debounce: false)

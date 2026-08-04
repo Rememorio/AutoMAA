@@ -100,6 +100,14 @@ struct DashboardView: View {
                         .foregroundStyle(Color.maaAccent)
                     Text(plan.displayName)
                         .font(.headline)
+                    if model.currentPlanID == plan.id {
+                        Text("当前运行")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(Color.maaAccent)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Color.maaAccent.opacity(0.1), in: Capsule())
+                    }
                     Spacer()
                     if model.isPlanScheduleCurrent(plan) {
                         Label(String(format: "%02d:%02d", plan.schedule.hour, plan.schedule.minute), systemImage: "clock.fill")
@@ -147,7 +155,7 @@ struct DashboardView: View {
         VStack(alignment: .leading, spacing: 12) {
             sectionTitle("当前执行路径", detail: "客户端严格串行；确认当前客户端关闭、连接释放后，才启动下一项。")
             Panel {
-                if let plan = model.selectedPlan {
+                if let plan = model.currentPlan {
                     let clients = model.configuration.clients.filter { $0.enabled && $0.accounts.contains(where: plan.includes) }
                     if clients.isEmpty {
                         Text("「\(plan.displayName)」还没有可执行账号")
@@ -207,11 +215,11 @@ struct DashboardView: View {
 
     private var readiness: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionTitle("运行检查", detail: "以下检查针对侧边栏当前选中的方案。")
+            sectionTitle("运行检查", detail: "以下检查针对当前运行方案，可在侧栏底部切换。")
             Panel {
                 if model.readinessIssues.isEmpty {
                     Label(
-                        "「\(model.selectedPlan?.displayName ?? "方案")」已准备就绪",
+                        "「\(model.currentPlan?.displayName ?? "方案")」已准备就绪",
                         systemImage: "checkmark.seal.fill"
                     )
                         .font(.headline)
