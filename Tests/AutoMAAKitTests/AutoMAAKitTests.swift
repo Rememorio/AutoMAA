@@ -1039,6 +1039,66 @@ final class AutoMAAKitTests: XCTestCase {
         )
     }
 
+    func testMAAOutputNoticeParserElevatesFiveStarDetectedTagsSummary() {
+        let output = """
+        Summary
+        ----------------------------------------
+        [公开招募] 21:34:23 - 21:35:07 (44s) Completed
+        Detected tags:
+        1. ★★★★★ 牽制, エリート, ロボット, 先鋒タイプ, 減速
+        2. ★★★ 重装タイプ, 初期, COST回復, 前衛タイプ, 範囲攻撃, Refreshed
+        Recruited 1 times
+        Refreshed 1 times
+        """
+
+        XCTAssertEqual(
+            MAAOutputNoticeParser.recruitmentNotices(in: output, preservedTags: []),
+            [.highRarity(
+                level: 5,
+                tags: ["牽制", "エリート", "ロボット", "先鋒タイプ", "減速"]
+            )]
+        )
+    }
+
+    func testMAAOutputNoticeParserElevatesSixStarDetectedTagsSummary() {
+        let output = """
+        Detected tags:
+        1. ★★★★★★ 高级资深干员, 远程位, 输出, 生存, 狙击干员
+        2. ★ 支援机械, 近战位, 费用回复, 治疗, 先锋干员, Refreshed
+        Refreshed 1 times
+        """
+
+        XCTAssertEqual(
+            MAAOutputNoticeParser.recruitmentNotices(in: output, preservedTags: ["支援机械"]),
+            [
+                .highRarity(
+                    level: 6,
+                    tags: ["高级资深干员", "远程位", "输出", "生存", "狙击干员"]
+                ),
+                .preservedTag(
+                    tag: "支援机械",
+                    tags: ["支援机械", "近战位", "费用回复", "治疗", "先锋干员"]
+                ),
+            ]
+        )
+    }
+
+    func testMAAOutputNoticeParserDeduplicatesDetailedAndSummarizedResult() {
+        let output = """
+        RecruitResult: ★★★★★★ 高级资深干员, 远程位, 输出, 生存, 狙击干员
+        Detected tags:
+        1. ★★★★★★ 高级资深干员, 远程位, 输出, 生存, 狙击干员
+        """
+
+        XCTAssertEqual(
+            MAAOutputNoticeParser.recruitmentNotices(in: output, preservedTags: []),
+            [.highRarity(
+                level: 6,
+                tags: ["高级资深干员", "远程位", "输出", "生存", "狙击干员"]
+            )]
+        )
+    }
+
     func testMAAOutputNoticeParserElevatesConfiguredPreservedTag() {
         let output = "\u{001B}[32mRecruitResult: ★ 支援机械, 近战位, 费用回复, 治疗, 先锋干员\u{001B}[0m"
 

@@ -14,11 +14,26 @@ enum MAAOutputNoticeParser {
         let lines = output.components(separatedBy: .newlines).map(strippingANSIEscapeSequences)
         var notices: [MAARecruitmentNotice] = []
         var resultTags: [[String]] = []
+        var isReadingDetectedTags = false
 
         for line in lines {
-            guard let payload = payload(after: "RecruitResult:", in: line),
-                  let result = recruitResult(from: payload)
-            else { continue }
+            if isDetectedTagsHeader(line) {
+                isReadingDetectedTags = true
+                continue
+            }
+
+            let result: (level: Int, tags: [String])?
+            if let payload = payload(after: "RecruitResult:", in: line) {
+                result = recruitResult(from: payload)
+            } else if isReadingDetectedTags {
+                result = summarizedRecruitResult(from: line)
+                if result == nil, !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    isReadingDetectedTags = false
+                }
+            } else {
+                result = nil
+            }
+            guard let result else { continue }
 
             resultTags.append(result.tags)
             if result.level >= 5 {
@@ -39,6 +54,29 @@ enum MAAOutputNoticeParser {
         }
 
         return notices
+    }
+
+    private static func isDetectedTagsHeader(_ line: String) -> Bool {
+        line.trimmingCharacters(in: .whitespacesAndNewlines)
+            .localizedCaseInsensitiveCompare("Detected tags:") == .orderedSame
+    }
+
+    private static func summarizedRecruitResult(from line: String) -> (level: Int, tags: [String])? {
+        let value = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let separator = value.firstIndex(of: "."),
+              !value[..<separator].isEmpty,
+              value[..<separator].allSatisfy(\.isNumber)
+        else { return nil }
+        let payload = value[value.index(after: separator)...]
+        guard var result = recruitResult(from: payload) else { return nil }
+        if let last = result.tags.last,
+           ["Refreshed", "Recruited"].contains(where: {
+               $0.localizedCaseInsensitiveCompare(last) == .orderedSame
+           }) {
+            result.tags.removeLast()
+        }
+        guard !result.tags.isEmpty else { return nil }
+        return result
     }
 
     private static func recruitResult(from value: Substring) -> (level: Int, tags: [String])? {
