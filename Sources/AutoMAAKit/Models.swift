@@ -563,38 +563,6 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
     public static var defaults: AppConfiguration {
         AppConfiguration(clients: [])
     }
-
-    private enum CodingKeys: String, CodingKey {
-        case schemaVersion
-        case cliPath
-        case clients
-        case plans
-        case notifications
-        case applicationUpdates
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
-        cliPath = try container.decode(String.self, forKey: .cliPath)
-        clients = try container.decode([ClientConfiguration].self, forKey: .clients)
-        plans = try container.decode([AutomationPlan].self, forKey: .plans)
-        notifications = try container.decodeIfPresent(NotificationConfiguration.self, forKey: .notifications) ?? .init()
-        applicationUpdates = try container.decodeIfPresent(
-            ApplicationUpdateConfiguration.self,
-            forKey: .applicationUpdates
-        ) ?? .init()
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(schemaVersion, forKey: .schemaVersion)
-        try container.encode(cliPath, forKey: .cliPath)
-        try container.encode(clients, forKey: .clients)
-        try container.encode(plans, forKey: .plans)
-        try container.encode(notifications, forKey: .notifications)
-        try container.encode(applicationUpdates, forKey: .applicationUpdates)
-    }
 }
 
 public enum LogLevel: String, Codable, Sendable {

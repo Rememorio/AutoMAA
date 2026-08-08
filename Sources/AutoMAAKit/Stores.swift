@@ -18,13 +18,6 @@ public enum ConfigurationStoreError: LocalizedError, Equatable {
 public struct ConfigurationRecovery: Sendable {
     public let configuration: AppConfiguration
     public let backupURL: URL
-    public let previousSchemaVersion: Int?
-}
-
-public struct ConfigurationLoadResult: Sendable {
-    public let configuration: AppConfiguration
-    public let migratedFromSchemaVersion: Int?
-    public let backupURL: URL?
 }
 
 public struct AppDirectories: Sendable {
@@ -72,45 +65,21 @@ public struct ConfigurationStore: Sendable {
     }
 
     public func load() throws -> AppConfiguration {
-        try loadResult().configuration
-    }
-
-    public func loadResult() throws -> ConfigurationLoadResult {
         try directories.prepare()
         guard FileManager.default.fileExists(atPath: directories.configuration.path) else {
             let configuration = AppConfiguration.defaults
             try save(configuration)
-            return ConfigurationLoadResult(
-                configuration: configuration,
-                migratedFromSchemaVersion: nil,
-                backupURL: nil
-            )
+            return configuration
         }
         let data = try Data(contentsOf: directories.configuration)
         let version = try Self.decoder.decode(VersionProbe.self, from: data)
-        if version.schemaVersion == AppConfiguration.currentSchemaVersion {
-            return ConfigurationLoadResult(
-                configuration: try Self.decoder.decode(AppConfiguration.self, from: data),
-                migratedFromSchemaVersion: nil,
-                backupURL: nil
-            )
+        guard version.schemaVersion == AppConfiguration.currentSchemaVersion else {
+            throw ConfigurationStoreError.unsupportedSchema(version.schemaVersion)
         }
-        if version.schemaVersion == 4 {
-            let backupURL = uniqueBackupURL(versionLabel: "4")
-            try data.write(to: backupURL, options: .atomic)
-            var configuration = try Self.decoder.decode(AppConfiguration.self, from: data)
-            configuration.schemaVersion = AppConfiguration.currentSchemaVersion
-            try save(configuration)
-            return ConfigurationLoadResult(
-                configuration: configuration,
-                migratedFromSchemaVersion: 4,
-                backupURL: backupURL
-            )
-        }
-        throw ConfigurationStoreError.unsupportedSchema(version.schemaVersion)
+        return try Self.decoder.decode(AppConfiguration.self, from: data)
     }
 
-    public func resetIncompatibleConfiguration() throws -> ConfigurationRecovery {
+    public func backupAndReset() throws -> ConfigurationRecovery {
         try directories.prepare()
         let data = try Data(contentsOf: directories.configuration)
         let version = try? Self.decoder.decode(VersionProbe.self, from: data).schemaVersion
@@ -121,8 +90,7 @@ public struct ConfigurationStore: Sendable {
         try save(configuration)
         return ConfigurationRecovery(
             configuration: configuration,
-            backupURL: backupURL,
-            previousSchemaVersion: version
+            backupURL: backupURL
         )
     }
 

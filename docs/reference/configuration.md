@@ -28,9 +28,9 @@ AutoMAA 的用户数据保存在：
 | `MAA/profiles/` | AutoMAA 生成的独立 MAA Profile |
 | `MAA/tasks/` | AutoMAA 按方案、客户端和账号生成的任务文件 |
 
-`config.json` 中的 `notifications.importantEventsEnabled` 记录用户是否希望接收重要通知。它不代表 macOS 已经授权；系统权限仍由“系统设置 → 通知 → AutoMAA”独立控制。schema v4 配置缺少该字段时按关闭处理。
+`config.json` 中的 `notifications.importantEventsEnabled` 记录用户是否希望接收重要通知。它不代表 macOS 已经授权；系统权限仍由“系统设置 → 通知 → AutoMAA”独立控制。
 
-`applicationUpdates.automaticallyDownloadsUpdates` 记录是否在 AutoMAA 打开且空闲时自动下载并准备正式版本。它不允许 App 静默重启，也不会让后台定时 Runner 下载或安装更新。schema v4 配置缺少该字段时按关闭处理。
+`applicationUpdates.automaticallyDownloadsUpdates` 记录是否在 AutoMAA 打开且空闲时自动下载并准备正式版本。它不允许 App 静默重启，也不会让后台定时 Runner 下载或安装更新。
 
 每个方案的 `schedule.rules` 保存周计划。每条规则包含一组语义化星期值（例如 `monday`、`sunday`）以及 `hour`、`minute`；同一方案不能在同一个星期出现两条规则。LaunchAgent 安装时才会把这些值转换为系统使用的 `Weekday` 数字，配置文件不依赖 Foundation 或 launchd 的星期编号。
 
@@ -44,9 +44,7 @@ AutoMAA 的用户数据保存在：
 
 备份前先停止正在运行的工作流，然后复制整个 AutoMAA 数据目录。恢复时确保 App 和配置协议版本兼容。
 
-当前配置协议是 schema v5。首次读取 schema v4 时，AutoMAA 会先创建 `config-schema-v4.backup.json`，再把每个方案原有的每日时间转换为覆盖周一至周日的单条周计划。该转换也可由后台 Runner 安全完成，避免 App 更新后旧 LaunchAgent 先启动时无法读取配置。
-
-其他旧 schema 或无法解码的配置不自动迁移。图形界面会先在同一目录创建 `config-schema-v*.backup.json`，再恢复通用空配置；无界面 Runner 只报告无法处理的不兼容并退出。备份仍可能含账号片段和本机路径，分享前同样需要脱敏。
+当前配置协议以 v0.6.0 生成的完整 schema v5 为唯一基线。schema v4 及更早版本、缺少必要字段、仍使用旧版每日时间结构或无法解码的配置都不自动迁移。图形界面会先在同一目录创建 `config-schema-v*.backup.json`，再恢复通用空配置；无界面 Runner 只报告无法处理的配置并退出。备份仍可能含账号片段和本机路径，分享前同样需要脱敏。
 
 ## 配置中不包含什么
 

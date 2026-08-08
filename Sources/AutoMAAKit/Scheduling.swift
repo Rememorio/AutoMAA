@@ -86,22 +86,19 @@ public struct WeeklyScheduleRule: Codable, Identifiable, Equatable, Sendable {
         self.minute = minute
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case id
-        case weekdays
-        case hour
-        case minute
+    private enum CodingKeys: CodingKey {
+        case id, weekdays, hour, minute
     }
 
-    public init(from decoder: Decoder) throws {
+    public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        id = try container.decode(UUID.self, forKey: .id)
         weekdays = Set(try container.decode([ScheduleWeekday].self, forKey: .weekdays))
         hour = try container.decode(Int.self, forKey: .hour)
         minute = try container.decode(Int.self, forKey: .minute)
     }
 
-    public func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(ScheduleWeekday.ordered(weekdays), forKey: .weekdays)
@@ -122,32 +119,6 @@ public struct PlanSchedule: Codable, Equatable, Sendable {
     public init(enabled: Bool, rules: [WeeklyScheduleRule]) {
         self.enabled = enabled
         self.rules = rules
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case enabled
-        case rules
-        case hour
-        case minute
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
-        if container.contains(.rules) {
-            rules = try container.decode([WeeklyScheduleRule].self, forKey: .rules)
-        } else {
-            rules = [.init(
-                hour: try container.decodeIfPresent(Int.self, forKey: .hour) ?? 8,
-                minute: try container.decodeIfPresent(Int.self, forKey: .minute) ?? 0
-            )]
-        }
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(enabled, forKey: .enabled)
-        try container.encode(rules, forKey: .rules)
     }
 }
 

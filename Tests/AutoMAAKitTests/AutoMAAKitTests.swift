@@ -99,28 +99,24 @@ final class AutoMAAKitTests: XCTestCase {
         )
     }
 
-    func testConfigurationWithoutNotificationSettingsUsesDisabledDefault() throws {
+    func testCurrentConfigurationRequiresNotificationSettings() throws {
         let data = try JSONEncoder().encode(populatedConfiguration())
         var payload = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         payload.removeValue(forKey: "notifications")
 
-        let legacyData = try JSONSerialization.data(withJSONObject: payload)
-        let decoded = try JSONDecoder().decode(AppConfiguration.self, from: legacyData)
-
-        XCTAssertFalse(decoded.notifications.importantEventsEnabled)
+        let invalidData = try JSONSerialization.data(withJSONObject: payload)
+        XCTAssertThrowsError(try JSONDecoder().decode(AppConfiguration.self, from: invalidData))
     }
 
-    func testConfigurationWithoutApplicationUpdateSettingsUsesManualDownloadDefault() throws {
+    func testCurrentConfigurationRequiresApplicationUpdateSettings() throws {
         var config = populatedConfiguration()
         config.applicationUpdates.automaticallyDownloadsUpdates = true
         let data = try JSONEncoder().encode(config)
         var payload = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         payload.removeValue(forKey: "applicationUpdates")
 
-        let legacyData = try JSONSerialization.data(withJSONObject: payload)
-        let decoded = try JSONDecoder().decode(AppConfiguration.self, from: legacyData)
-
-        XCTAssertFalse(decoded.applicationUpdates.automaticallyDownloadsUpdates)
+        let invalidData = try JSONSerialization.data(withJSONObject: payload)
+        XCTAssertThrowsError(try JSONDecoder().decode(AppConfiguration.self, from: invalidData))
     }
 
     func testDisplayNamesTrimWhitespaceAndProvideContextualFallbacks() {
@@ -822,7 +818,7 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertEqual(try store.load(), config)
     }
 
-    func testSchemaFourScheduleMigratesToEveryDayRuleWithBackup() throws {
+    func testPreviousSchemaRequiresExplicitBackupAndReset() throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let directories = AppDirectories(root: root)
@@ -837,55 +833,37 @@ final class AutoMAAKitTests: XCTestCase {
         payload["plans"] = plans
         try JSONSerialization.data(withJSONObject: payload).write(to: directories.configuration)
 
-        let result = try ConfigurationStore(directories: directories).loadResult()
-
-        XCTAssertEqual(result.migratedFromSchemaVersion, 4)
-        XCTAssertEqual(result.configuration.schemaVersion, AppConfiguration.currentSchemaVersion)
-        XCTAssertEqual(result.configuration.plans[0].schedule.rules, [
-            WeeklyScheduleRule(
-                id: result.configuration.plans[0].schedule.rules[0].id,
-                weekdays: ScheduleWeekday.everyDay,
-                hour: 7,
-                minute: 45
-            ),
-        ])
-        let backupURL = try XCTUnwrap(result.backupURL)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: backupURL.path))
-        let saved = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: Data(contentsOf: directories.configuration)) as? [String: Any]
-        )
-        XCTAssertEqual(saved["schemaVersion"] as? Int, AppConfiguration.currentSchemaVersion)
-        let savedPlans = try XCTUnwrap(saved["plans"] as? [[String: Any]])
-        let savedSchedule = try XCTUnwrap(savedPlans[0]["schedule"] as? [String: Any])
-        XCTAssertNotNil(savedSchedule["rules"])
-        XCTAssertNil(savedSchedule["hour"])
-        XCTAssertNil(savedSchedule["minute"])
-    }
-
-    func testMismatchedSchemaRequiresExplicitBackupAndReset() throws {
-        let root = temporaryRoot()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let directories = AppDirectories(root: root)
-        try directories.prepare()
-        let mismatched: [String: Any] = [
-            "schemaVersion": AppConfiguration.currentSchemaVersion - 2,
-            "cliPath": "/opt/homebrew/bin/maa",
-            "clients": [],
-            "plans": [],
-        ]
-        try JSONSerialization.data(withJSONObject: mismatched).write(to: directories.configuration)
-
         let store = ConfigurationStore(directories: directories)
         XCTAssertThrowsError(try store.load()) { error in
-            XCTAssertEqual(error as? ConfigurationStoreError, .unsupportedSchema(AppConfiguration.currentSchemaVersion - 2))
+            XCTAssertEqual(error as? ConfigurationStoreError, .unsupportedSchema(4))
         }
-        let recovery = try store.resetIncompatibleConfiguration()
+        let recovery = try store.backupAndReset()
 
         XCTAssertEqual(recovery.configuration.schemaVersion, AppConfiguration.currentSchemaVersion)
         XCTAssertTrue(recovery.configuration.clients.isEmpty)
         XCTAssertEqual(recovery.configuration.plans.count, 2)
         XCTAssertTrue(FileManager.default.fileExists(atPath: recovery.backupURL.path))
+        let backup = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: recovery.backupURL)) as? [String: Any]
+        )
+        XCTAssertEqual(backup["schemaVersion"] as? Int, 4)
         XCTAssertEqual(try store.load(), recovery.configuration)
+    }
+
+    func testCurrentSchemaRejectsLegacyDailyScheduleShape() throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        try directories.prepare()
+        var payload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(populatedConfiguration())) as? [String: Any]
+        )
+        var plans = try XCTUnwrap(payload["plans"] as? [[String: Any]])
+        plans[0]["schedule"] = ["enabled": true, "hour": 7, "minute": 45]
+        payload["plans"] = plans
+        try JSONSerialization.data(withJSONObject: payload).write(to: directories.configuration)
+
+        XCTAssertThrowsError(try ConfigurationStore(directories: directories).load())
     }
 
     func testPortAddressParsing() throws {

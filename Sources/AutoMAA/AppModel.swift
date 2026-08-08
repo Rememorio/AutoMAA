@@ -154,24 +154,18 @@ final class AppModel: ObservableObject {
         softwareUpdateResultStore = SoftwareUpdateResultStore(directories: directories)
         importantNotificationCenter = ImportantNotificationCenter()
         do {
-            let result = try configurationStore.loadResult()
-            configuration = result.configuration
-            if let version = result.migratedFromSchemaVersion,
-               let backupURL = result.backupURL {
-                startupNotice = "配置已从 schema v\(version) 升级；原配置已备份为 \(backupURL.lastPathComponent)"
-            } else {
-                startupNotice = nil
-            }
+            configuration = try configurationStore.load()
+            startupNotice = nil
         } catch ConfigurationStoreError.unsupportedSchema {
-            if let recovery = try? configurationStore.resetIncompatibleConfiguration() {
+            if let recovery = try? configurationStore.backupAndReset() {
                 configuration = recovery.configuration
-                startupNotice = "配置协议已升级；旧配置已备份为 \(recovery.backupURL.lastPathComponent)"
+                startupNotice = "配置协议不兼容；旧配置已备份为 \(recovery.backupURL.lastPathComponent)，并恢复为空配置"
             } else {
                 configuration = .defaults
                 startupNotice = "旧配置与当前版本不兼容，且无法创建备份；当前使用空配置"
             }
         } catch {
-            if let recovery = try? configurationStore.resetIncompatibleConfiguration() {
+            if let recovery = try? configurationStore.backupAndReset() {
                 configuration = recovery.configuration
                 startupNotice = "配置文件无法读取，已备份为 \(recovery.backupURL.lastPathComponent) 并恢复空配置"
             } else {
