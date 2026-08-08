@@ -117,10 +117,19 @@ struct PlanEditorView: View {
                     .toggleStyle(.switch)
                     .disabled(model.isRunning)
                 }
+                ForEach(Array(plan.schedule.rules.enumerated()), id: \.element.id) { index, rule in
+                    scheduleRuleRow(rule, index: index)
+                }
                 HStack {
-                    DatePicker("每天", selection: scheduleTime, displayedComponents: .hourAndMinute)
-                        .datePickerStyle(.field)
-                        .disabled(model.isRunning)
+                    Button {
+                        model.addPlanScheduleRule(plan.id)
+                    } label: {
+                        Label("添加时段", systemImage: "plus")
+                    }
+                    .disabled(model.isRunning || plan.schedule.scheduledWeekdays.count == ScheduleWeekday.allCases.count)
+                    .help(plan.schedule.scheduledWeekdays.count == ScheduleWeekday.allCases.count
+                          ? "先从现有时段取消一个星期"
+                          : "为尚未安排的星期添加另一个时间")
                     Spacer()
                     if plan.schedule.enabled {
                         Label("修改后自动应用", systemImage: "arrow.triangle.2.circlepath")
@@ -139,6 +148,59 @@ struct PlanEditorView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private func scheduleRuleRow(_ rule: WeeklyScheduleRule, index: Int) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("时段 \(index + 1)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                DatePicker("时间", selection: scheduleTime(rule), displayedComponents: .hourAndMinute)
+                    .datePickerStyle(.field)
+                    .labelsHidden()
+                    .disabled(model.isRunning)
+                if plan.schedule.rules.count > 1 {
+                    Button(role: .destructive) {
+                        model.removePlanScheduleRule(plan.id, ruleID: rule.id)
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("删除这个时段")
+                    .disabled(model.isRunning)
+                }
+            }
+            HStack(spacing: 7) {
+                ForEach(ScheduleWeekday.allCases) { weekday in
+                    let selected = rule.weekdays.contains(weekday)
+                    let occupied = usedWeekdays(excluding: rule.id).contains(weekday)
+                    Button {
+                        model.togglePlanScheduleWeekday(plan.id, ruleID: rule.id, weekday: weekday)
+                    } label: {
+                        Text(weekday.shortTitle)
+                            .font(.caption.weight(.semibold))
+                            .frame(width: 28, height: 24)
+                            .foregroundStyle(selected ? Color.white : Color.primary)
+                            .background(
+                                selected ? Color.maaAccent : Color.primary.opacity(0.055),
+                                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(model.isRunning || (!selected && occupied))
+                    .opacity(!selected && occupied ? 0.35 : 1)
+                    .help(occupied && !selected ? "已由其他时段使用\(weekday.title)" : weekday.title)
+                    .accessibilityLabel(weekday.title)
+                    .accessibilityValue(selected ? "已选择" : "未选择")
+                }
+                Spacer()
+            }
+        }
+        .padding(11)
+        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     private var orderPanel: some View {
@@ -381,7 +443,7 @@ struct PlanEditorView: View {
     }
 
     private var scheduleStatusColor: Color {
-        if scheduleConflict != nil { return .orange }
+        if scheduleProblem != nil || scheduleConflict != nil { return .orange }
         if plan.schedule.enabled {
             if model.isPlanScheduleCurrent(plan) { return .green }
             return model.isSynchronizingSchedules ? .maaAccent : .red
@@ -390,12 +452,17 @@ struct PlanEditorView: View {
     }
 
     private var scheduleStatusText: String {
+        if let scheduleProblem {
+            return scheduleProblem.message(planName: plan.displayName)
+        }
         if let scheduleConflict {
-            return "与「\(scheduleConflict.displayName)」的运行时间相同，请错开设置"
+            let time = PlanScheduleFormatter.time(hour: scheduleConflict.slot.hour, minute: scheduleConflict.slot.minute)
+            return "与「\(scheduleConflict.firstPlanName)」的\(scheduleConflict.slot.weekday.title) \(time) 冲突"
         }
         if plan.schedule.enabled {
             if model.isPlanScheduleCurrent(plan) {
-                return "已启用 · 每天 \(formattedScheduleTime)"
+                let next = PlanScheduleFormatter.nextRunLabel(plan.schedule).map { " · 下次 \($0)" } ?? ""
+                return "已启用 · \(PlanScheduleFormatter.summary(plan.schedule))\(next)"
             }
             if model.isSynchronizingSchedules { return "正在同步系统定时任务…" }
             return scheduleInstalled
@@ -410,26 +477,29 @@ struct PlanEditorView: View {
         return "关闭时不会自动运行"
     }
 
-    private var scheduleConflict: AutomationPlan? {
+    private var scheduleProblem: PlanScheduleProblem? {
+        PlanScheduleValidator.problem(in: plan.schedule)
+    }
+
+    private var scheduleConflict: PlanScheduleConflict? {
         guard plan.schedule.enabled else { return nil }
-        return model.scheduleConflict(
-            planID: plan.id,
-            hour: plan.schedule.hour,
-            minute: plan.schedule.minute
-        )
+        return model.scheduleConflict(planID: plan.id, schedule: plan.schedule)
     }
 
-    private var formattedScheduleTime: String {
-        String(format: "%02d:%02d", plan.schedule.hour, plan.schedule.minute)
+    private func usedWeekdays(excluding ruleID: UUID) -> Set<ScheduleWeekday> {
+        plan.schedule.rules
+            .filter { $0.id != ruleID }
+            .reduce(into: []) { $0.formUnion($1.weekdays) }
     }
 
-    private var scheduleTime: Binding<Date> {
+    private func scheduleTime(_ rule: WeeklyScheduleRule) -> Binding<Date> {
         Binding {
-            Calendar.current.date(bySettingHour: plan.schedule.hour, minute: plan.schedule.minute, second: 0, of: Date()) ?? Date()
+            Calendar.current.date(bySettingHour: rule.hour, minute: rule.minute, second: 0, of: Date()) ?? Date()
         } set: { date in
             let components = Calendar.current.dateComponents([.hour, .minute], from: date)
-            model.setPlanScheduleTime(
+            model.setPlanScheduleRuleTime(
                 plan.id,
+                ruleID: rule.id,
                 hour: components.hour ?? 0,
                 minute: components.minute ?? 0
             )

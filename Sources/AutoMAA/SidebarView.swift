@@ -23,9 +23,10 @@ struct SidebarView: View {
                                 .lineLimit(1)
                             Spacer()
                             if model.isPlanScheduleCurrent(plan) {
-                                Text(String(format: "%02d:%02d", plan.schedule.hour, plan.schedule.minute))
+                                Text(PlanScheduleFormatter.nextRunLabel(plan.schedule) ?? "已启用")
                                     .font(.caption2.monospacedDigit())
                                     .foregroundStyle(.secondary)
+                                    .help(PlanScheduleFormatter.summary(plan.schedule))
                             } else if plan.schedule.enabled {
                                 Image(systemName: model.isSynchronizingSchedules
                                       ? "arrow.triangle.2.circlepath"

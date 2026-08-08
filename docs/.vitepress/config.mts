@@ -60,7 +60,7 @@ export default defineConfig({
             { text: "下载与安装", link: "/guide/installation" },
             { text: "首次配置", link: "/guide/getting-started" },
             { text: "理解执行流程", link: "/guide/workflow" },
-            { text: "每日自动运行", link: "/guide/scheduling" },
+            { text: "每周定时运行", link: "/guide/scheduling" },
           ],
         },
       ],

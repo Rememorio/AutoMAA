@@ -67,7 +67,7 @@ struct DashboardView: View {
 
     private var routines: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionTitle("自动化方案", detail: "每个方案独立选择账号、任务参数、完成记录和定时时间，也可以随时手动运行。")
+            sectionTitle("自动化方案", detail: "每个方案独立选择账号、任务参数、完成记录和周计划，也可以随时手动运行。")
             if model.configuration.plans.isEmpty {
                 Panel {
                     VStack(spacing: 14) {
@@ -110,9 +110,10 @@ struct DashboardView: View {
                     }
                     Spacer()
                     if model.isPlanScheduleCurrent(plan) {
-                        Label(String(format: "%02d:%02d", plan.schedule.hour, plan.schedule.minute), systemImage: "clock.fill")
+                        Label(PlanScheduleFormatter.nextRunLabel(plan.schedule) ?? "已启用", systemImage: "clock.fill")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
+                            .help(PlanScheduleFormatter.summary(plan.schedule))
                     } else if plan.schedule.enabled {
                         Label(model.isSynchronizingSchedules ? "同步中" : "待同步", systemImage: "clock.badge.exclamationmark")
                             .font(.caption)

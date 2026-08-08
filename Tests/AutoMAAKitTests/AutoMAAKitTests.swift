@@ -62,16 +62,41 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertEqual(config.plans[0].name, "轻量日常")
         XCTAssertEqual(config.plans[0].infrast.mode, .collectOnly)
         XCTAssertFalse(config.plans[0].mall.enabled)
-        XCTAssertEqual(config.plans[0].schedule.hour, 9)
-        XCTAssertEqual(config.plans[0].schedule.minute, 0)
+        XCTAssertEqual(config.plans[0].schedule.rules.count, 1)
+        XCTAssertEqual(config.plans[0].schedule.rules[0].weekdays, ScheduleWeekday.everyDay)
+        XCTAssertEqual(config.plans[0].schedule.rules[0].hour, 9)
+        XCTAssertEqual(config.plans[0].schedule.rules[0].minute, 0)
         XCTAssertEqual(config.plans[1].name, "完整日常")
         XCTAssertEqual(config.plans[1].infrast.mode, .fullShift)
         XCTAssertEqual(config.plans[1].infrast.threshold, 0.9)
         XCTAssertTrue(config.plans[1].mall.enabled)
-        XCTAssertEqual(config.plans[1].schedule.hour, 21)
-        XCTAssertEqual(config.plans[1].schedule.minute, 0)
+        XCTAssertEqual(config.plans[1].schedule.rules.count, 1)
+        XCTAssertEqual(config.plans[1].schedule.rules[0].weekdays, ScheduleWeekday.everyDay)
+        XCTAssertEqual(config.plans[1].schedule.rules[0].hour, 21)
+        XCTAssertEqual(config.plans[1].schedule.rules[0].minute, 0)
         XCTAssertFalse(config.notifications.importantEventsEnabled)
         XCTAssertFalse(config.applicationUpdates.automaticallyDownloadsUpdates)
+    }
+
+    func testWeeklyScheduleSummaryAndNextRunAreDeterministic() throws {
+        let schedule = PlanSchedule(enabled: true, rules: [
+            WeeklyScheduleRule(weekdays: ScheduleWeekday.weekdays, hour: 9),
+            WeeklyScheduleRule(weekdays: ScheduleWeekday.weekend, hour: 21),
+        ])
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let mondayAtNoon = try XCTUnwrap(calendar.date(from: DateComponents(
+            year: 2024,
+            month: 1,
+            day: 1,
+            hour: 12
+        )))
+
+        XCTAssertEqual(PlanScheduleFormatter.summary(schedule), "工作日 09:00；周末 21:00")
+        XCTAssertEqual(
+            PlanScheduleFormatter.nextRunLabel(schedule, after: mondayAtNoon, calendar: calendar),
+            "周二 09:00"
+        )
     }
 
     func testConfigurationWithoutNotificationSettingsUsesDisabledDefault() throws {
@@ -509,10 +534,13 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertNotEqual(light, complete)
     }
 
-    func testLaunchAgentTargetsExactlyOnePlanAndTime() throws {
+    func testLaunchAgentTargetsExactlyOnePlanAndWeeklySchedule() throws {
         let root = temporaryRoot()
         var plan = AutomationPlan.completeRoutine
-        plan.schedule = PlanSchedule(enabled: true, hour: 21, minute: 35)
+        plan.schedule = PlanSchedule(enabled: true, rules: [
+            WeeklyScheduleRule(weekdays: [.monday, .saturday], hour: 9, minute: 15),
+            WeeklyScheduleRule(weekdays: [.sunday], hour: 21, minute: 35),
+        ])
         let manager = LaunchAgentManager(directories: AppDirectories(root: root))
         let runnerURL = URL(filePath: "/Applications/AutoMAA.app/Contents/MacOS/AutoMAARunner")
 
@@ -522,9 +550,12 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertEqual(payload["ProgramArguments"] as? [String], [
             runnerURL.path, "--plan", plan.id.uuidString.lowercased(),
         ])
-        let interval = try XCTUnwrap(payload["StartCalendarInterval"] as? [String: Int])
-        XCTAssertEqual(interval["Hour"], 21)
-        XCTAssertEqual(interval["Minute"], 35)
+        let intervals = try XCTUnwrap(payload["StartCalendarInterval"] as? [[String: Int]])
+        XCTAssertEqual(intervals, [
+            ["Weekday": 1, "Hour": 9, "Minute": 15],
+            ["Weekday": 6, "Hour": 9, "Minute": 15],
+            ["Weekday": 0, "Hour": 21, "Minute": 35],
+        ])
     }
 
     func testLaunchAgentInspectionUsesInjectedDirectory() throws {
@@ -549,7 +580,7 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertEqual(manager.installedPlanIDs, Set([plan.id]))
         XCTAssertTrue(manager.isCurrent(runnerURL: runnerURL, plan: plan))
         XCTAssertFalse(manager.isCurrent(runnerURL: root.appending(path: "MovedRunner"), plan: plan))
-        plan.schedule.minute = 16
+        plan.schedule.rules[0].minute = 16
         XCTAssertFalse(manager.isCurrent(runnerURL: runnerURL, plan: plan))
     }
 
@@ -577,9 +608,106 @@ final class AutoMAAKitTests: XCTestCase {
             XCTAssertEqual(error, .duplicateSchedule(
                 first: "轻量日常",
                 second: "完整日常",
-                hour: 9,
-                minute: 0
+                slot: WeeklyScheduleSlot(weekday: .monday, hour: 9, minute: 0)
             ))
+        }
+        XCTAssertTrue(manager.installedPlanIDs.isEmpty)
+    }
+
+    func testLaunchAgentAllowsSameTimeOnDifferentWeekdays() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let launchAgents = root.appending(path: "LaunchAgents", directoryHint: .isDirectory)
+        var light = AutomationPlan.lightRoutine
+        light.schedule = PlanSchedule(enabled: true, rules: [
+            WeeklyScheduleRule(weekdays: [.monday], hour: 9),
+        ])
+        var complete = AutomationPlan.completeRoutine
+        complete.schedule = PlanSchedule(enabled: true, rules: [
+            WeeklyScheduleRule(weekdays: [.sunday], hour: 9),
+        ])
+        let manager = LaunchAgentManager(
+            directories: AppDirectories(root: root),
+            launchAgentsDirectory: launchAgents,
+            systemIntegrationEnabled: false
+        )
+
+        try await manager.synchronize(
+            runnerURL: root.appending(path: "AutoMAARunner"),
+            plans: [light, complete]
+        )
+
+        XCTAssertEqual(manager.installedPlanIDs, Set([light.id, complete.id]))
+    }
+
+    func testWeeklyOrchestrationDryRunCreatesOnlyExpectedTemporaryAgents() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let launchAgents = root.appending(path: "LaunchAgents", directoryHint: .isDirectory)
+        var routine = AutomationPlan.completeRoutine
+        routine.name = "正常计划"
+        routine.schedule = PlanSchedule(enabled: true, rules: [
+            WeeklyScheduleRule(
+                weekdays: [.monday, .tuesday, .wednesday, .thursday, .friday, .saturday],
+                hour: 9
+            ),
+            WeeklyScheduleRule(weekdays: [.sunday], hour: 21),
+        ])
+        var annihilation = AutomationPlan.lightRoutine
+        annihilation.name = "周日剿灭"
+        annihilation.fight.stage = FightStagePreset.annihilation.rawValue
+        annihilation.schedule = PlanSchedule(enabled: true, rules: [
+            WeeklyScheduleRule(weekdays: [.sunday], hour: 9),
+        ])
+        let manager = LaunchAgentManager(
+            directories: AppDirectories(root: root),
+            launchAgentsDirectory: launchAgents,
+            systemIntegrationEnabled: false
+        )
+
+        try await manager.synchronize(
+            runnerURL: URL(filePath: "/usr/bin/true"),
+            plans: [routine, annihilation]
+        )
+
+        XCTAssertEqual(manager.installedPlanIDs, Set([routine.id, annihilation.id]))
+        XCTAssertEqual(manager.installedSlots(planID: routine.id), Set(routine.schedule.slots))
+        XCTAssertEqual(manager.installedSlots(planID: annihilation.id), Set(annihilation.schedule.slots))
+        XCTAssertEqual(annihilation.fight.stage, "Annihilation")
+        let files = try FileManager.default.contentsOfDirectory(at: launchAgents, includingPropertiesForKeys: nil)
+        XCTAssertEqual(files.count, 2)
+        let resolvedDirectory = launchAgents.resolvingSymlinksInPath().standardizedFileURL
+        XCTAssertTrue(files.allSatisfy {
+            $0.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL == resolvedDirectory
+        })
+    }
+
+    func testLaunchAgentRejectsMultipleTimesForOnePlanOnSameWeekday() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let launchAgents = root.appending(path: "LaunchAgents", directoryHint: .isDirectory)
+        var plan = AutomationPlan.lightRoutine
+        plan.schedule = PlanSchedule(enabled: true, rules: [
+            WeeklyScheduleRule(weekdays: [.sunday], hour: 9),
+            WeeklyScheduleRule(weekdays: [.sunday], hour: 21),
+        ])
+        let manager = LaunchAgentManager(
+            directories: AppDirectories(root: root),
+            launchAgentsDirectory: launchAgents,
+            systemIntegrationEnabled: false
+        )
+
+        do {
+            try await manager.synchronize(
+                runnerURL: root.appending(path: "AutoMAARunner"),
+                plans: [plan]
+            )
+            XCTFail("Expected repeated weekday rejection")
+        } catch {
+            XCTAssertEqual(
+                error as? LaunchAgentError,
+                .invalidSchedule(plan: "轻量日常", problem: .repeatedWeekday(.sunday))
+            )
         }
         XCTAssertTrue(manager.installedPlanIDs.isEmpty)
     }
@@ -694,13 +822,53 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertEqual(try store.load(), config)
     }
 
+    func testSchemaFourScheduleMigratesToEveryDayRuleWithBackup() throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        try directories.prepare()
+        var payload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(populatedConfiguration())) as? [String: Any]
+        )
+        payload["schemaVersion"] = 4
+        var plans = try XCTUnwrap(payload["plans"] as? [[String: Any]])
+        plans[0]["schedule"] = ["enabled": true, "hour": 7, "minute": 45]
+        plans[1]["schedule"] = ["enabled": false, "hour": 21, "minute": 10]
+        payload["plans"] = plans
+        try JSONSerialization.data(withJSONObject: payload).write(to: directories.configuration)
+
+        let result = try ConfigurationStore(directories: directories).loadResult()
+
+        XCTAssertEqual(result.migratedFromSchemaVersion, 4)
+        XCTAssertEqual(result.configuration.schemaVersion, AppConfiguration.currentSchemaVersion)
+        XCTAssertEqual(result.configuration.plans[0].schedule.rules, [
+            WeeklyScheduleRule(
+                id: result.configuration.plans[0].schedule.rules[0].id,
+                weekdays: ScheduleWeekday.everyDay,
+                hour: 7,
+                minute: 45
+            ),
+        ])
+        let backupURL = try XCTUnwrap(result.backupURL)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: backupURL.path))
+        let saved = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: directories.configuration)) as? [String: Any]
+        )
+        XCTAssertEqual(saved["schemaVersion"] as? Int, AppConfiguration.currentSchemaVersion)
+        let savedPlans = try XCTUnwrap(saved["plans"] as? [[String: Any]])
+        let savedSchedule = try XCTUnwrap(savedPlans[0]["schedule"] as? [String: Any])
+        XCTAssertNotNil(savedSchedule["rules"])
+        XCTAssertNil(savedSchedule["hour"])
+        XCTAssertNil(savedSchedule["minute"])
+    }
+
     func testMismatchedSchemaRequiresExplicitBackupAndReset() throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let directories = AppDirectories(root: root)
         try directories.prepare()
         let mismatched: [String: Any] = [
-            "schemaVersion": AppConfiguration.currentSchemaVersion - 1,
+            "schemaVersion": AppConfiguration.currentSchemaVersion - 2,
             "cliPath": "/opt/homebrew/bin/maa",
             "clients": [],
             "plans": [],
@@ -709,7 +877,7 @@ final class AutoMAAKitTests: XCTestCase {
 
         let store = ConfigurationStore(directories: directories)
         XCTAssertThrowsError(try store.load()) { error in
-            XCTAssertEqual(error as? ConfigurationStoreError, .unsupportedSchema(AppConfiguration.currentSchemaVersion - 1))
+            XCTAssertEqual(error as? ConfigurationStoreError, .unsupportedSchema(AppConfiguration.currentSchemaVersion - 2))
         }
         let recovery = try store.resetIncompatibleConfiguration()
 

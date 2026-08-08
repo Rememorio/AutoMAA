@@ -419,18 +419,6 @@ public struct ClientConfiguration: Codable, Identifiable, Equatable, Sendable {
     }
 }
 
-public struct PlanSchedule: Codable, Equatable, Sendable {
-    public var enabled = false
-    public var hour = 8
-    public var minute = 0
-
-    public init(enabled: Bool = false, hour: Int = 8, minute: Int = 0) {
-        self.enabled = enabled
-        self.hour = hour
-        self.minute = minute
-    }
-}
-
 public struct ExecutionPolicy: Codable, Equatable, Sendable {
     public var hotUpdateBeforeRun = true
     public var maxRetries = 1
@@ -547,7 +535,7 @@ public struct ApplicationUpdateConfiguration: Codable, Equatable, Sendable {
 }
 
 public struct AppConfiguration: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = 4
+    public static let currentSchemaVersion = 5
 
     public var schemaVersion: Int
     public var cliPath: String

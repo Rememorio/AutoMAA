@@ -2,15 +2,15 @@ import Darwin
 import Foundation
 
 public enum LaunchAgentError: LocalizedError, Equatable {
-    case invalidSchedule(plan: String)
-    case duplicateSchedule(first: String, second: String, hour: Int, minute: Int)
+    case invalidSchedule(plan: String, problem: PlanScheduleProblem)
+    case duplicateSchedule(first: String, second: String, slot: WeeklyScheduleSlot)
 
     public var errorDescription: String? {
         switch self {
-        case let .invalidSchedule(plan):
-            "「\(plan)」的定时时间无效"
-        case let .duplicateSchedule(first, second, hour, minute):
-            "「\(first)」与「\(second)」都设置为每天 \(String(format: "%02d:%02d", hour, minute))，请错开运行时间"
+        case let .invalidSchedule(plan, problem):
+            problem.message(planName: plan)
+        case let .duplicateSchedule(first, second, slot):
+            "「\(first)」与「\(second)」都设置为\(slot.weekday.title) \(PlanScheduleFormatter.time(hour: slot.hour, minute: slot.minute))，请错开运行时间"
         }
     }
 }
@@ -73,10 +73,9 @@ public struct LaunchAgentManager: Sendable {
         [
             "Label": label(planID: plan.id),
             "ProgramArguments": [runnerURL.path, "--plan", plan.id.uuidString.lowercased()],
-            "StartCalendarInterval": [
-                "Hour": min(max(plan.schedule.hour, 0), 23),
-                "Minute": min(max(plan.schedule.minute, 0), 59),
-            ],
+            "StartCalendarInterval": plan.schedule.slots.map {
+                ["Weekday": $0.weekday.launchdValue, "Hour": $0.hour, "Minute": $0.minute]
+            },
             "RunAtLoad": false,
             "ProcessType": "Interactive",
             "LimitLoadToSessionType": "Aqua",
@@ -127,14 +126,28 @@ public struct LaunchAgentManager: Sendable {
         FileManager.default.fileExists(atPath: plistURL(planID: planID).path)
     }
 
-    public func installedTime(planID: UUID) -> (hour: Int, minute: Int)? {
+    public func installedSlots(planID: UUID) -> Set<WeeklyScheduleSlot>? {
         guard let data = try? Data(contentsOf: plistURL(planID: planID)),
-              let payload = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-              let interval = payload["StartCalendarInterval"] as? [String: Any],
-              let hour = interval["Hour"] as? Int,
-              let minute = interval["Minute"] as? Int
+              let payload = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
         else { return nil }
-        return (hour, minute)
+        let intervals: [[String: Any]]
+        if let values = payload["StartCalendarInterval"] as? [[String: Any]] {
+            intervals = values
+        } else if let value = payload["StartCalendarInterval"] as? [String: Any] {
+            intervals = [value]
+        } else {
+            return nil
+        }
+        let slots = intervals.compactMap { interval -> WeeklyScheduleSlot? in
+            guard let weekdayValue = interval["Weekday"] as? Int,
+                  let weekday = ScheduleWeekday.allCases.first(where: { $0.launchdValue == weekdayValue }),
+                  let hour = interval["Hour"] as? Int,
+                  let minute = interval["Minute"] as? Int
+            else { return nil }
+            return WeeklyScheduleSlot(weekday: weekday, hour: hour, minute: minute)
+        }
+        guard slots.count == intervals.count else { return nil }
+        return Set(slots)
     }
 
     public func isCurrent(runnerURL: URL, plan: AutomationPlan) -> Bool {
@@ -145,26 +158,21 @@ public struct LaunchAgentManager: Sendable {
     }
 
     private func validate(_ plans: [AutomationPlan]) throws {
-        var occupied: [Int: AutomationPlan] = [:]
         for plan in plans where plan.schedule.enabled {
             try validate(plan)
-            let key = plan.schedule.hour * 60 + plan.schedule.minute
-            if let existing = occupied[key] {
-                throw LaunchAgentError.duplicateSchedule(
-                    first: existing.displayName,
-                    second: plan.displayName,
-                    hour: plan.schedule.hour,
-                    minute: plan.schedule.minute
-                )
-            }
-            occupied[key] = plan
+        }
+        if let conflict = PlanScheduleValidator.firstConflict(in: plans) {
+            throw LaunchAgentError.duplicateSchedule(
+                first: conflict.firstPlanName,
+                second: conflict.secondPlanName,
+                slot: conflict.slot
+            )
         }
     }
 
     private func validate(_ plan: AutomationPlan) throws {
-        guard (0...23).contains(plan.schedule.hour), (0...59).contains(plan.schedule.minute) else {
-            throw LaunchAgentError.invalidSchedule(plan: plan.displayName)
-        }
+        guard let problem = PlanScheduleValidator.problem(in: plan.schedule) else { return }
+        throw LaunchAgentError.invalidSchedule(plan: plan.displayName, problem: problem)
     }
 
     private func uninstallLegacyAgentIfNeeded() async throws {

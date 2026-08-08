@@ -65,7 +65,7 @@ enum ApplicationUpdateState {
 private enum ScheduleSynchronizationFeedback {
     case enabled(UUID)
     case disabled(UUID)
-    case timeChanged(UUID, hour: Int, minute: Int)
+    case changed(UUID)
 }
 
 @MainActor
@@ -154,8 +154,14 @@ final class AppModel: ObservableObject {
         softwareUpdateResultStore = SoftwareUpdateResultStore(directories: directories)
         importantNotificationCenter = ImportantNotificationCenter()
         do {
-            configuration = try configurationStore.load()
-            startupNotice = nil
+            let result = try configurationStore.loadResult()
+            configuration = result.configuration
+            if let version = result.migratedFromSchemaVersion,
+               let backupURL = result.backupURL {
+                startupNotice = "配置已从 schema v\(version) 升级；原配置已备份为 \(backupURL.lastPathComponent)"
+            } else {
+                startupNotice = nil
+            }
         } catch ConfigurationStoreError.unsupportedSchema {
             if let recovery = try? configurationStore.resetIncompatibleConfiguration() {
                 configuration = recovery.configuration
@@ -271,13 +277,8 @@ final class AppModel: ObservableObject {
         plan.schedule.enabled && launchAgentManager.isCurrent(runnerURL: runnerExecutableURL, plan: plan)
     }
 
-    func scheduleConflict(planID: UUID, hour: Int, minute: Int) -> AutomationPlan? {
-        configuration.plans.first {
-            $0.id != planID
-                && $0.schedule.enabled
-                && $0.schedule.hour == hour
-                && $0.schedule.minute == minute
-        }
+    func scheduleConflict(planID: UUID, schedule: PlanSchedule) -> PlanScheduleConflict? {
+        PlanScheduleValidator.conflict(planID: planID, schedule: schedule, among: configuration.plans)
     }
 
     func clientBinding(_ id: UUID) -> Binding<ClientConfiguration>? {
@@ -862,12 +863,12 @@ final class AppModel: ObservableObject {
         }
         guard let index = configuration.plans.firstIndex(where: { $0.id == planID }) else { return }
         let schedule = configuration.plans[index].schedule
-        if enabled, let conflict = scheduleConflict(
-            planID: planID,
-            hour: schedule.hour,
-            minute: schedule.minute
-        ) {
-            showBanner("暂时无法启用：与「\(conflict.displayName)」的定时时间相同")
+        if enabled, let problem = PlanScheduleValidator.problem(in: schedule) {
+            showBanner("暂时无法启用定时运行：\(problem.message(planName: configuration.plans[index].displayName))")
+            return
+        }
+        if enabled, let conflict = scheduleConflict(planID: planID, schedule: schedule) {
+            showBanner("暂时无法启用：与「\(conflict.firstPlanName)」的\(conflict.slot.weekday.title)定时运行冲突")
             return
         }
         configuration.plans[index].schedule.enabled = enabled
@@ -878,26 +879,77 @@ final class AppModel: ObservableObject {
         )
     }
 
-    func setPlanScheduleTime(_ planID: UUID, hour: Int, minute: Int) {
-        guard (0...23).contains(hour), (0...59).contains(minute),
-              let index = configuration.plans.firstIndex(where: { $0.id == planID })
-        else { return }
-        if configuration.plans[index].schedule.enabled,
-           let conflict = scheduleConflict(planID: planID, hour: hour, minute: minute) {
-            showBanner("无法使用该时间：与「\(conflict.displayName)」的定时运行冲突")
+    func setPlanScheduleRuleTime(_ planID: UUID, ruleID: UUID, hour: Int, minute: Int) {
+        guard (0...23).contains(hour), (0...59).contains(minute) else { return }
+        updatePlanSchedule(planID) { schedule in
+            guard let index = schedule.rules.firstIndex(where: { $0.id == ruleID }) else { return }
+            schedule.rules[index].hour = hour
+            schedule.rules[index].minute = minute
+        }
+    }
+
+    func togglePlanScheduleWeekday(_ planID: UUID, ruleID: UUID, weekday: ScheduleWeekday) {
+        updatePlanSchedule(planID) { schedule in
+            guard let index = schedule.rules.firstIndex(where: { $0.id == ruleID }) else { return }
+            if schedule.rules[index].weekdays.contains(weekday) {
+                schedule.rules[index].weekdays.remove(weekday)
+            } else {
+                schedule.rules[index].weekdays.insert(weekday)
+            }
+        }
+    }
+
+    func addPlanScheduleRule(_ planID: UUID) {
+        guard let plan = configuration.plans.first(where: { $0.id == planID }),
+              let weekday = ScheduleWeekday.allCases.first(where: { !plan.schedule.scheduledWeekdays.contains($0) })
+        else {
+            showBanner("每个星期都已有定时时段；同一方案每天最多运行一次")
             return
         }
-        guard configuration.plans[index].schedule.hour != hour
-                || configuration.plans[index].schedule.minute != minute
+        let reference = plan.schedule.rules.last
+        updatePlanSchedule(planID, debounce: false) { schedule in
+            schedule.rules.append(.init(
+                weekdays: [weekday],
+                hour: reference?.hour ?? 8,
+                minute: reference?.minute ?? 0
+            ))
+        }
+    }
+
+    func removePlanScheduleRule(_ planID: UUID, ruleID: UUID) {
+        guard let plan = configuration.plans.first(where: { $0.id == planID }), plan.schedule.rules.count > 1 else {
+            showBanner("至少需要保留一个定时时段")
+            return
+        }
+        updatePlanSchedule(planID, debounce: false) { schedule in
+            schedule.rules.removeAll { $0.id == ruleID }
+        }
+    }
+
+    private func updatePlanSchedule(
+        _ planID: UUID,
+        debounce: Bool = true,
+        _ update: (inout PlanSchedule) -> Void
+    ) {
+        guard !isRunning,
+              let index = configuration.plans.firstIndex(where: { $0.id == planID })
         else { return }
-        configuration.plans[index].schedule.hour = hour
-        configuration.plans[index].schedule.minute = minute
+        var schedule = configuration.plans[index].schedule
+        update(&schedule)
+        guard schedule != configuration.plans[index].schedule else { return }
+        if let problem = PlanScheduleValidator.problem(in: schedule) {
+            showBanner(problem.message(planName: configuration.plans[index].displayName))
+            return
+        }
+        if schedule.enabled, let conflict = scheduleConflict(planID: planID, schedule: schedule) {
+            let time = PlanScheduleFormatter.time(hour: conflict.slot.hour, minute: conflict.slot.minute)
+            showBanner("无法应用：与「\(conflict.firstPlanName)」的\(conflict.slot.weekday.title) \(time) 冲突")
+            return
+        }
+        configuration.plans[index].schedule = schedule
         guard saveNow(showConfirmation: false) else { return }
-        if configuration.plans[index].schedule.enabled || installedPlanIDs.contains(planID) {
-            enqueueScheduleSynchronization(
-                feedback: .timeChanged(planID, hour: hour, minute: minute),
-                debounce: true
-            )
+        if schedule.enabled || installedPlanIDs.contains(planID) {
+            enqueueScheduleSynchronization(feedback: .changed(planID), debounce: debounce)
         }
     }
 
@@ -942,7 +994,7 @@ final class AppModel: ObservableObject {
 
     private func showScheduleSynchronizationFeedback(_ feedback: ScheduleSynchronizationFeedback) {
         let planID = switch feedback {
-        case let .enabled(id), let .disabled(id), let .timeChanged(id, _, _): id
+        case let .enabled(id), let .disabled(id), let .changed(id): id
         }
         let name = configuration.plans.first(where: { $0.id == planID })?.displayName ?? "方案"
         switch feedback {
@@ -950,8 +1002,9 @@ final class AppModel: ObservableObject {
             showBanner("「\(name)」定时运行已启用")
         case .disabled:
             showBanner("「\(name)」定时运行已关闭")
-        case let .timeChanged(_, hour, minute):
-            showBanner("「\(name)」已改为每天 \(String(format: "%02d:%02d", hour, minute)) 运行")
+        case .changed:
+            let schedule = configuration.plans.first(where: { $0.id == planID })?.schedule
+            showBanner("「\(name)」已改为 \(schedule.map(PlanScheduleFormatter.summary) ?? "新的周计划")")
         }
     }
 

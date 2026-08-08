@@ -81,11 +81,11 @@ public enum ConfigurationValidator {
                     message: "「\(plan.displayName)」的信用关编队必须在 0 到 4 之间"
                 ))
             }
-            if !(0...23).contains(plan.schedule.hour) || !(0...59).contains(plan.schedule.minute) {
+            if let problem = PlanScheduleValidator.problem(in: plan.schedule) {
                 result.append(.init(
-                    id: "\(prefix)-schedule-time",
+                    id: "\(prefix)-schedule",
                     severity: .error,
-                    message: "「\(plan.displayName)」的定时时间无效"
+                    message: problem.message(planName: plan.displayName)
                 ))
             }
         }

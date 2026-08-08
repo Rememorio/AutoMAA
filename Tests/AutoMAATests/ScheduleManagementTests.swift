@@ -41,21 +41,36 @@ struct ScheduleManagementTests {
             systemIntegrationEnabled: false
         )
         #expect(model.isPlanScheduleCurrent(model.configuration.plans[0]))
-        #expect(manager.installedTime(planID: lightID)?.hour == 9)
+        let firstRuleID = model.configuration.plans[0].schedule.rules[0].id
+        #expect(manager.installedSlots(planID: lightID) == Set(ScheduleWeekday.allCases.map {
+            WeeklyScheduleSlot(weekday: $0, hour: 9, minute: 0)
+        }))
 
-        model.setPlanScheduleTime(lightID, hour: 10, minute: 15)
-        model.setPlanScheduleTime(lightID, hour: 10, minute: 16)
-        model.setPlanScheduleTime(lightID, hour: 10, minute: 17)
+        model.setPlanScheduleRuleTime(lightID, ruleID: firstRuleID, hour: 10, minute: 15)
+        model.setPlanScheduleRuleTime(lightID, ruleID: firstRuleID, hour: 10, minute: 16)
+        model.setPlanScheduleRuleTime(lightID, ruleID: firstRuleID, hour: 10, minute: 17)
         try await waitForScheduleSynchronization(model)
-        #expect(manager.installedTime(planID: lightID)?.hour == 10)
-        #expect(manager.installedTime(planID: lightID)?.minute == 17)
+        #expect(manager.installedSlots(planID: lightID)?.contains(
+            WeeklyScheduleSlot(weekday: .monday, hour: 10, minute: 17)
+        ) == true)
         #expect(model.isPlanScheduleCurrent(model.configuration.plans[0]))
 
+        model.togglePlanScheduleWeekday(lightID, ruleID: firstRuleID, weekday: .sunday)
+        model.addPlanScheduleRule(lightID)
+        let sundayRuleID = try #require(model.configuration.plans[0].schedule.rules.last?.id)
+        model.setPlanScheduleRuleTime(lightID, ruleID: sundayRuleID, hour: 21, minute: 0)
+        try await waitForScheduleSynchronization(model)
+        #expect(manager.installedSlots(planID: lightID)?.contains(
+            WeeklyScheduleSlot(weekday: .sunday, hour: 21, minute: 0)
+        ) == true)
+        #expect(PlanScheduleFormatter.summary(model.configuration.plans[0].schedule) == "周一至周六 10:17；周日 21:00")
+
         let completeID = model.configuration.plans[1].id
-        model.setPlanScheduleTime(completeID, hour: 10, minute: 17)
+        let completeRuleID = model.configuration.plans[1].schedule.rules[0].id
+        model.setPlanScheduleRuleTime(completeID, ruleID: completeRuleID, hour: 10, minute: 17)
         model.setPlanScheduleEnabled(completeID, true)
         #expect(model.configuration.plans[1].schedule.enabled == false)
-        #expect(model.bannerMessage?.contains("定时时间相同") == true)
+        #expect(model.bannerMessage?.contains("周一定时运行冲突") == true)
 
         model.setPlanScheduleEnabled(lightID, false)
         model.setPlanScheduleEnabled(lightID, true)
