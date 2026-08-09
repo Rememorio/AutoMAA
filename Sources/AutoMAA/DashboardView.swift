@@ -27,7 +27,7 @@ struct DashboardView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text(greeting.title)
                     .font(.system(size: 28, weight: .bold, design: .rounded))
-                Text(model.isRunning ? model.statusMessage : greeting.detail)
+                Text(model.isWorkflowRunning ? model.activeStatusMessage : greeting.detail)
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)

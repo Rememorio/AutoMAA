@@ -35,7 +35,7 @@ struct ActivityView: View {
     }
 
     private var currentRunID: UUID? {
-        model.isRunning ? model.activityEntries.last?.runID : nil
+        model.activeRunID
     }
 
     private var currentSession: ActivitySession? {
@@ -102,7 +102,7 @@ struct ActivityView: View {
                 } label: {
                     Label("清除活动记录", systemImage: "trash")
                 }
-                .disabled(model.activityEntries.isEmpty || model.isRunning)
+                .disabled(model.activityEntries.isEmpty || model.isWorkflowRunning)
             } label: {
                 Label("更多", systemImage: "ellipsis.circle")
             }
@@ -118,7 +118,7 @@ struct ActivityView: View {
             VStack(alignment: .leading, spacing: 16) {
                 explanation
 
-                if model.isRunning {
+                if model.isWorkflowRunning {
                     currentActivity
                     if !displayedSessions.isEmpty {
                         Text("历史运行")
@@ -128,7 +128,7 @@ struct ActivityView: View {
                 }
 
                 if displayedSessions.isEmpty {
-                    if !model.isRunning {
+                    if !model.isWorkflowRunning {
                         ContentUnavailableView(
                             model.activityEntries.isEmpty ? "还没有活动记录" : "没有匹配的活动",
                             systemImage: model.activityEntries.isEmpty ? "clock.arrow.circlepath" : "magnifyingglass",
@@ -176,32 +176,38 @@ struct ActivityView: View {
         return Panel {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 14) {
-                    Image(systemName: model.phase.statusSymbol)
+                    Image(systemName: model.activePhase.statusSymbol)
                         .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(model.phase.statusTint)
+                        .foregroundStyle(model.activePhase.statusTint)
                         .frame(width: 40, height: 40)
-                        .background(model.phase.statusTint.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                        .background(model.activePhase.statusTint.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
 
                     VStack(alignment: .leading, spacing: 7) {
                         HStack {
                             Text("当前运行")
                                 .font(.headline)
-                            Text(model.phase.displayName)
+                            Text(model.activePhase.displayName)
                                 .font(.caption.weight(.semibold))
-                                .foregroundStyle(model.phase.statusTint)
+                                .foregroundStyle(model.activePhase.statusTint)
                         }
-                        Text(model.statusMessage)
+                        Text(model.activeStatusMessage)
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
-                        WorkflowProgressView(progress: model.progress)
+                        WorkflowProgressView(progress: model.activeProgress)
                     }
 
-                    Button(role: .destructive) { model.cancelRun() } label: {
-                        Label(model.runningPlanID == nil ? "停止更新" : "安全停止", systemImage: "stop.fill")
+                    if model.canCancelRun {
+                        Button(role: .destructive) { model.cancelRun() } label: {
+                            Label(model.runningPlanID == nil ? "停止更新" : "安全停止", systemImage: "stop.fill")
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.red)
+                    } else {
+                        Label("定时任务在后台运行", systemImage: "clock.badge.checkmark")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
                     }
-                    .buttonStyle(.bordered)
-                    .tint(.red)
                 }
 
                 Divider()
@@ -292,8 +298,8 @@ struct ActivityView: View {
     }
 
     private func sessionHeader(_ session: ActivitySession) -> some View {
-        let isCurrent = model.isRunning && session.runID != nil && session.runID == model.activityEntries.last?.runID
-        let phase = isCurrent ? model.phase : session.finalPhase
+        let isCurrent = model.isWorkflowRunning && session.runID != nil && session.runID == model.activeRunID
+        let phase = isCurrent ? model.activePhase : session.finalPhase
         let tint = sessionTint(phase: phase, level: session.finalLevel)
 
         return HStack(spacing: 13) {

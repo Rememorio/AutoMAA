@@ -99,6 +99,33 @@ struct ApplicationUpdateTests {
         #expect(counts.prepares == 1)
     }
 
+    @Test("automatic downloads resume after a background runner exits")
+    @MainActor
+    func automaticDownloadsResumeAfterBackgroundRunner() async throws {
+        let fixture = try makeFixture(automaticallyDownloads: true)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        var lock: ProcessLock? = try ProcessLock(url: fixture.model.directories.lock)
+        #expect(lock != nil)
+        fixture.model.reloadActivityHistory()
+
+        fixture.model.checkForApplicationUpdate(showResult: false)
+        try await waitUntil {
+            if case .available = fixture.model.applicationUpdateState { return true }
+            return false
+        }
+        var counts = await fixture.service.counts()
+        #expect(counts.prepares == 0)
+
+        lock = nil
+        fixture.model.reloadActivityHistory()
+        try await waitUntil {
+            if case .ready = fixture.model.applicationUpdateState { return true }
+            return false
+        }
+        counts = await fixture.service.counts()
+        #expect(counts.prepares == 1)
+    }
+
     @MainActor
     private func makeFixture(
         automaticallyDownloads: Bool

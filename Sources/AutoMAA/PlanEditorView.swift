@@ -115,7 +115,7 @@ struct PlanEditorView: View {
                     ))
                     .labelsHidden()
                     .toggleStyle(.switch)
-                    .disabled(model.isRunning)
+                    .disabled(model.isWorkflowRunning)
                 }
                 ForEach(Array(plan.schedule.rules.enumerated()), id: \.element.id) { index, rule in
                     scheduleRuleRow(rule, index: index)
@@ -126,7 +126,7 @@ struct PlanEditorView: View {
                     } label: {
                         Label("添加时段", systemImage: "plus")
                     }
-                    .disabled(model.isRunning || plan.schedule.scheduledWeekdays.count == ScheduleWeekday.allCases.count)
+                    .disabled(model.isWorkflowRunning || plan.schedule.scheduledWeekdays.count == ScheduleWeekday.allCases.count)
                     .help(plan.schedule.scheduledWeekdays.count == ScheduleWeekday.allCases.count
                           ? "先从现有时段取消一个星期"
                           : "为尚未安排的星期添加另一个时间")
@@ -160,7 +160,7 @@ struct PlanEditorView: View {
                 DatePicker("时间", selection: scheduleTime(rule), displayedComponents: .hourAndMinute)
                     .datePickerStyle(.field)
                     .labelsHidden()
-                    .disabled(model.isRunning)
+                    .disabled(model.isWorkflowRunning)
                 if plan.schedule.rules.count > 1 {
                     Button(role: .destructive) {
                         model.removePlanScheduleRule(plan.id, ruleID: rule.id)
@@ -170,7 +170,7 @@ struct PlanEditorView: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
                     .help("删除这个时段")
-                    .disabled(model.isRunning)
+                    .disabled(model.isWorkflowRunning)
                 }
             }
             HStack(spacing: 7) {
@@ -190,7 +190,7 @@ struct PlanEditorView: View {
                             )
                     }
                     .buttonStyle(.plain)
-                    .disabled(model.isRunning || (!selected && occupied))
+                    .disabled(model.isWorkflowRunning || (!selected && occupied))
                     .opacity(!selected && occupied ? 0.35 : 1)
                     .help(occupied && !selected ? "已由其他时段使用\(weekday.title)" : weekday.title)
                     .accessibilityLabel(weekday.title)

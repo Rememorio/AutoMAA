@@ -48,6 +48,10 @@ struct RootView: View {
         .task {
             model.prepareApplication()
         }
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            await model.monitorExternalActivity()
+        }
     }
 
     @ViewBuilder

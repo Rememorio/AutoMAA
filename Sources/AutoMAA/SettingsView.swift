@@ -77,7 +77,7 @@ struct SettingsView: View {
                             Spacer()
                             Button("下载并校验") { model.downloadApplicationUpdate(release) }
                                 .buttonStyle(.borderedProminent)
-                                .disabled(model.isRunning)
+                                .disabled(model.isWorkflowRunning)
                         }
                     }
                 case let .downloading(release):
@@ -99,7 +99,7 @@ struct SettingsView: View {
                             Spacer()
                             Button("重启并立即更新") { model.restartAndInstallApplicationUpdate(prepared) }
                                 .buttonStyle(.borderedProminent)
-                                .disabled(model.isRunning)
+                                .disabled(model.isWorkflowRunning)
                         }
                     }
                 case let .installing(release):
@@ -264,18 +264,18 @@ struct SettingsView: View {
                     Spacer()
                     Button("检测环境") { model.refreshMAAStatus(showResult: true) }
                         .disabled(
-                            model.isRunning
+                            model.isWorkflowRunning
                                 || model.applicationUpdateState.blocksWorkflow
                                 || model.isCheckingMAAEnvironment
                         )
                     Button("更新核心与基础资源") { model.updateMAACore() }
-                        .disabled(model.isRunning || model.applicationUpdateState.blocksWorkflow)
+                        .disabled(model.isWorkflowRunning || model.applicationUpdateState.blocksWorkflow)
                     Button {
                         model.hotUpdate()
                     } label: {
                         Label("热更新识别资源", systemImage: "arrow.triangle.2.circlepath")
                     }
-                    .disabled(model.isRunning || model.applicationUpdateState.blocksWorkflow)
+                    .disabled(model.isWorkflowRunning || model.applicationUpdateState.blocksWorkflow)
                 }
             }
         }
@@ -296,7 +296,7 @@ struct SettingsView: View {
                 HStack {
                     Button("打开配置目录") { NSWorkspace.shared.open(model.directories.root) }
                     Button("重置今日完成记录") { model.resetToday() }
-                        .disabled(model.isRunning)
+                        .disabled(model.isWorkflowRunning)
                     Spacer()
                     Button("立即保存") { model.saveNow() }
                 }

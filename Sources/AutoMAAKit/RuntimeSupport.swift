@@ -119,6 +119,15 @@ struct ManualInterventionError: LocalizedError {
 public final class ProcessLock: @unchecked Sendable {
     private var descriptor: Int32 = -1
 
+    public static func isHeld(at url: URL) -> Bool {
+        let descriptor = Darwin.open(url.path, O_RDWR)
+        guard descriptor >= 0 else { return errno != ENOENT }
+        defer { Darwin.close(descriptor) }
+        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else { return true }
+        _ = flock(descriptor, LOCK_UN)
+        return false
+    }
+
     public init(url: URL) throws {
         descriptor = Darwin.open(url.path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
         guard descriptor >= 0, flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {

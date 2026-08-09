@@ -155,22 +155,29 @@ struct SidebarView: View {
         VStack(alignment: .leading, spacing: 11) {
             workflowStatus
 
-            if model.isRunning {
-                WorkflowProgressView(progress: model.progress)
+            if model.isWorkflowRunning {
+                WorkflowProgressView(progress: model.activeProgress)
 
-                Button { model.cancelRun() } label: {
-                    Label(
-                        model.runningPlanID == nil ? "停止更新" : "安全停止",
-                        systemImage: "stop.fill"
-                    )
-                    .frame(maxWidth: .infinity)
+                if model.canCancelRun {
+                    Button { model.cancelRun() } label: {
+                        Label(
+                            model.runningPlanID == nil ? "停止更新" : "安全停止",
+                            systemImage: "stop.fill"
+                        )
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                    .tint(.red)
+                    .help(model.runningPlanID == nil
+                          ? "停止当前 MAA 维护命令"
+                          : "停止当前 MAA 命令，关闭客户端并释放连接")
+                } else {
+                    Label("定时任务正在后台运行", systemImage: "clock.badge.checkmark")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .tint(.red)
-                .help(model.runningPlanID == nil
-                      ? "停止当前 MAA 维护命令"
-                      : "停止当前 MAA 命令，关闭客户端并释放连接")
             } else {
                 currentPlanPicker
 
@@ -267,25 +274,25 @@ struct SidebarView: View {
     }
 
     private var statusColor: Color {
-        if model.isRunning { return model.phase.statusTint }
+        if model.isWorkflowRunning { return model.activePhase.statusTint }
         if hasReadinessErrors { return .red }
         return model.readinessIssues.isEmpty ? .green : .orange
     }
 
     private var statusSymbol: String {
-        if model.isRunning { return model.phase.statusSymbol }
+        if model.isWorkflowRunning { return model.activePhase.statusSymbol }
         if hasReadinessErrors { return "exclamationmark.triangle.fill" }
         return model.readinessIssues.isEmpty ? "checkmark.circle.fill" : "exclamationmark.circle.fill"
     }
 
     private var statusTitle: String {
-        if model.isRunning { return model.phase.displayName }
+        if model.isWorkflowRunning { return model.activePhase.displayName }
         if !model.canRun { return "需要完善配置" }
         return model.readinessIssues.isEmpty ? "已准备就绪" : "可以运行"
     }
 
     private var statusDetail: String {
-        if model.isRunning { return model.statusMessage }
+        if model.isWorkflowRunning { return model.activeStatusMessage }
         if model.readinessIssues.isEmpty {
             let plan = model.currentPlan
             let accounts = model.configuration.clients.filter(\.enabled).flatMap { $0.accounts.filter { plan?.includes($0) == true } }.count

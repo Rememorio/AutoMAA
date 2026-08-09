@@ -68,6 +68,14 @@ private enum ScheduleSynchronizationFeedback {
     case changed(UUID)
 }
 
+private struct ExternalRunState {
+    let runID: UUID?
+    let planID: UUID?
+    let phase: RunnerPhase
+    let message: String
+    let progress: Double
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var configuration: AppConfiguration
@@ -85,6 +93,7 @@ final class AppModel: ObservableObject {
     @Published var progress = 0.0
     @Published var isRunning = false
     @Published var runningPlanID: UUID?
+    @Published private var externalRunState: ExternalRunState?
     @Published var bannerMessage: String?
     @Published var installedPlanIDs: Set<UUID>
     @Published var lastReport: WorkflowReport?
@@ -176,7 +185,9 @@ final class AppModel: ObservableObject {
         activityEntries = historyStore.load()
         installedPlanIDs = launchAgentManager.installedPlanIDs
         currentPlanID = configuration.plans.first?.id
-        try? MAAConfigurationWriter(directories: directories).prepare(configuration)
+        if !ProcessLock.isHeld(at: directories.lock) {
+            try? MAAConfigurationWriter(directories: directories).prepare(configuration)
+        }
     }
 
     deinit {
@@ -203,6 +214,38 @@ final class AppModel: ObservableObject {
 
     var activeScheduleCount: Int {
         configuration.plans.count(where: isPlanScheduleCurrent)
+    }
+
+    var isWorkflowRunning: Bool {
+        isRunning || externalRunState != nil
+    }
+
+    var isExternalRunActive: Bool {
+        externalRunState != nil
+    }
+
+    var canCancelRun: Bool {
+        isRunning && workflowTask != nil
+    }
+
+    var activeRunID: UUID? {
+        isRunning ? activityEntries.last?.runID : externalRunState?.runID
+    }
+
+    var activePlanID: UUID? {
+        isRunning ? runningPlanID : externalRunState?.planID
+    }
+
+    var activePhase: RunnerPhase {
+        externalRunState?.phase ?? phase
+    }
+
+    var activeStatusMessage: String {
+        externalRunState?.message ?? statusMessage
+    }
+
+    var activeProgress: Double {
+        externalRunState?.progress ?? progress
     }
 
     var supportDiagnostics: SupportDiagnostics {
@@ -261,8 +304,8 @@ final class AppModel: ObservableObject {
     func planRunState(planID: UUID?) -> PlanRunState {
         PlanRunState.resolve(
             planID: planID,
-            isRunning: isRunning || applicationUpdateState.blocksWorkflow,
-            runningPlanID: runningPlanID,
+            isRunning: isWorkflowRunning || applicationUpdateState.blocksWorkflow,
+            runningPlanID: activePlanID,
             hasReadinessError: readinessIssues(for: planID).contains { $0.severity == .error }
         )
     }
@@ -340,7 +383,8 @@ final class AppModel: ObservableObject {
     @discardableResult
     func saveNow(showConfirmation: Bool = true) -> Bool {
         do {
-            if !isRunning {
+            refreshExternalRunState()
+            if !isWorkflowRunning {
                 try MAAConfigurationWriter(directories: directories).prepare(configuration)
             }
             try configurationStore.save(configuration)
@@ -353,6 +397,7 @@ final class AppModel: ObservableObject {
     }
 
     func runPlan(_ planID: UUID, resumeToday: Bool = true) {
+        reloadActivityHistory()
         selectCurrentPlan(planID)
         let issues = readinessIssues(for: planID)
         guard canRun(planID: planID) else {
@@ -407,7 +452,8 @@ final class AppModel: ObservableObject {
     }
 
     func hotUpdate() {
-        guard !isRunning, !applicationUpdateState.blocksWorkflow else { return }
+        reloadActivityHistory()
+        guard !isWorkflowRunning, !applicationUpdateState.blocksWorkflow else { return }
         isRunning = true
         let runner = WorkflowRunner(directories: directories) { [weak self] event in
             self?.consume(event)
@@ -425,6 +471,7 @@ final class AppModel: ObservableObject {
     func prepareApplication() {
         guard !didPrepareApplication else { return }
         didPrepareApplication = true
+        reloadActivityHistory()
         synchronizeSchedules()
         refreshNotificationAuthorization()
         if let startupNotice {
@@ -533,7 +580,8 @@ final class AppModel: ObservableObject {
     }
 
     func updateMAACore() {
-        guard !isRunning, !applicationUpdateState.blocksWorkflow else { return }
+        reloadActivityHistory()
+        guard !isWorkflowRunning, !applicationUpdateState.blocksWorkflow else { return }
         guard FileManager.default.isExecutableFile(atPath: configuration.cliPath) else {
             showBanner("找不到可执行的 maa-cli")
             return
@@ -577,7 +625,7 @@ final class AppModel: ObservableObject {
             if let release = try await softwareUpdateService.check() {
                 applicationUpdateState = .available(release)
                 if configuration.applicationUpdates.automaticallyDownloadsUpdates {
-                    if isRunning {
+                    if isWorkflowRunning {
                         showBanner("发现 AutoMAA v\(release.version)，将在当前流程结束后自动下载")
                     } else {
                         showBanner("发现 AutoMAA v\(release.version)，正在自动下载并校验")
@@ -615,7 +663,7 @@ final class AppModel: ObservableObject {
 
     private func resumeAutomaticApplicationUpdateIfNeeded() {
         guard configuration.applicationUpdates.automaticallyDownloadsUpdates,
-              !isRunning,
+              !isWorkflowRunning,
               applicationUpdateTask == nil,
               case let .available(release) = applicationUpdateState
         else { return }
@@ -651,7 +699,8 @@ final class AppModel: ObservableObject {
     }
 
     func downloadApplicationUpdate(_ release: SoftwareUpdateRelease) {
-        guard !isRunning, !applicationUpdateState.isBusy else { return }
+        reloadActivityHistory()
+        guard !isWorkflowRunning, !applicationUpdateState.isBusy else { return }
         applicationUpdateTask?.cancel()
         applicationUpdateTask = Task { [weak self] in
             guard let self else { return }
@@ -666,7 +715,8 @@ final class AppModel: ObservableObject {
     }
 
     func restartAndInstallApplicationUpdate(_ prepared: PreparedSoftwareUpdate) {
-        guard !isRunning, !applicationUpdateState.isBusy else { return }
+        reloadActivityHistory()
+        guard !isWorkflowRunning, !applicationUpdateState.isBusy else { return }
         do {
             saveNow(showConfirmation: false)
             try validateAutomaticUpdateAvailability()
@@ -748,8 +798,21 @@ final class AppModel: ObservableObject {
 
     func reloadActivityHistory() {
         let entries = historyStore.load()
-        guard entries != activityEntries else { return }
-        activityEntries = entries
+        if entries != activityEntries {
+            activityEntries = entries
+        }
+        refreshExternalRunState()
+    }
+
+    func monitorExternalActivity() async {
+        while !Task.isCancelled {
+            reloadActivityHistory()
+            do {
+                try await Task.sleep(for: .seconds(1))
+            } catch {
+                return
+            }
+        }
     }
 
     func addAccount(to clientID: UUID) {
@@ -846,7 +909,8 @@ final class AppModel: ObservableObject {
     }
 
     func setPlanScheduleEnabled(_ planID: UUID, _ enabled: Bool) {
-        guard !isRunning else { return }
+        reloadActivityHistory()
+        guard !isWorkflowRunning else { return }
         if enabled,
            let issue = readinessIssues(for: planID).first(where: { $0.severity == .error }) {
             if let index = configuration.plans.firstIndex(where: { $0.id == planID }) {
@@ -925,7 +989,8 @@ final class AppModel: ObservableObject {
         debounce: Bool = true,
         _ update: (inout PlanSchedule) -> Void
     ) {
-        guard !isRunning,
+        reloadActivityHistory()
+        guard !isWorkflowRunning,
               let index = configuration.plans.firstIndex(where: { $0.id == planID })
         else { return }
         var schedule = configuration.plans[index].schedule
@@ -1035,11 +1100,42 @@ final class AppModel: ObservableObject {
     }
 
     private func consume(_ event: RunnerEvent) {
+        externalRunState = nil
         phase = event.phase
         statusMessage = event.message
         progress = event.progress
         activityEntries.append(event.log)
         if activityEntries.count > 1_000 { activityEntries.removeFirst(activityEntries.count - 1_000) }
+    }
+
+    private func refreshExternalRunState() {
+        guard !isRunning else {
+            externalRunState = nil
+            return
+        }
+        guard ProcessLock.isHeld(at: directories.lock) else {
+            let ended = externalRunState != nil
+            externalRunState = nil
+            if ended { resumeAutomaticApplicationUpdateIfNeeded() }
+            return
+        }
+        let latest = latestExternalRunEntry()
+        externalRunState = ExternalRunState(
+            runID: latest?.runID,
+            planID: latest?.planID,
+            phase: latest?.phase ?? .preparing,
+            message: latest?.message ?? "定时任务正在启动",
+            progress: latest?.progress ?? 0
+        )
+    }
+
+    private func latestExternalRunEntry() -> LogEntry? {
+        guard let latest = activityEntries.last else { return nil }
+        guard let lockDate = try? directories.lock
+            .resourceValues(forKeys: [.contentModificationDateKey])
+            .contentModificationDate
+        else { return latest }
+        return latest.timestamp >= lockDate.addingTimeInterval(-1) ? latest : nil
     }
 
     private func normalizedProfile(_ value: String) -> String {

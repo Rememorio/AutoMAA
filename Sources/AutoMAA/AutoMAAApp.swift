@@ -74,7 +74,7 @@ private struct AutoMAACommands: Commands {
                 .disabled(!model.canRun)
             Button("安全停止当前流程") { model.cancelRun() }
                 .keyboardShortcut(".", modifiers: [.command])
-                .disabled(!model.isRunning)
+                .disabled(!model.canCancelRun)
             Button("保存配置") { model.saveNow() }
                 .keyboardShortcut("s", modifiers: [.command])
         }
