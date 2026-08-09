@@ -17,6 +17,12 @@ struct MonotonicProgress {
 private struct TaskRunOutcome {
     let succeeded: Bool
     let notices: [WorkflowNotice]
+    let completionSummary: TaskCompletionSummary?
+}
+
+private struct TaskCompletionSummary {
+    let messageSuffix: String
+    let details: String?
 }
 
 struct ClientShutdownPolicy: Sendable, Equatable {
@@ -371,12 +377,13 @@ public final class WorkflowRunner {
                         try? stateStore.save(state)
                         emit(
                             .runningTask,
-                            "\(accountText(account))：\(task.title)已完成",
+                            "\(accountText(account))：\(task.title)已完成\(outcome.completionSummary?.messageSuffix ?? "")",
                             Double(visitedSteps) / Double(totalSteps),
                             .success,
                             client: client,
                             account: account,
-                            task: task
+                            task: task,
+                            details: outcome.completionSummary?.details
                         )
                     } else {
                         report.failedSteps += 1
@@ -650,7 +657,11 @@ public final class WorkflowRunner {
                 )
             }
             if result.exitCode == 0, !result.timedOut {
-                return TaskRunOutcome(succeeded: true, notices: notices)
+                return TaskRunOutcome(
+                    succeeded: true,
+                    notices: notices,
+                    completionSummary: completionSummary(for: task, output: result.combinedOutput)
+                )
             }
             emit(
                 .runningTask,
@@ -674,7 +685,17 @@ public final class WorkflowRunner {
                 )
             }
         }
-        return TaskRunOutcome(succeeded: false, notices: notices)
+        return TaskRunOutcome(succeeded: false, notices: notices, completionSummary: nil)
+    }
+
+    private func completionSummary(for task: TaskKind, output: String) -> TaskCompletionSummary? {
+        guard task == .fight,
+              let summary = MAAOutputSummaryParser.fightSummary(in: output)
+        else { return nil }
+        return TaskCompletionSummary(
+            messageSuffix: "（\(summary.stage) × \(summary.times)）",
+            details: summary.totalDrops.map { "总掉落：\($0)" }
+        )
     }
 
     private func workflowNotices(

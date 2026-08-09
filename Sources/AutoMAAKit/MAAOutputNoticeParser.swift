@@ -11,7 +11,7 @@ enum MAAOutputNoticeParser {
         in output: String,
         preservedTags: [String]
     ) -> [MAARecruitmentNotice] {
-        let lines = output.components(separatedBy: .newlines).map(strippingANSIEscapeSequences)
+        let lines = MAAOutputText.lines(in: output)
         var notices: [MAARecruitmentNotice] = []
         var resultTags: [[String]] = []
         var isReadingDetectedTags = false
@@ -113,6 +113,12 @@ enum MAAOutputNoticeParser {
 
     private static func append(_ notice: MAARecruitmentNotice, to notices: inout [MAARecruitmentNotice]) {
         if !notices.contains(notice) { notices.append(notice) }
+    }
+}
+
+enum MAAOutputText {
+    static func lines(in output: String) -> [String] {
+        output.components(separatedBy: .newlines).map(strippingANSIEscapeSequences)
     }
 
     private static func strippingANSIEscapeSequences(_ value: String) -> String {

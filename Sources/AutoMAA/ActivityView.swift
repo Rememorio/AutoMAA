@@ -162,7 +162,7 @@ struct ActivityView: View {
             Image(systemName: "info.circle.fill")
                 .foregroundStyle(Color.maaAccent)
                 .padding(.top, 1)
-            Text("手动与定时运行都会在这里整理为活动记录；高星公招与保留标签会作为醒目提醒保留。maa-cli 的完整命令输出与 LaunchAgent 原始输出保存在诊断日志中，仅在排查问题时需要查看。")
+            Text("手动与定时运行都会在这里整理为活动记录；理智作战会保留关卡、次数和总掉落，高星公招与保留标签会作为醒目提醒保留。maa-cli 的完整命令输出与 LaunchAgent 原始输出保存在诊断日志中，仅在排查问题时需要查看。")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -454,7 +454,7 @@ private struct ActivityEventRow: View {
                     Button {
                         showsDetails.toggle()
                     } label: {
-                        Label(showsDetails ? "收起诊断详情" : "查看诊断详情", systemImage: "chevron.right")
+                        Label(showsDetails ? "收起详情" : "查看详情", systemImage: "chevron.right")
                             .labelStyle(.titleAndIcon)
                             .font(.caption)
                     }

@@ -1289,6 +1289,105 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertTrue(MAAOutputNoticeParser.recruitmentNotices(in: output, preservedTags: []).isEmpty)
     }
 
+    func testMAAOutputSummaryParserReadsFightStageCountAndLocalizedDrops() {
+        let output = """
+        Summary
+        ----------------------------------------
+        [理智作战] 09:01:09 - 09:06:23 (5m 14s) Completed
+        \u{001B}[32mFight TO-5 2 times, drops:\u{001B}[0m
+        1. 沿途的点滴 × 120, 装置 × 7, 酮凝集 × 4, 龙门币 × 1440
+        2. 沿途的点滴 × 36, 装置 × 3, 龙门币 × 432
+        total drops: 沿途的点滴 × 156, 装置 × 10, 酮凝集 × 4, 龙门币 × 1872
+        """
+
+        XCTAssertEqual(
+            MAAOutputSummaryParser.fightSummary(in: output),
+            MAAFightSummary(
+                stage: "TO-5",
+                times: 2,
+                totalDrops: "沿途的点滴 × 156, 装置 × 10, 酮凝集 × 4, 龙门币 × 1872"
+            )
+        )
+    }
+
+    func testMAAOutputSummaryParserPreservesOtherLocalesAndAllowsMissingDrops() {
+        XCTAssertEqual(
+            MAAOutputSummaryParser.fightSummary(in: """
+            Fight AP-5 4 times, drops:
+            total drops: 購買資格証 × 84, 龍門幣 × 1440
+            """),
+            MAAFightSummary(stage: "AP-5", times: 4, totalDrops: "購買資格証 × 84, 龍門幣 × 1440")
+        )
+        XCTAssertEqual(
+            MAAOutputSummaryParser.fightSummary(in: "Fight Annihilation 0 times"),
+            MAAFightSummary(stage: "Annihilation", times: 0, totalDrops: nil)
+        )
+    }
+
+    func testMAAOutputSummaryParserIgnoresMalformedOrUnrelatedOutput() {
+        XCTAssertNil(MAAOutputSummaryParser.fightSummary(in: "Fight TO-5 twice, drops:"))
+        XCTAssertNil(MAAOutputSummaryParser.fightSummary(in: "total drops: 龙门币 × 1440"))
+        XCTAssertNil(MAAOutputSummaryParser.fightSummary(in: "BeforeFight TO-5 2 times, drops:"))
+    }
+
+    @MainActor
+    func testWorkflowCompletionRecordsFightSummaryAndTotalDrops() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = root.appending(path: "Applications/Test Game.app", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        let cli = root.appending(path: "maa-cli")
+        let script = """
+        #!/bin/sh
+        if [ "$1" = "run" ]; then
+          printf '%s\\n' \
+            'Fight TO-5 2 times, drops:' \
+            'total drops: 沿途的点滴 × 156, 装置 × 10, 酮凝集 × 4, 龙门币 × 1872'
+        fi
+        """
+        try Data(script.utf8).write(to: cli)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
+
+        let account = AccountConfiguration(name: "测试账号")
+        let client = ClientConfiguration(
+            name: "测试客户端",
+            kind: .official,
+            appPath: app.path,
+            address: "127.0.0.1:65492",
+            profileName: "fight-summary",
+            bundleIdentifier: "dev.automaa.tests.fight-summary",
+            accounts: [account]
+        )
+        var plan = AutomationPlan.lightRoutine
+        plan.recruit.enabled = false
+        plan.infrast.enabled = false
+        plan.mall.enabled = false
+        plan.award.enabled = false
+        plan.policy.hotUpdateBeforeRun = false
+        plan.policy.maxRetries = 0
+        let configuration = AppConfiguration(cliPath: cli.path, clients: [client], plans: [plan])
+        let runtime = StubClientRuntime(closesOnForce: true)
+        let runner = WorkflowRunner(
+            directories: AppDirectories(root: root),
+            portProbe: runtime,
+            gameController: runtime,
+            shutdownPolicy: .immediate,
+            eventSink: runtime.record
+        )
+
+        let report = await runner.run(configuration, planID: plan.id, resumeToday: false)
+        let completion = try XCTUnwrap(runtime.events.first {
+            $0.log.task == .fight && $0.log.level == .success && $0.message.contains("已完成")
+        })
+
+        XCTAssertTrue(report.isSuccess)
+        XCTAssertEqual(completion.message, "账号「测试账号」：理智作战已完成（TO-5 × 2）")
+        XCTAssertEqual(
+            completion.log.details,
+            "总掉落：沿途的点滴 × 156, 装置 × 10, 酮凝集 × 4, 龙门币 × 1872"
+        )
+    }
+
     @MainActor
     func testCompletedPlanIsNotLaunchedAgainToday() async throws {
         let root = temporaryRoot()
