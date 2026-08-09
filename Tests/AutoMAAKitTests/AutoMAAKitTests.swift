@@ -880,13 +880,15 @@ final class AutoMAAKitTests: XCTestCase {
     }
 
     func testSensitiveDataRedactorMasksConfiguredSelectorsAndIdentifiers() {
-        let output = "account user@example.com phone 12345678901 selector ABC-1234"
+        let output = "account user@example.com phone 12345678901 selector ABC-1234 path /Users/private-user/Applications/Game.app"
         let redacted = SensitiveDataRedactor.redact(output, sensitiveValues: ["abc-1234"])
 
         XCTAssertFalse(redacted.contains("user@example.com"))
         XCTAssertFalse(redacted.contains("12345678901"))
         XCTAssertFalse(redacted.contains("ABC-1234"))
+        XCTAssertFalse(redacted.contains("private-user"))
         XCTAssertTrue(redacted.contains("[已隐藏邮箱]"))
+        XCTAssertTrue(redacted.contains("[用户目录]/Applications/Game.app"))
     }
 
     func testActivityHistoryGroupsRunsAndKeepsLegacyEntriesReadable() throws {
@@ -978,18 +980,29 @@ final class AutoMAAKitTests: XCTestCase {
                 standardError: "user@example.com 13800138000",
                 timedOut: false
             ),
-            command: "startup",
+            command: "/Users/private-user/Applications/Game.app",
             runID: runID,
             sensitiveValues: ["private-fragment"]
         )
 
         let contents = try String(contentsOf: store.url(for: runID), encoding: .utf8)
 
-        XCTAssertTrue(contents.contains("startup · exit 1"))
+        XCTAssertTrue(contents.contains("[用户目录]/Applications/Game.app · exit 1"))
         XCTAssertFalse(contents.contains("private-fragment"))
+        XCTAssertFalse(contents.contains("private-user"))
         XCTAssertFalse(contents.contains("user@example.com"))
         XCTAssertFalse(contents.contains("13800138000"))
         XCTAssertFalse(FileManager.default.fileExists(atPath: directories.history.path))
+    }
+
+    @MainActor
+    func testNotificationCenterWithoutApplicationBundleDegradesSafely() async throws {
+        let center = ImportantNotificationCenter(canUseSystemCenter: false)
+        let current = await center.authorizationState()
+        let requested = try await center.requestAuthorization()
+
+        XCTAssertEqual(current, .denied)
+        XCTAssertEqual(requested, .denied)
     }
 
     @MainActor

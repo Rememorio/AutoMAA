@@ -203,6 +203,11 @@ public enum SensitiveDataRedactor {
         }
         result = replacingMatches(
             in: result,
+            pattern: #"(?<![\p{L}\p{N}._-])/(?:Users|home)/[^/\s]+"#,
+            replacement: "[用户目录]"
+        )
+        result = replacingMatches(
+            in: result,
             pattern: #"(?<![\p{L}\p{N}._%+-])[\p{L}\p{N}._%+-]+@[\p{L}\p{N}.-]+\.[A-Za-z]{2,}(?![\p{L}\p{N}])"#,
             replacement: "[已隐藏邮箱]"
         )

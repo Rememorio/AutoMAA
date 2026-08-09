@@ -186,6 +186,7 @@ public struct DiagnosticLogStore: Sendable {
         runID: UUID,
         sensitiveValues: [String] = []
     ) {
+        let command = SensitiveDataRedactor.redact(command, sensitiveValues: sensitiveValues)
         let output = SensitiveDataRedactor.redact(result.combinedOutput, sensitiveValues: sensitiveValues)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let timestamp = ISO8601DateFormatter().string(from: Date())

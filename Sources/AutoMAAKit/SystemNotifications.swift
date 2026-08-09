@@ -74,12 +74,20 @@ public enum WorkflowNotificationComposer {
 @MainActor
 public final class ImportantNotificationCenter {
     private let configuredCenter: UNUserNotificationCenter?
+    private let canUseSystemCenter: Bool
 
     public init(center: UNUserNotificationCenter? = nil) {
         configuredCenter = center
+        canUseSystemCenter = center != nil || Bundle.main.bundleIdentifier?.isEmpty == false
+    }
+
+    init(center: UNUserNotificationCenter? = nil, canUseSystemCenter: Bool) {
+        configuredCenter = center
+        self.canUseSystemCenter = canUseSystemCenter
     }
 
     public func authorizationState() async -> NotificationAuthorizationState {
+        guard let center else { return .denied }
         let settings = await center.notificationSettings()
         switch settings.authorizationStatus {
         case .notDetermined:
@@ -97,6 +105,7 @@ public final class ImportantNotificationCenter {
 
     @discardableResult
     public func requestAuthorization() async throws -> NotificationAuthorizationState {
+        guard let center else { return .denied }
         _ = try await center.requestAuthorization(options: [.alert, .sound])
         return await authorizationState()
     }
@@ -107,6 +116,7 @@ public final class ImportantNotificationCenter {
         planID: UUID
     ) async throws -> Bool {
         guard let notification = WorkflowNotificationComposer.notification(for: report) else { return false }
+        guard let center else { return false }
         guard await authorizationState().canDeliver else { return false }
         let content = UNMutableNotificationContent()
         content.title = notification.title
@@ -123,7 +133,9 @@ public final class ImportantNotificationCenter {
         return true
     }
 
-    private var center: UNUserNotificationCenter {
-        configuredCenter ?? .current()
+    private var center: UNUserNotificationCenter? {
+        if let configuredCenter { return configuredCenter }
+        guard canUseSystemCenter else { return nil }
+        return .current()
     }
 }
