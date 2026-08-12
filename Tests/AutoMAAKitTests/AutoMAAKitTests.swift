@@ -1124,6 +1124,13 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertTrue(result.guidance.contains("跳过该客户端"))
     }
 
+    func testStartupFailureClassifierRecognizesScreenshotConnectionFailure() {
+        let result = StartupFailureClassifier.diagnose(output: "ScreencapFailed", hasAccountSelector: true)
+
+        XCTAssertEqual(result.scope, .client)
+        XCTAssertTrue(result.guidance.contains("MaaTools 连接异常"))
+    }
+
     func testWorkflowReportRequiresAttentionIsNotSuccess() {
         XCTAssertFalse(WorkflowReport(attentionMessages: ["请手动更新游戏"]).isSuccess)
         XCTAssertFalse(WorkflowReport(cancelled: true).isSuccess)
@@ -1386,6 +1393,114 @@ final class AutoMAAKitTests: XCTestCase {
             completion.log.details,
             "总掉落：沿途的点滴 × 156, 装置 × 10, 酮凝集 × 4, 龙门币 × 1872"
         )
+    }
+
+    @MainActor
+    func testRecoveredRetriesRemainVisibleWithoutCreatingWarnings() async throws {
+        let (report, runtime) = try await runRetryScenario(startupFailures: 1, taskFailures: 1)
+        let entries = runtime.events.map(\.log)
+
+        XCTAssertTrue(report.isSuccess)
+        XCTAssertTrue(report.attentionMessages.isEmpty)
+        XCTAssertEqual(ActivitySession(id: "test", runID: entries.first?.runID, entries: entries).warningCount, 0)
+        XCTAssertTrue(entries.contains {
+            $0.level == .info
+                && $0.message == "账号「测试账号」准备暂未完成，正在自动重试（1/1）"
+                && $0.details?.contains("ScreencapFailed") == true
+        })
+        XCTAssertTrue(entries.contains {
+            $0.level == .success && $0.message == "账号「测试账号」重试后已就绪"
+        })
+        XCTAssertTrue(entries.contains {
+            $0.level == .info && $0.message == "账号「测试账号」：理智作战未完成，正在自动重试（1/1）"
+        })
+        XCTAssertTrue(entries.contains {
+            $0.level == .success && $0.message == "账号「测试账号」：理智作战重试后已完成"
+        })
+    }
+
+    @MainActor
+    func testExhaustedAccountRetriesCreateOneActionableWarning() async throws {
+        let (report, runtime) = try await runRetryScenario(startupFailures: 2, taskFailures: 0)
+        let entries = runtime.events.map(\.log)
+        let warnings = entries.filter { $0.level == .warning && $0.phase != .completed }
+
+        XCTAssertFalse(report.isSuccess)
+        XCTAssertEqual(report.attentionMessages.count, 1)
+        XCTAssertEqual(report.skippedSteps, 1)
+        XCTAssertEqual(warnings.count, 1)
+        XCTAssertEqual(warnings[0].phase, .attention)
+        XCTAssertTrue(warnings[0].message.contains("账号「测试账号」准备失败"))
+        XCTAssertTrue(warnings[0].details?.contains("ScreencapFailed") == true)
+        XCTAssertFalse(entries.contains { $0.task != nil })
+    }
+
+    @MainActor
+    private func runRetryScenario(
+        startupFailures: Int,
+        taskFailures: Int
+    ) async throws -> (WorkflowReport, StubClientRuntime) {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = root.appending(path: "Applications/Test Game.app", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        let cli = root.appending(path: "maa-cli")
+        let startupCounter = root.appending(path: "startup-count").path
+        let taskCounter = root.appending(path: "task-count").path
+        let script = """
+        #!/bin/sh
+        if [ "$1" = "startup" ]; then
+          count=0
+          [ ! -f "\(startupCounter)" ] || count=$(sed -n '1p' "\(startupCounter)")
+          count=$((count + 1))
+          printf '%s\n' "$count" > "\(startupCounter)"
+          if [ "$count" -le "\(startupFailures)" ]; then
+            printf '%s\n' 'ScreencapFailed' >&2
+            exit 1
+          fi
+        elif [ "$1" = "run" ]; then
+          count=0
+          [ ! -f "\(taskCounter)" ] || count=$(sed -n '1p' "\(taskCounter)")
+          count=$((count + 1))
+          printf '%s\n' "$count" > "\(taskCounter)"
+          if [ "$count" -le "\(taskFailures)" ]; then
+            printf '%s\n' 'temporary task failure' >&2
+            exit 1
+          fi
+        fi
+        """
+        try Data(script.utf8).write(to: cli)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
+
+        let account = AccountConfiguration(name: "测试账号", accountSelector: "fixture-selector")
+        let client = ClientConfiguration(
+            name: "测试客户端",
+            kind: .official,
+            appPath: app.path,
+            address: "127.0.0.1:65493",
+            profileName: "retry-severity",
+            bundleIdentifier: "dev.automaa.tests.retry-severity",
+            accounts: [account]
+        )
+        var plan = AutomationPlan.lightRoutine
+        plan.recruit.enabled = false
+        plan.infrast.enabled = false
+        plan.mall.enabled = false
+        plan.award.enabled = false
+        plan.policy.hotUpdateBeforeRun = false
+        plan.policy.maxRetries = 1
+        let configuration = AppConfiguration(cliPath: cli.path, clients: [client], plans: [plan])
+        let runtime = StubClientRuntime(closesOnForce: true)
+        let runner = WorkflowRunner(
+            directories: AppDirectories(root: root),
+            portProbe: runtime,
+            gameController: runtime,
+            shutdownPolicy: .immediate,
+            eventSink: runtime.record
+        )
+
+        let report = await runner.run(configuration, planID: plan.id, resumeToday: false)
+        return (report, runtime)
     }
 
     @MainActor

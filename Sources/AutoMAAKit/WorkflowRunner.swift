@@ -16,8 +16,10 @@ struct MonotonicProgress {
 
 private struct TaskRunOutcome {
     let succeeded: Bool
+    let recoveredAfterRetry: Bool
     let notices: [WorkflowNotice]
     let completionSummary: TaskCompletionSummary?
+    let failureDetails: String?
 }
 
 private struct TaskCompletionSummary {
@@ -222,7 +224,7 @@ public final class WorkflowRunner {
                 }
                 let intervention = manualIntervention(for: error, client: client)
                 appendIntervention(
-                    intervention.localizedDescription,
+                    intervention,
                     skippedSteps: clientStepCount,
                     visitedSteps: &visitedSteps,
                     totalSteps: totalSteps,
@@ -284,7 +286,7 @@ public final class WorkflowRunner {
                         ? max(0, clientStepCount - (visitedSteps - visitedAtClientStart))
                         : enabledTasks.count
                     appendIntervention(
-                        intervention.localizedDescription,
+                        intervention,
                         skippedSteps: skipped,
                         visitedSteps: &visitedSteps,
                         totalSteps: totalSteps,
@@ -357,7 +359,7 @@ public final class WorkflowRunner {
                             skipped = max(0, enabledTasks.count - (visitedSteps - visitedAtAccountStart))
                         }
                         appendIntervention(
-                            intervention.localizedDescription,
+                            intervention,
                             skippedSteps: skipped,
                             visitedSteps: &visitedSteps,
                             totalSteps: totalSteps,
@@ -377,7 +379,7 @@ public final class WorkflowRunner {
                         try? stateStore.save(state)
                         emit(
                             .runningTask,
-                            "\(accountText(account))：\(task.title)已完成\(outcome.completionSummary?.messageSuffix ?? "")",
+                            "\(accountText(account))：\(task.title)\(outcome.recoveredAfterRetry ? "重试后" : "")已完成\(outcome.completionSummary?.messageSuffix ?? "")",
                             Double(visitedSteps) / Double(totalSteps),
                             .success,
                             client: client,
@@ -394,7 +396,8 @@ public final class WorkflowRunner {
                             .error,
                             client: client,
                             account: account,
-                            task: task
+                            task: task,
+                            details: outcome.failureDetails
                         )
                         if plan.policy.continueAfterStepFailure {
                             do {
@@ -418,7 +421,7 @@ public final class WorkflowRunner {
                                     skipped = max(0, enabledTasks.count - (visitedSteps - visitedAtAccountStart))
                                 }
                                 appendIntervention(
-                                    intervention.localizedDescription,
+                                    intervention,
                                     skippedSteps: skipped,
                                     visitedSteps: &visitedSteps,
                                     totalSteps: totalSteps,
@@ -564,32 +567,31 @@ public final class WorkflowRunner {
         var lastResult = CommandResult(exitCode: -1, standardOutput: "", standardError: "", timedOut: false)
         for attempt in 1...attempts {
             guard !Task.isCancelled else { throw RuntimeError.cancelled }
-            if attempt > 1 {
-                emit(
-                    .switchingAccount,
-                    "正在重试准备\(accountText(account))（\(attempt - 1)/\(attempts - 1)）",
-                    0,
-                    .info,
-                    client: client,
-                    account: account
-                )
-            }
             lastResult = await runCommand(executable: configuration.cliPath, arguments: arguments, timeout: 120)
             guard !lastResult.cancelled, !Task.isCancelled else { throw RuntimeError.cancelled }
             if lastResult.exitCode == 0, !lastResult.timedOut {
-                emit(.switchingAccount, "\(accountText(account))已就绪", 0, .success, client: client, account: account)
+                emit(
+                    .switchingAccount,
+                    "\(accountText(account))\(attempt > 1 ? "重试后" : "")已就绪",
+                    0,
+                    .success,
+                    client: client,
+                    account: account
+                )
                 return
             }
-            emit(
-                .switchingAccount,
-                "\(accountText(account))尚未就绪\(attempt < attempts ? "，稍后重试" : "")",
-                0,
-                .warning,
-                client: client,
-                account: account,
-                details: shortOutput(lastResult, sensitiveValues: [selector].compactMap { $0 })
-            )
-            if attempt < attempts { try? await Task.sleep(for: .seconds(2)) }
+            if attempt < attempts {
+                emit(
+                    .switchingAccount,
+                    "\(accountText(account))准备暂未完成，正在自动重试（\(attempt)/\(attempts - 1)）",
+                    0,
+                    .info,
+                    client: client,
+                    account: account,
+                    details: shortOutput(lastResult, sensitiveValues: [selector].compactMap { $0 })
+                )
+                try? await Task.sleep(for: .seconds(2))
+            }
         }
         let detail = shortOutput(lastResult, sensitiveValues: [selector].compactMap { $0 })
         let diagnosis = StartupFailureClassifier.diagnose(
@@ -599,7 +601,8 @@ public final class WorkflowRunner {
         throw ManualInterventionError(
             scope: diagnosis.scope,
             reason: "\(accountText(account))准备失败",
-            guidance: diagnosis.guidance
+            guidance: diagnosis.guidance,
+            details: detail
         )
     }
 
@@ -620,6 +623,7 @@ public final class WorkflowRunner {
         )
         let attempts = max(1, plan.policy.maxRetries + 1)
         var notices: [WorkflowNotice] = []
+        var failureDetails: String?
         for attempt in 1...attempts {
             guard !Task.isCancelled else { throw RuntimeError.cancelled }
             emit(
@@ -659,21 +663,24 @@ public final class WorkflowRunner {
             if result.exitCode == 0, !result.timedOut {
                 return TaskRunOutcome(
                     succeeded: true,
+                    recoveredAfterRetry: attempt > 1,
                     notices: notices,
-                    completionSummary: completionSummary(for: task, output: result.combinedOutput)
+                    completionSummary: completionSummary(for: task, output: result.combinedOutput),
+                    failureDetails: nil
                 )
             }
-            emit(
-                .runningTask,
-                "\(accountText(account))：\(task.title)未完成\(attempt < attempts ? "，准备重试" : "")",
-                0,
-                .warning,
-                client: client,
-                account: account,
-                task: task,
-                details: shortOutput(result, sensitiveValues: client.accounts.map(\.accountSelector))
-            )
+            failureDetails = shortOutput(result, sensitiveValues: client.accounts.map(\.accountSelector))
             if attempt < attempts {
+                emit(
+                    .runningTask,
+                    "\(accountText(account))：\(task.title)未完成，正在自动重试（\(attempt)/\(attempts - 1)）",
+                    0,
+                    .info,
+                    client: client,
+                    account: account,
+                    task: task,
+                    details: failureDetails
+                )
                 if !(await portProbe.isOpen(client.address)) {
                     try await launch(client)
                 }
@@ -685,7 +692,13 @@ public final class WorkflowRunner {
                 )
             }
         }
-        return TaskRunOutcome(succeeded: false, notices: notices, completionSummary: nil)
+        return TaskRunOutcome(
+            succeeded: false,
+            recoveredAfterRetry: false,
+            notices: notices,
+            completionSummary: nil,
+            failureDetails: failureDetails
+        )
     }
 
     private func completionSummary(for task: TaskKind, output: String) -> TaskCompletionSummary? {
@@ -787,7 +800,7 @@ public final class WorkflowRunner {
     }
 
     private func appendIntervention(
-        _ message: String,
+        _ intervention: ManualInterventionError,
         skippedSteps: Int,
         visitedSteps: inout Int,
         totalSteps: Int,
@@ -796,6 +809,7 @@ public final class WorkflowRunner {
         account: AccountConfiguration? = nil
     ) {
         let skipped = max(0, skippedSteps)
+        let message = intervention.localizedDescription
         report.skippedSteps += skipped
         report.attentionMessages.append(message)
         visitedSteps += skipped
@@ -805,7 +819,8 @@ public final class WorkflowRunner {
             Double(visitedSteps) / Double(totalSteps),
             .warning,
             client: client,
-            account: account
+            account: account,
+            details: intervention.details
         )
     }
 

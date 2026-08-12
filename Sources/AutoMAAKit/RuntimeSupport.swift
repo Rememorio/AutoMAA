@@ -88,6 +88,7 @@ enum StartupFailureClassifier {
         }
         if containsAny(value, [
             "network", "timeout", "timed out", "connection", "lookup address", "dns",
+            "screencapfailed", "screencap failed",
             "网络", "连接超时", "无法连接",
         ]) {
             return .init(
@@ -110,6 +111,14 @@ struct ManualInterventionError: LocalizedError {
     let scope: InterventionScope
     let reason: String
     let guidance: String
+    let details: String?
+
+    init(scope: InterventionScope, reason: String, guidance: String, details: String? = nil) {
+        self.scope = scope
+        self.reason = reason
+        self.guidance = guidance
+        self.details = details
+    }
 
     var errorDescription: String? {
         "\(reason)。\(guidance)"
