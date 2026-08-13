@@ -44,6 +44,12 @@ public enum WorkflowNotificationComposer {
             )
         }
         if !report.attentionMessages.isEmpty {
+            if report.unexecutedSteps > 0 {
+                return WorkflowSystemNotification(
+                    title: "自动化流程部分完成",
+                    body: "有 \(report.unexecutedSteps) 个步骤未执行，请打开 AutoMAA 查看活动记录。"
+                )
+            }
             return WorkflowSystemNotification(
                 title: "自动化流程需要手动处理",
                 body: "有 \(report.attentionMessages.count) 项情况需要确认，请打开 AutoMAA 查看活动记录。"
@@ -65,6 +71,7 @@ public enum WorkflowNotificationComposer {
 
     private static func issueSuffix(for report: WorkflowReport) -> String {
         if report.fatalError != nil { return " 本次流程也已中止，请一并查看原因。" }
+        if report.unexecutedSteps > 0 { return " 本次流程另有 \(report.unexecutedSteps) 个步骤未执行。" }
         if !report.attentionMessages.isEmpty { return " 本次流程另有情况需要手动处理。" }
         if report.failedSteps > 0 { return " 本次流程另有 \(report.failedSteps) 个步骤未完成。" }
         return ""

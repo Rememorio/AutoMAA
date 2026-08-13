@@ -22,14 +22,17 @@ public struct LaunchAgentManager: Sendable {
     private let directories: AppDirectories
     private let launchAgentsDirectory: URL
     private let systemIntegrationEnabled: Bool
+    private let runnerIdentity: String
 
     public init(
         directories: AppDirectories = .init(),
         launchAgentsDirectory: URL? = nil,
-        systemIntegrationEnabled: Bool = true
+        systemIntegrationEnabled: Bool = true,
+        runnerIdentity: String = "development"
     ) {
         self.directories = directories
         self.systemIntegrationEnabled = systemIntegrationEnabled
+        self.runnerIdentity = runnerIdentity
         self.launchAgentsDirectory = launchAgentsDirectory
             ?? FileManager.default.homeDirectoryForCurrentUser
                 .appending(path: "Library/LaunchAgents", directoryHint: .isDirectory)
@@ -79,6 +82,7 @@ public struct LaunchAgentManager: Sendable {
             "RunAtLoad": false,
             "ProcessType": "Interactive",
             "LimitLoadToSessionType": "Aqua",
+            "EnvironmentVariables": ["AUTOMAA_RUNNER_IDENTITY": runnerIdentity],
             "StandardOutPath": directories.logs.appending(path: "launchd-\(plan.id.uuidString.lowercased()).out.log").path,
             "StandardErrorPath": directories.logs.appending(path: "launchd-\(plan.id.uuidString.lowercased()).err.log").path,
         ]

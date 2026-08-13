@@ -80,6 +80,41 @@ struct ScheduleManagementTests {
         #expect(model.configuration.plans[0].schedule.enabled == false)
     }
 
+    @Test("schedule refresh waits for a running workflow to release its lock")
+    @MainActor
+    func scheduleRefreshWaitsForWorkflowLock() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "automaa-schedule-lock-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        try directories.prepare()
+        let launchAgents = root.appending(path: "LaunchAgents", directoryHint: .isDirectory)
+        var configuration = AppConfiguration.defaults
+        configuration.plans[0].schedule.enabled = true
+        try ConfigurationStore(directories: directories).save(configuration)
+        var lock: ProcessLock? = try ProcessLock(url: directories.lock)
+        let model = AppModel(
+            directories: directories,
+            launchAgentsDirectory: launchAgents,
+            managesSystemLaunchAgents: false,
+            checksForUpdatesAutomatically: false,
+            runnerExecutableURL: URL(filePath: "/usr/bin/true")
+        )
+        let planID = configuration.plans[0].id
+
+        model.prepareApplication()
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(model.isSynchronizingSchedules)
+        #expect(!FileManager.default.fileExists(atPath: launchAgents.path))
+
+        lock = nil
+        try await waitForScheduleSynchronization(model)
+
+        #expect(lock == nil)
+        #expect(model.installedPlanIDs.contains(planID))
+    }
+
     @MainActor
     private func waitForScheduleSynchronization(_ model: AppModel) async throws {
         for _ in 0..<150 {

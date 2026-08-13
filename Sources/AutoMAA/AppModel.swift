@@ -145,15 +145,18 @@ final class AppModel: ObservableObject {
         configurationStore = ConfigurationStore(directories: directories)
         historyStore = HistoryStore(directories: directories)
         executionStateStore = ExecutionStateStore(directories: directories)
+        let applicationVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+            ?? "开发构建"
+        let applicationBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+            ?? "local"
+        currentApplicationVersion = applicationVersion
+        currentApplicationBuild = applicationBuild
         launchAgentManager = LaunchAgentManager(
             directories: directories,
             launchAgentsDirectory: launchAgentsDirectory,
-            systemIntegrationEnabled: managesSystemLaunchAgents
+            systemIntegrationEnabled: managesSystemLaunchAgents,
+            runnerIdentity: "\(applicationVersion)-\(applicationBuild)"
         )
-        currentApplicationVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-            ?? "开发构建"
-        currentApplicationBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
-            ?? "local"
         applicationUpdateRepository = Bundle.main.object(forInfoDictionaryKey: "AutoMAAUpdateRepository") as? String
             ?? SoftwareUpdateService.defaultRepository
         self.softwareUpdateService = softwareUpdateService ?? SoftwareUpdateService(
@@ -433,6 +436,8 @@ final class AppModel: ObservableObject {
                 } else {
                     self.showBanner(self.noticeBanner(report.notices))
                 }
+            } else if let summary = report.runSummary, summary.isPartial {
+                self.showBanner("流程部分完成：\(summary.completionDescription)，请查看活动记录")
             } else if !report.attentionMessages.isEmpty {
                 self.showBanner(self.attentionBanner(report.attentionMessages))
             } else {
@@ -1032,6 +1037,14 @@ final class AppModel: ObservableObject {
             guard !Task.isCancelled, let self,
                   revision == self.scheduleSynchronizationRevision
             else { return }
+            while self.isRunning || ProcessLock.isHeld(at: self.directories.lock) {
+                do {
+                    try await Task.sleep(for: .milliseconds(500))
+                } catch {
+                    return
+                }
+                guard revision == self.scheduleSynchronizationRevision else { return }
+            }
             do {
                 try await self.launchAgentManager.synchronize(
                     runnerURL: self.runnerExecutableURL,

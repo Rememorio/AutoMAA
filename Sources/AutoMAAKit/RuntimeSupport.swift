@@ -45,6 +45,12 @@ struct StartupFailureDiagnosis: Equatable {
 }
 
 enum StartupFailureClassifier {
+    static func isGameOffline(_ output: String) -> Bool {
+        containsAny(output.lowercased(), [
+            "gameoffline", "game offline", "auto reconnect disabled", "游戏连接已离线",
+        ])
+    }
+
     static func diagnose(output: String, hasAccountSelector: Bool) -> StartupFailureDiagnosis {
         let value = output.lowercased()
         if hasAccountSelector, containsAny(value, [
@@ -84,6 +90,12 @@ enum StartupFailureClassifier {
             return .init(
                 scope: .client,
                 guidance: "游戏可能停在登录、协议确认或身份验证页面，请手动处理后再运行；本次将跳过该客户端"
+            )
+        }
+        if isGameOffline(value) {
+            return .init(
+                scope: .client,
+                guidance: "游戏与 MaaTools 的连接已离线，重启客户端后仍未恢复；请手动进入一次主界面，本次将跳过该客户端"
             )
         }
         if containsAny(value, [

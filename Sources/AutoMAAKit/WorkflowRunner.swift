@@ -56,6 +56,7 @@ public final class WorkflowRunner {
     private var currentRunID: UUID?
     private var currentSensitiveValues: [String] = []
     private var runProgress = MonotonicProgress()
+    private var restartedClientsForGameOffline: Set<UUID> = []
 
     public convenience init(
         directories: AppDirectories = .init(),
@@ -150,6 +151,7 @@ public final class WorkflowRunner {
         let totalSteps = max(1, activeClients.reduce(0) { partial, client in
             partial + client.accounts.filter(plan.includes).count * plan.enabledTasks.count
         })
+        report.totalSteps = totalSteps
         var visitedSteps = 0
 
         emit(.preparing, "正在准备「\(plan.displayName)」", 0, .info)
@@ -223,9 +225,12 @@ public final class WorkflowRunner {
                     break
                 }
                 let intervention = manualIntervention(for: error, client: client)
+                let completedBeforeLaunch = resumeToday ? completedClientSteps : 0
+                report.skippedSteps += completedBeforeLaunch
+                visitedSteps += completedBeforeLaunch
                 appendIntervention(
                     intervention,
-                    skippedSteps: clientStepCount,
+                    skippedSteps: max(0, clientStepCount - completedBeforeLaunch),
                     visitedSteps: &visitedSteps,
                     totalSteps: totalSteps,
                     report: &report,
@@ -280,6 +285,11 @@ public final class WorkflowRunner {
                         report.cancelled = true
                         stopAfterClosingClient = true
                         break accountLoop
+                    }
+                    if isSafetyCritical(error) {
+                        report.fatalError = error.localizedDescription
+                        emit(.failed, error.localizedDescription, Double(visitedSteps) / Double(totalSteps), .error, client: client)
+                        break clientLoop
                     }
                     let intervention = manualIntervention(for: error, client: client, account: account)
                     let skipped = intervention.scope == .client
@@ -413,6 +423,11 @@ public final class WorkflowRunner {
                                     stopAfterClosingClient = true
                                     break accountLoop
                                 }
+                                if isSafetyCritical(error) {
+                                    report.fatalError = error.localizedDescription
+                                    emit(.failed, error.localizedDescription, Double(visitedSteps) / Double(totalSteps), .error, client: client)
+                                    break clientLoop
+                                }
                                 let intervention = manualIntervention(for: error, client: client, account: account)
                                 let skipped: Int
                                 if intervention.scope == .client {
@@ -452,19 +467,33 @@ public final class WorkflowRunner {
         }
 
         if Task.isCancelled { report.cancelled = true }
+        let completedSteps = activeClients.reduce(0) { partial, client in
+            partial + completedStepCount(plan: plan, client: client, state: state)
+        }
+        report.unexecutedSteps = max(0, totalSteps - completedSteps - report.failedSteps)
         if let fatalError = report.fatalError {
             emit(.failed, "流程中止：\(fatalError)", Double(visitedSteps) / Double(totalSteps), .error)
         } else if report.cancelled {
             emit(.cancelled, "流程已安全停止，当前客户端已关闭且连接已释放", Double(visitedSteps) / Double(totalSteps), .warning)
+        } else if let summary = report.runSummary, summary.isPartial {
+            let suffix = report.attentionMessages.isEmpty ? "" : "；\(attentionSummary(report.attentionMessages))"
+            let noticeSuffix = report.notices.isEmpty ? "" : "，另有 \(report.notices.count) 项结果需要确认"
+            emit(
+                .completed,
+                "流程部分完成：\(summary.completionDescription)\(noticeSuffix)\(suffix)",
+                1,
+                .warning,
+                runSummary: summary
+            )
         } else if !report.attentionMessages.isEmpty {
-            emit(.completed, attentionSummary(report.attentionMessages), 1, .warning)
+            emit(.completed, attentionSummary(report.attentionMessages), 1, .warning, runSummary: report.runSummary)
         } else if report.failedSteps > 0 {
             let suffix = report.notices.isEmpty ? "" : "，另有 \(report.notices.count) 项结果需要确认"
-            emit(.completed, "流程完成，\(report.failedSteps) 个步骤失败\(suffix)", 1, .warning)
+            emit(.completed, "流程完成，\(report.failedSteps) 个步骤失败\(suffix)", 1, .warning, runSummary: report.runSummary)
         } else if !report.notices.isEmpty {
-            emit(.completed, noticeSummary(plan: plan, notices: report.notices), 1, .warning)
+            emit(.completed, noticeSummary(plan: plan, notices: report.notices), 1, .warning, runSummary: report.runSummary)
         } else {
-            emit(.completed, "「\(plan.displayName)」已全部完成", 1, .success)
+            emit(.completed, "「\(plan.displayName)」已全部完成", 1, .success, runSummary: report.runSummary)
         }
         return report
     }
@@ -563,16 +592,18 @@ public final class WorkflowRunner {
             arguments += ["--account-name", selector]
         }
         arguments += commonArguments(client)
-        let attempts = max(1, policy.maxRetries + 1)
+        var remainingRetries = max(0, policy.maxRetries)
+        var didRestartForGameOffline = false
+        var didRetry = false
         var lastResult = CommandResult(exitCode: -1, standardOutput: "", standardError: "", timedOut: false)
-        for attempt in 1...attempts {
+        while true {
             guard !Task.isCancelled else { throw RuntimeError.cancelled }
             lastResult = await runCommand(executable: configuration.cliPath, arguments: arguments, timeout: 120)
             guard !lastResult.cancelled, !Task.isCancelled else { throw RuntimeError.cancelled }
             if lastResult.exitCode == 0, !lastResult.timedOut {
                 emit(
                     .switchingAccount,
-                    "\(accountText(account))\(attempt > 1 ? "重试后" : "")已就绪",
+                    "\(accountText(account))\(didRestartForGameOffline ? "恢复后" : (didRetry ? "重试后" : ""))已就绪",
                     0,
                     .success,
                     client: client,
@@ -580,18 +611,38 @@ public final class WorkflowRunner {
                 )
                 return
             }
-            if attempt < attempts {
+            let detail = shortOutput(lastResult, sensitiveValues: [selector].compactMap { $0 })
+            if StartupFailureClassifier.isGameOffline(detail),
+               !restartedClientsForGameOffline.contains(client.id) {
+                restartedClientsForGameOffline.insert(client.id)
+                didRestartForGameOffline = true
                 emit(
                     .switchingAccount,
-                    "\(accountText(account))准备暂未完成，正在自动重试（\(attempt)/\(attempts - 1)）",
+                    "检测到游戏连接离线，正在重启\(clientText(client))后恢复\(accountText(account))",
                     0,
                     .info,
                     client: client,
                     account: account,
-                    details: shortOutput(lastResult, sensitiveValues: [selector].compactMap { $0 })
+                    details: detail
                 )
-                try? await Task.sleep(for: .seconds(2))
+                try await close(client, configuration: configuration)
+                try await launch(client)
+                continue
             }
+            guard remainingRetries > 0 else { break }
+            let retry = policy.maxRetries - remainingRetries + 1
+            remainingRetries -= 1
+            didRetry = true
+            emit(
+                .switchingAccount,
+                "\(accountText(account))准备暂未完成，正在自动重试（\(retry)/\(policy.maxRetries)）",
+                0,
+                .info,
+                client: client,
+                account: account,
+                details: detail
+            )
+            try? await Task.sleep(for: .seconds(2))
         }
         let detail = shortOutput(lastResult, sensitiveValues: [selector].compactMap { $0 })
         let diagnosis = StartupFailureClassifier.diagnose(
@@ -904,7 +955,7 @@ public final class WorkflowRunner {
         let firstLine = first.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? first
         let concise = String(firstLine.prefix(240))
         let suffix = messages.count > 1 ? "（另有 \(messages.count - 1) 项，请查看活动记录）" : ""
-        return "流程完成，需要手动处理：\(concise)\(suffix)"
+        return "需要手动处理：\(concise)\(suffix)"
     }
 
     private func noticeSummary(plan: AutomationPlan, notices: [WorkflowNotice]) -> String {
@@ -971,6 +1022,7 @@ public final class WorkflowRunner {
         currentRunID = runID
         currentSensitiveValues = sensitiveValues
         runProgress.reset()
+        restartedClientsForGameOffline = []
         diagnosticLogStore.begin(runID: runID)
     }
 
@@ -1017,7 +1069,8 @@ public final class WorkflowRunner {
         client: ClientConfiguration? = nil,
         account: AccountConfiguration? = nil,
         task: TaskKind? = nil,
-        details: String? = nil
+        details: String? = nil,
+        runSummary: WorkflowRunSummary? = nil
     ) {
         let normalizedProgress = runProgress.advance(to: proposedProgress)
         let log = LogEntry(
@@ -1030,7 +1083,8 @@ public final class WorkflowRunner {
             planID: currentPlanID,
             clientID: client?.id,
             accountID: account?.id,
-            task: task
+            task: task,
+            runSummary: runSummary
         )
         historyStore.append(log)
         eventSink(RunnerEvent(phase: phase, message: message, progress: normalizedProgress, log: log))

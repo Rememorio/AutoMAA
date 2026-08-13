@@ -313,7 +313,7 @@ struct ActivityView: View {
                 Text(sessionTitle(session))
                     .font(.headline)
                 HStack(spacing: 7) {
-                    Text(sessionStatus(phase: phase, level: session.finalLevel))
+                    Text(sessionStatus(session: session, phase: phase, level: session.finalLevel))
                         .foregroundStyle(tint)
                     Text("·")
                     Text(session.startedAt, format: .dateTime.month().day().hour().minute())
@@ -328,8 +328,13 @@ struct ActivityView: View {
             Spacer()
 
             HStack(spacing: 6) {
-                if session.completedTaskCount > 0 {
+                if let summary = session.runSummary {
+                    sessionBadge("\(summary.completedSteps)/\(summary.totalSteps) 完成", color: .green)
+                } else if session.completedTaskCount > 0 {
                     sessionBadge("\(session.completedTaskCount) 完成", color: .green)
+                }
+                if session.unexecutedTaskCount > 0 {
+                    sessionBadge("\(session.unexecutedTaskCount) 未执行", color: .orange)
                 }
                 if session.warningCount > 0 {
                     sessionBadge("\(session.warningCount) 警告", color: .orange)
@@ -385,7 +390,8 @@ struct ActivityView: View {
         return components.isEmpty ? nil : components.joined(separator: " · ")
     }
 
-    private func sessionStatus(phase: RunnerPhase?, level: LogLevel) -> String {
+    private func sessionStatus(session: ActivitySession, phase: RunnerPhase?, level: LogLevel) -> String {
+        if session.runSummary?.isPartial == true { return "部分完成，需处理" }
         if phase == .completed, level == .warning { return "完成，需留意" }
         if let phase { return phase.displayName }
         return switch level {

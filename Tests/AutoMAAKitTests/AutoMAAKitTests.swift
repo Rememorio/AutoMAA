@@ -15,11 +15,13 @@ private final class StubClientRuntime: PortProbing, GameProcessControlling {
     var isClientRunning = true
     var isPortOpen = true
     let closesOnForce: Bool
+    let opensOnWait: Bool
     private(set) var terminationRequests: [Bool] = []
     private(set) var events: [RunnerEvent] = []
 
-    init(closesOnForce: Bool) {
+    init(closesOnForce: Bool, opensOnWait: Bool = false) {
         self.closesOnForce = closesOnForce
+        self.opensOnWait = opensOnWait
     }
 
     func isOpen(_ value: String, observeCancellation: Bool) async -> Bool {
@@ -32,7 +34,11 @@ private final class StubClientRuntime: PortProbing, GameProcessControlling {
         timeout: TimeInterval,
         observeCancellation: Bool
     ) async -> Bool {
-        isPortOpen == shouldBeOpen
+        if shouldBeOpen, opensOnWait, !isPortOpen {
+            isClientRunning = true
+            isPortOpen = true
+        }
+        return isPortOpen == shouldBeOpen
     }
 
     func isRunning(_ client: ClientConfiguration) -> Bool {
@@ -546,6 +552,10 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertEqual(payload["ProgramArguments"] as? [String], [
             runnerURL.path, "--plan", plan.id.uuidString.lowercased(),
         ])
+        XCTAssertEqual(
+            payload["EnvironmentVariables"] as? [String: String],
+            ["AUTOMAA_RUNNER_IDENTITY": "development"]
+        )
         let intervals = try XCTUnwrap(payload["StartCalendarInterval"] as? [[String: Int]])
         XCTAssertEqual(intervals, [
             ["Weekday": 1, "Hour": 9, "Minute": 15],
@@ -727,6 +737,35 @@ final class AutoMAAKitTests: XCTestCase {
         plan.schedule.enabled = false
         try await manager.synchronize(runnerURL: runnerURL, plans: [plan])
         XCTAssertFalse(manager.isInstalled(planID: plan.id))
+    }
+
+    func testLaunchAgentRunnerIdentityChangeInvalidatesInstalledSchedule() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let launchAgents = root.appending(path: "LaunchAgents", directoryHint: .isDirectory)
+        var plan = AutomationPlan.lightRoutine
+        plan.schedule.enabled = true
+        let runnerURL = root.appending(path: "AutoMAARunner")
+        let oldManager = LaunchAgentManager(
+            directories: AppDirectories(root: root),
+            launchAgentsDirectory: launchAgents,
+            systemIntegrationEnabled: false,
+            runnerIdentity: "0.7.4-build-1"
+        )
+
+        try await oldManager.synchronize(runnerURL: runnerURL, plans: [plan])
+
+        let updatedManager = LaunchAgentManager(
+            directories: AppDirectories(root: root),
+            launchAgentsDirectory: launchAgents,
+            systemIntegrationEnabled: false,
+            runnerIdentity: "0.7.5-build-2"
+        )
+        XCTAssertFalse(updatedManager.isCurrent(runnerURL: runnerURL, plan: plan))
+
+        try await updatedManager.synchronize(runnerURL: runnerURL, plans: [plan])
+
+        XCTAssertTrue(updatedManager.isCurrent(runnerURL: runnerURL, plan: plan))
     }
 
     func testGeneratedTasksSelectServerResources() throws {
@@ -1131,6 +1170,15 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertTrue(result.guidance.contains("MaaTools 连接异常"))
     }
 
+    func testStartupFailureClassifierRecognizesGameOffline() {
+        let output = "GameOffline: Auto reconnect disabled, stopping"
+        let result = StartupFailureClassifier.diagnose(output: output, hasAccountSelector: false)
+
+        XCTAssertTrue(StartupFailureClassifier.isGameOffline(output))
+        XCTAssertEqual(result.scope, .client)
+        XCTAssertTrue(result.guidance.contains("重启客户端后仍未恢复"))
+    }
+
     func testWorkflowReportRequiresAttentionIsNotSuccess() {
         XCTAssertFalse(WorkflowReport(attentionMessages: ["请手动更新游戏"]).isSuccess)
         XCTAssertFalse(WorkflowReport(cancelled: true).isSuccess)
@@ -1188,6 +1236,30 @@ final class AutoMAAKitTests: XCTestCase {
         )
 
         XCTAssertEqual(session.warningCount, 1)
+    }
+
+    func testActivitySessionExposesStructuredPartialCompletion() {
+        let runID = UUID()
+        let summary = WorkflowRunSummary(completedSteps: 8, failedSteps: 0, unexecutedSteps: 4, totalSteps: 12)
+        let session = ActivitySession(
+            id: "run-\(runID.uuidString)",
+            runID: runID,
+            entries: [
+                LogEntry(
+                    level: .warning,
+                    message: "流程部分完成",
+                    runID: runID,
+                    phase: .completed,
+                    progress: 1,
+                    runSummary: summary
+                ),
+            ]
+        )
+
+        XCTAssertEqual(session.runSummary, summary)
+        XCTAssertEqual(session.completedTaskCount, 8)
+        XCTAssertEqual(session.unexecutedTaskCount, 4)
+        XCTAssertTrue(session.runSummary?.isPartial == true)
     }
 
     func testMAAOutputNoticeParserElevatesHighRarityRecruitResultWithoutDuplicateTip() {
@@ -1428,22 +1500,75 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertFalse(report.isSuccess)
         XCTAssertEqual(report.attentionMessages.count, 1)
         XCTAssertEqual(report.skippedSteps, 1)
+        XCTAssertEqual(report.unexecutedSteps, 1)
+        XCTAssertEqual(report.runSummary, WorkflowRunSummary(
+            completedSteps: 0,
+            failedSteps: 0,
+            unexecutedSteps: 1,
+            totalSteps: 1
+        ))
         XCTAssertEqual(warnings.count, 1)
         XCTAssertEqual(warnings[0].phase, .attention)
         XCTAssertTrue(warnings[0].message.contains("账号「测试账号」准备失败"))
         XCTAssertTrue(warnings[0].details?.contains("ScreencapFailed") == true)
         XCTAssertFalse(entries.contains { $0.task != nil })
+        XCTAssertEqual(entries.last?.runSummary, report.runSummary)
+        XCTAssertEqual(entries.last?.message, "流程部分完成：0/1 个步骤完成，1 个未执行；需要手动处理：账号「测试账号」准备失败。网络或 MaaTools 连接异常，自动重试仍未恢复；请手动检查游戏和网络，本次将跳过该客户端")
+    }
+
+    @MainActor
+    func testGameOfflineRestartsClientOnceBeforePreparingAccountAgain() async throws {
+        let (report, runtime) = try await runRetryScenario(
+            startupFailures: 1,
+            taskFailures: 0,
+            startupFailureOutput: "GameOffline: Auto reconnect disabled, stopping",
+            maxRetries: 0,
+            opensOnWait: true
+        )
+
+        XCTAssertTrue(report.isSuccess)
+        XCTAssertTrue(runtime.events.contains {
+            $0.log.level == .info && $0.message.contains("检测到游戏连接离线，正在重启客户端")
+        })
+        XCTAssertTrue(runtime.events.contains {
+            $0.log.level == .success && $0.message == "账号「测试账号」恢复后已就绪"
+        })
+        XCTAssertEqual(runtime.events.count {
+            $0.log.level == .info && $0.message.contains("检测到游戏连接离线，正在重启客户端")
+        }, 1)
+        XCTAssertGreaterThanOrEqual(runtime.terminationRequests.filter { $0 }.count, 2)
+    }
+
+    @MainActor
+    func testRepeatedGameOfflineDoesNotRestartTheSameClientTwice() async throws {
+        let (report, runtime) = try await runRetryScenario(
+            startupFailures: 2,
+            taskFailures: 0,
+            startupFailureOutput: "GameOffline: Auto reconnect disabled, stopping",
+            maxRetries: 0,
+            opensOnWait: true
+        )
+
+        XCTAssertFalse(report.isSuccess)
+        XCTAssertEqual(report.unexecutedSteps, 1)
+        XCTAssertEqual(runtime.events.count {
+            $0.log.level == .info && $0.message.contains("检测到游戏连接离线，正在重启客户端")
+        }, 1)
+        XCTAssertTrue(runtime.events.last?.message.contains("重启客户端后仍未恢复") == true)
     }
 
     @MainActor
     private func runRetryScenario(
         startupFailures: Int,
-        taskFailures: Int
+        taskFailures: Int,
+        startupFailureOutput: String = "ScreencapFailed",
+        maxRetries: Int = 1,
+        opensOnWait: Bool = false
     ) async throws -> (WorkflowReport, StubClientRuntime) {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let app = root.appending(path: "Applications/Test Game.app", directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        try createTestApplication(at: app)
         let cli = root.appending(path: "maa-cli")
         let startupCounter = root.appending(path: "startup-count").path
         let taskCounter = root.appending(path: "task-count").path
@@ -1455,7 +1580,7 @@ final class AutoMAAKitTests: XCTestCase {
           count=$((count + 1))
           printf '%s\n' "$count" > "\(startupCounter)"
           if [ "$count" -le "\(startupFailures)" ]; then
-            printf '%s\n' 'ScreencapFailed' >&2
+            printf '%s\n' '\(startupFailureOutput)' >&2
             exit 1
           fi
         elif [ "$1" = "run" ]; then
@@ -1488,9 +1613,9 @@ final class AutoMAAKitTests: XCTestCase {
         plan.mall.enabled = false
         plan.award.enabled = false
         plan.policy.hotUpdateBeforeRun = false
-        plan.policy.maxRetries = 1
+        plan.policy.maxRetries = maxRetries
         let configuration = AppConfiguration(cliPath: cli.path, clients: [client], plans: [plan])
-        let runtime = StubClientRuntime(closesOnForce: true)
+        let runtime = StubClientRuntime(closesOnForce: true, opensOnWait: opensOnWait)
         let runner = WorkflowRunner(
             directories: AppDirectories(root: root),
             portProbe: runtime,
@@ -1699,6 +1824,29 @@ final class AutoMAAKitTests: XCTestCase {
     private func temporaryRoot() -> URL {
         FileManager.default.temporaryDirectory
             .appending(path: "automaa-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
+    }
+
+    private func createTestApplication(at app: URL) throws {
+        let contents = app.appending(path: "Contents", directoryHint: .isDirectory)
+        let executables = contents.appending(path: "MacOS", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: executables, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: executables.appending(path: "TestGame"),
+            withDestinationURL: URL(filePath: "/usr/bin/true")
+        )
+        let payload: [String: Any] = [
+            "CFBundleExecutable": "TestGame",
+            "CFBundleIdentifier": "dev.automaa.tests.retry-game",
+            "CFBundleName": "AutoMAA Test Game",
+            "CFBundlePackageType": "APPL",
+            "CFBundleVersion": "1",
+        ]
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: payload,
+            format: .xml,
+            options: 0
+        )
+        try data.write(to: contents.appending(path: "Info.plist"), options: .atomic)
     }
 
     private func generatedParams(

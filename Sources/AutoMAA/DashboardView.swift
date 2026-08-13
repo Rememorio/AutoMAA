@@ -315,6 +315,7 @@ struct DashboardView: View {
     }
 
     private func activityStatus(_ session: ActivitySession) -> String {
+        if session.runSummary?.isPartial == true { return "部分完成，需处理" }
         if session.finalPhase == .completed, session.finalLevel == .warning { return "完成，需留意" }
         return session.finalPhase?.displayName ?? "运行记录"
     }

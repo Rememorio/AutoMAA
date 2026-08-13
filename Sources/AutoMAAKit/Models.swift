@@ -572,6 +572,29 @@ public enum LogLevel: String, Codable, Sendable {
     case error
 }
 
+public struct WorkflowRunSummary: Codable, Sendable, Equatable {
+    public var completedSteps: Int
+    public var failedSteps: Int
+    public var unexecutedSteps: Int
+    public var totalSteps: Int
+
+    public init(completedSteps: Int, failedSteps: Int, unexecutedSteps: Int, totalSteps: Int) {
+        self.completedSteps = completedSteps
+        self.failedSteps = failedSteps
+        self.unexecutedSteps = unexecutedSteps
+        self.totalSteps = totalSteps
+    }
+
+    public var isPartial: Bool { failedSteps > 0 || unexecutedSteps > 0 }
+
+    public var completionDescription: String {
+        var parts = ["\(completedSteps)/\(totalSteps) 个步骤完成"]
+        if failedSteps > 0 { parts.append("\(failedSteps) 个失败") }
+        if unexecutedSteps > 0 { parts.append("\(unexecutedSteps) 个未执行") }
+        return parts.joined(separator: "，")
+    }
+}
+
 public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
     public var id: UUID
     public var timestamp: Date
@@ -585,6 +608,7 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
     public var clientID: UUID?
     public var accountID: UUID?
     public var task: TaskKind?
+    public var runSummary: WorkflowRunSummary?
 
     public init(
         id: UUID = UUID(),
@@ -598,7 +622,8 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
         planID: UUID? = nil,
         clientID: UUID? = nil,
         accountID: UUID? = nil,
-        task: TaskKind? = nil
+        task: TaskKind? = nil,
+        runSummary: WorkflowRunSummary? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -612,6 +637,7 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
         self.clientID = clientID
         self.accountID = accountID
         self.task = task
+        self.runSummary = runSummary
     }
 }
 
@@ -641,7 +667,11 @@ public struct ActivitySession: Identifiable, Sendable, Equatable {
     public var finalLevel: LogLevel { entries.last?.level ?? .info }
     public var warningCount: Int { entries.count { $0.level == .warning && $0.phase != .completed } }
     public var errorCount: Int { entries.count { $0.level == .error } }
-    public var completedTaskCount: Int { entries.count { $0.level == .success && $0.task != nil } }
+    public var runSummary: WorkflowRunSummary? { entries.lazy.reversed().compactMap(\.runSummary).first }
+    public var completedTaskCount: Int {
+        runSummary?.completedSteps ?? entries.count { $0.level == .success && $0.task != nil }
+    }
+    public var unexecutedTaskCount: Int { runSummary?.unexecutedSteps ?? 0 }
 
     public init(id: String, runID: UUID?, entries: [LogEntry]) {
         self.id = id
@@ -712,6 +742,8 @@ public struct WorkflowReport: Sendable {
     public var succeededSteps: Int
     public var failedSteps: Int
     public var skippedSteps: Int
+    public var unexecutedSteps: Int
+    public var totalSteps: Int
     public var attentionMessages: [String]
     public var notices: [WorkflowNotice]
     public var cancelled: Bool
@@ -721,6 +753,8 @@ public struct WorkflowReport: Sendable {
         succeededSteps: Int = 0,
         failedSteps: Int = 0,
         skippedSteps: Int = 0,
+        unexecutedSteps: Int = 0,
+        totalSteps: Int = 0,
         attentionMessages: [String] = [],
         notices: [WorkflowNotice] = [],
         cancelled: Bool = false,
@@ -729,13 +763,27 @@ public struct WorkflowReport: Sendable {
         self.succeededSteps = succeededSteps
         self.failedSteps = failedSteps
         self.skippedSteps = skippedSteps
+        self.unexecutedSteps = unexecutedSteps
+        self.totalSteps = totalSteps
         self.attentionMessages = attentionMessages
         self.notices = notices
         self.cancelled = cancelled
         self.fatalError = fatalError
     }
 
-    public var isSuccess: Bool { !cancelled && fatalError == nil && failedSteps == 0 && attentionMessages.isEmpty }
+    public var runSummary: WorkflowRunSummary? {
+        guard totalSteps > 0 else { return nil }
+        return WorkflowRunSummary(
+            completedSteps: max(0, totalSteps - failedSteps - unexecutedSteps),
+            failedSteps: failedSteps,
+            unexecutedSteps: unexecutedSteps,
+            totalSteps: totalSteps
+        )
+    }
+
+    public var isSuccess: Bool {
+        !cancelled && fatalError == nil && failedSteps == 0 && unexecutedSteps == 0 && attentionMessages.isEmpty
+    }
 }
 
 public struct ExecutionState: Codable, Sendable {
