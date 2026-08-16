@@ -51,4 +51,64 @@ struct PlanRunStateTests {
             hasReadinessError: true
         ) == .configurationIncomplete)
     }
+
+    @Test("plan readiness separates direct issues from other plan blockers")
+    func readinessSeparatesIssueScopes() {
+        let planID = UUID()
+        let otherPlanID = UUID()
+        let issues = [
+            ReadinessIssue(
+                id: "warning",
+                severity: .warning,
+                message: "提醒",
+                scope: .plan(planID)
+            ),
+            ReadinessIssue(
+                id: "other-error",
+                severity: .error,
+                message: "其他方案错误",
+                scope: .plan(otherPlanID)
+            ),
+        ]
+
+        let readiness = PlanReadiness(planID: planID, issues: issues)
+
+        #expect(readiness.directIssues.map(\.id) == ["warning"])
+        #expect(readiness.externalBlockers.map(\.id) == ["other-error"])
+        #expect(readiness.state == .blockedByOtherPlan(1))
+        #expect(readiness.hasBlockingErrors)
+    }
+
+    @Test("direct errors take precedence and include every blocker in the count")
+    func readinessPrioritizesDirectErrors() {
+        let planID = UUID()
+        let issues = [
+            ReadinessIssue(id: "shared", severity: .error, message: "共享错误"),
+            ReadinessIssue(
+                id: "other",
+                severity: .error,
+                message: "其他方案错误",
+                scope: .plan(UUID())
+            ),
+        ]
+
+        let readiness = PlanReadiness(planID: planID, issues: issues)
+
+        #expect(readiness.state == .errors(2))
+    }
+
+    @Test("ready and warning states remain runnable")
+    func readinessKeepsWarningsNonBlocking() {
+        let planID = UUID()
+        let ready = PlanReadiness(planID: planID, issues: [])
+        let warning = PlanReadiness(
+            planID: planID,
+            issues: [ReadinessIssue(id: "warning", severity: .warning, message: "提醒")]
+        )
+
+        #expect(ready.state == .ready)
+        #expect(!ready.hasBlockingErrors)
+        #expect(warning.state == .warnings(1))
+        #expect(!warning.hasBlockingErrors)
+    }
 }

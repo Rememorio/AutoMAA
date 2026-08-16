@@ -67,7 +67,7 @@ struct DashboardView: View {
 
     private var routines: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionTitle("自动化方案", detail: "每个方案独立选择账号、任务参数、完成记录和周计划，也可以随时手动运行。")
+            sectionTitle("自动化方案", detail: "每张卡片都会独立显示运行检查结果；选择状态可在下方查看完整详情。")
             if model.configuration.plans.isEmpty {
                 Panel {
                     VStack(spacing: 14) {
@@ -100,13 +100,20 @@ struct DashboardView: View {
                         .foregroundStyle(Color.maaAccent)
                     Text(plan.displayName)
                         .font(.headline)
-                    if model.currentPlanID == plan.id {
-                        Text("当前运行")
+                    if model.activePlanID == plan.id {
+                        Text("正在运行")
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(Color.maaAccent)
                             .padding(.horizontal, 7)
                             .padding(.vertical, 3)
                             .background(Color.maaAccent.opacity(0.1), in: Capsule())
+                    } else if !model.isWorkflowRunning, model.currentPlanID == plan.id {
+                        Text("正在查看")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Color.secondary.opacity(0.1), in: Capsule())
                     }
                     Spacer()
                     if model.isPlanScheduleCurrent(plan) {
@@ -144,8 +151,9 @@ struct DashboardView: View {
                 }
                 Divider()
                 HStack {
-                    Button("编辑") { model.selection = .plan(plan.id) }
+                    readinessBadge(for: plan)
                     Spacer()
+                    Button("编辑") { model.selection = .plan(plan.id) }
                     PlanRunButton(planID: plan.id)
                 }
             }
@@ -154,9 +162,16 @@ struct DashboardView: View {
 
     private var executionFlow: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionTitle("当前执行路径", detail: "客户端严格串行；确认当前客户端关闭、连接释放后，才启动下一项。")
+            HStack(alignment: .bottom) {
+                sectionTitle(
+                    selectedPlan.map { "「\($0.displayName)」执行路径" } ?? "执行路径",
+                    detail: "客户端严格串行；确认当前客户端关闭、连接释放后，才启动下一项。"
+                )
+                Spacer()
+                currentPlanMenu
+            }
             Panel {
-                if let plan = model.currentPlan {
+                if let plan = selectedPlan {
                     let clients = model.configuration.clients.filter { $0.enabled && $0.accounts.contains(where: plan.includes) }
                     if clients.isEmpty {
                         Text("「\(plan.displayName)」还没有可执行账号")
@@ -216,29 +231,147 @@ struct DashboardView: View {
 
     private var readiness: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionTitle("运行检查", detail: "以下检查针对当前运行方案，可在侧栏底部切换。")
+            sectionTitle(
+                selectedPlan.map { "「\($0.displayName)」运行检查" } ?? "运行检查",
+                detail: "这里展开当前方案的详细结果；全部方案的状态摘要显示在上方卡片中。"
+            )
             Panel {
-                if model.readinessIssues.isEmpty {
-                    Label(
-                        "「\(model.currentPlan?.displayName ?? "方案")」已准备就绪",
-                        systemImage: "checkmark.seal.fill"
-                    )
-                        .font(.headline)
-                        .foregroundStyle(.green)
-                } else {
-                    VStack(alignment: .leading, spacing: 10) {
-                        ForEach(model.readinessIssues) { issue in
-                            HStack(alignment: .top, spacing: 10) {
-                                Image(systemName: issue.severity == .error ? "exclamationmark.circle.fill" : "exclamationmark.triangle.fill")
-                                    .foregroundStyle(issue.severity == .error ? Color.red : Color.orange)
-                                Text(issue.message)
-                                    .font(.callout)
-                                Spacer()
+                if let plan = selectedPlan, let readiness = selectedPlanReadiness {
+                    if readiness.directIssues.isEmpty, readiness.externalBlockers.isEmpty {
+                        Label(
+                            "「\(plan.displayName)」已准备就绪",
+                            systemImage: "checkmark.seal.fill"
+                        )
+                            .font(.headline)
+                            .foregroundStyle(.green)
+                    } else {
+                        VStack(alignment: .leading, spacing: 12) {
+                            if !readiness.directIssues.isEmpty {
+                                if !readiness.externalBlockers.isEmpty {
+                                    Text("当前方案与共享配置")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                }
+                                ForEach(readiness.directIssues) { issue in
+                                    readinessIssueRow(issue)
+                                }
+                            }
+
+                            if !readiness.externalBlockers.isEmpty {
+                                if !readiness.directIssues.isEmpty { Divider() }
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text("其他方案阻止运行")
+                                        .font(.caption.weight(.semibold))
+                                    Text("AutoMAA 会统一生成全部方案的任务文件，请先修复以下结构问题。")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                ForEach(readiness.externalBlockers) { issue in
+                                    readinessIssueRow(issue)
+                                }
                             }
                         }
                     }
+                } else {
+                    Label(
+                        "请先创建一个自动化方案",
+                        systemImage: "exclamationmark.circle.fill"
+                    )
+                        .font(.headline)
+                        .foregroundStyle(.red)
                 }
             }
+        }
+    }
+
+    private var selectedPlanID: UUID? {
+        model.activePlanID ?? model.currentPlanID
+    }
+
+    private var selectedPlan: AutomationPlan? {
+        guard let selectedPlanID else { return nil }
+        return model.configuration.plans.first(where: { $0.id == selectedPlanID })
+    }
+
+    private var selectedPlanReadiness: PlanReadiness? {
+        guard let selectedPlanID else { return nil }
+        return model.planReadiness(for: selectedPlanID)
+    }
+
+    private var currentPlanMenu: some View {
+        Menu {
+            ForEach(model.configuration.plans) { plan in
+                Button {
+                    model.selectCurrentPlan(plan.id)
+                } label: {
+                    if selectedPlanID == plan.id {
+                        Label(plan.displayName, systemImage: "checkmark")
+                    } else {
+                        Text(plan.displayName)
+                    }
+                }
+            }
+        } label: {
+            Label("切换方案", systemImage: "arrow.left.arrow.right")
+                .font(.caption.weight(.semibold))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .disabled(model.configuration.plans.isEmpty || model.isWorkflowRunning)
+        .help(model.isWorkflowRunning ? "流程结束后可以切换查看方案" : "切换下方执行路径和运行检查，不会打开编辑页")
+    }
+
+    private func readinessBadge(for plan: AutomationPlan) -> some View {
+        let state = model.planReadiness(for: plan.id).state
+        let tint = readinessTint(state)
+        return Button {
+            model.selectCurrentPlan(plan.id)
+        } label: {
+            Label(readinessTitle(state), systemImage: readinessSymbol(state))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(tint)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(tint.opacity(0.1), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(model.isWorkflowRunning)
+        .help("选择「\(plan.displayName)」并在下方查看完整运行检查")
+        .accessibilityHint("选择此方案并显示完整运行检查")
+    }
+
+    private func readinessIssueRow(_ issue: ReadinessIssue) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: issue.severity == .error ? "exclamationmark.circle.fill" : "exclamationmark.triangle.fill")
+                .foregroundStyle(issue.severity == .error ? Color.red : Color.orange)
+            Text(issue.message)
+                .font(.callout)
+            Spacer()
+        }
+    }
+
+    private func readinessTitle(_ state: PlanReadinessState) -> String {
+        switch state {
+        case .ready: "已就绪"
+        case let .warnings(count): "\(count) 项提醒"
+        case let .errors(count): "\(count) 项问题"
+        case .blockedByOtherPlan: "受其他方案影响"
+        }
+    }
+
+    private func readinessSymbol(_ state: PlanReadinessState) -> String {
+        switch state {
+        case .ready: "checkmark.circle.fill"
+        case .warnings: "exclamationmark.triangle.fill"
+        case .errors, .blockedByOtherPlan: "exclamationmark.circle.fill"
+        }
+    }
+
+    private func readinessTint(_ state: PlanReadinessState) -> Color {
+        switch state {
+        case .ready: .green
+        case .warnings: .orange
+        case .errors, .blockedByOtherPlan: .red
         }
     }
 

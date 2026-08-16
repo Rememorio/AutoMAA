@@ -298,6 +298,10 @@ final class AppModel: ObservableObject {
         ConfigurationValidator.readinessProblems(in: configuration, planID: planID)
     }
 
+    func planReadiness(for planID: UUID) -> PlanReadiness {
+        PlanReadiness(planID: planID, issues: readinessIssues(for: planID))
+    }
+
     var canRun: Bool {
         canRun(planID: currentPlanID)
     }
@@ -312,11 +316,12 @@ final class AppModel: ObservableObject {
     }
 
     func planRunState(planID: UUID?) -> PlanRunState {
-        PlanRunState.resolve(
+        let hasReadinessError = planID.map { planReadiness(for: $0).hasBlockingErrors } ?? true
+        return PlanRunState.resolve(
             planID: planID,
             isRunning: isWorkflowRunning || applicationUpdateState.blocksWorkflow,
             runningPlanID: activePlanID,
-            hasReadinessError: readinessIssues(for: planID).contains { $0.severity == .error }
+            hasReadinessError: hasReadinessError
         )
     }
 

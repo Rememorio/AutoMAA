@@ -519,6 +519,24 @@ final class AutoMAAKitTests: XCTestCase {
         })
     }
 
+    func testReadinessOmitsWarningsFromOtherPlansButKeepsTheirStructuralErrors() {
+        var config = populatedConfiguration()
+        let selectedPlanID = config.plans[0].id
+        let otherPlanID = config.plans[1].id
+        config.plans[1].infrast.threshold = 0.3
+
+        var problems = ConfigurationValidator.readinessProblems(in: config, planID: selectedPlanID)
+
+        XCTAssertFalse(problems.contains { $0.id.contains("threshold-fatigue-risk") })
+
+        config.plans[1].infrast.threshold = -0.1
+        problems = ConfigurationValidator.readinessProblems(in: config, planID: selectedPlanID)
+        let blocker = problems.first { $0.id.contains("infrast-threshold") }
+
+        XCTAssertEqual(blocker?.severity, .error)
+        XCTAssertEqual(blocker?.scope, .plan(otherPlanID))
+    }
+
     func testMallParametersMatchCurrentMAAProtocol() throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }

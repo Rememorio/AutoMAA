@@ -5,15 +5,27 @@ public enum ConfigurationProblemSeverity: Equatable, Sendable {
     case error
 }
 
+public enum ConfigurationProblemScope: Equatable, Sendable {
+    case shared
+    case plan(UUID)
+}
+
 public struct ConfigurationProblem: Identifiable, Equatable, Sendable {
     public let id: String
     public let severity: ConfigurationProblemSeverity
     public let message: String
+    public let scope: ConfigurationProblemScope
 
-    public init(id: String, severity: ConfigurationProblemSeverity, message: String) {
+    public init(
+        id: String,
+        severity: ConfigurationProblemSeverity,
+        message: String,
+        scope: ConfigurationProblemScope = .shared
+    ) {
         self.id = id
         self.severity = severity
         self.message = message
+        self.scope = scope
     }
 }
 
@@ -62,30 +74,33 @@ public enum ConfigurationValidator {
                 result.append(.init(
                     id: "\(prefix)-step-order",
                     severity: .error,
-                    message: "「\(plan.displayName)」的步骤顺序已损坏，请重新创建该方案"
+                    message: "「\(plan.displayName)」的步骤顺序已损坏，请重新创建该方案",
+                    scope: .plan(plan.id)
                 ))
             }
             if plan.fight.enabled, plan.fight.usesCustomSettings {
-                validate(plan.fight, prefix: "\(prefix)-fight", planName: plan.name, into: &result)
+                validate(plan.fight, prefix: "\(prefix)-fight", plan: plan, into: &result)
             }
             if plan.recruit.enabled, plan.recruit.usesCustomSettings {
-                validate(plan.recruit, prefix: "\(prefix)-recruit", planName: plan.name, into: &result)
+                validate(plan.recruit, prefix: "\(prefix)-recruit", plan: plan, into: &result)
             }
             if plan.infrast.enabled, plan.infrast.usesCustomSettings {
-                validate(plan.infrast, prefix: "\(prefix)-infrast", planName: plan.name, into: &result)
+                validate(plan.infrast, prefix: "\(prefix)-infrast", plan: plan, into: &result)
             }
             if plan.mall.enabled, plan.mall.usesCustomSettings, !(0...4).contains(plan.mall.formationIndex) {
                 result.append(.init(
                     id: "\(prefix)-mall-formation",
                     severity: .error,
-                    message: "「\(plan.displayName)」的信用关编队必须在 0 到 4 之间"
+                    message: "「\(plan.displayName)」的信用关编队必须在 0 到 4 之间",
+                    scope: .plan(plan.id)
                 ))
             }
             if let problem = PlanScheduleValidator.problem(in: plan.schedule) {
                 result.append(.init(
                     id: "\(prefix)-schedule",
                     severity: .error,
-                    message: problem.message(planName: plan.displayName)
+                    message: problem.message(planName: plan.displayName),
+                    scope: .plan(plan.id)
                 ))
             }
         }
@@ -98,6 +113,14 @@ public enum ConfigurationValidator {
         fileManager: FileManager = .default
     ) -> [ConfigurationProblem] {
         var result = structuralProblems(in: configuration)
+        if let planID {
+            result.removeAll { problem in
+                guard problem.severity == .warning,
+                      case let .plan(sourcePlanID) = problem.scope
+                else { return false }
+                return sourcePlanID != planID
+            }
+        }
         guard !result.contains(where: { $0.severity == .error && $0.id.hasPrefix("duplicate-") }) else {
             return result
         }
@@ -114,10 +137,20 @@ public enum ConfigurationValidator {
         }
         let planName = plan.displayName
         if plan.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            result.append(.init(id: "plan-name-empty", severity: .error, message: "方案名称不能为空"))
+            result.append(.init(
+                id: "plan-name-empty",
+                severity: .error,
+                message: "方案名称不能为空",
+                scope: .plan(plan.id)
+            ))
         }
         if plan.enabledTasks.isEmpty {
-            result.append(.init(id: "plan-tasks-empty", severity: .error, message: "「\(planName)」没有启用任何步骤"))
+            result.append(.init(
+                id: "plan-tasks-empty",
+                severity: .error,
+                message: "「\(planName)」没有启用任何步骤",
+                scope: .plan(plan.id)
+            ))
         }
         if plan.infrast.enabled,
            plan.infrast.usesCustomSettings,
@@ -128,7 +161,8 @@ public enum ConfigurationValidator {
                 result.append(.init(
                     id: "plan-custom-infrast-missing",
                     severity: .error,
-                    message: "「\(planName)」的自定义基建排班文件不存在"
+                    message: "「\(planName)」的自定义基建排班文件不存在",
+                    scope: .plan(plan.id)
                 ))
             }
         }
@@ -137,7 +171,12 @@ public enum ConfigurationValidator {
             client.enabled && client.accounts.contains(where: plan.includes)
         }
         if activeClients.isEmpty {
-            result.append(.init(id: "plan-accounts-empty", severity: .error, message: "「\(planName)」没有可执行的账号"))
+            result.append(.init(
+                id: "plan-accounts-empty",
+                severity: .error,
+                message: "「\(planName)」没有可执行的账号",
+                scope: .plan(plan.id)
+            ))
         }
         for client in activeClients {
             let clientName = client.displayName
@@ -145,28 +184,32 @@ public enum ConfigurationValidator {
                 result.append(.init(
                     id: "client-\(client.id)-name-empty",
                     severity: .error,
-                    message: "客户端名称不能为空"
+                    message: "客户端名称不能为空",
+                    scope: .plan(plan.id)
                 ))
             }
             if !fileManager.fileExists(atPath: client.appPath) {
                 result.append(.init(
                     id: "client-\(client.id)-app-missing",
                     severity: .warning,
-                    message: "\(clientName) 的应用路径不存在，运行时会跳过该客户端"
+                    message: "\(clientName) 的应用路径不存在，运行时会跳过该客户端",
+                    scope: .plan(plan.id)
                 ))
             }
             if client.bundleIdentifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 result.append(.init(
                     id: "client-\(client.id)-bundle-missing",
                     severity: .warning,
-                    message: "\(clientName) 缺少 Bundle Identifier，运行时会跳过该客户端"
+                    message: "\(clientName) 缺少 Bundle Identifier，运行时会跳过该客户端",
+                    scope: .plan(plan.id)
                 ))
             }
             if (try? PortAddress(client.address)) == nil {
                 result.append(.init(
                     id: "client-\(client.id)-address-invalid",
                     severity: .warning,
-                    message: "\(clientName) 的 MaaTools 地址无效，运行时会跳过该客户端"
+                    message: "\(clientName) 的 MaaTools 地址无效，运行时会跳过该客户端",
+                    scope: .plan(plan.id)
                 ))
             }
 
@@ -176,7 +219,8 @@ public enum ConfigurationValidator {
                 result.append(.init(
                     id: "account-\(account.id)-name-empty",
                     severity: .error,
-                    message: "\(clientName) 中的账号名称不能为空"
+                    message: "\(clientName) 中的账号名称不能为空",
+                    scope: .plan(plan.id)
                 ))
             }
             if !client.kind.supportsAccountSwitching {
@@ -184,14 +228,16 @@ public enum ConfigurationValidator {
                     result.append(.init(
                         id: "client-\(client.id)-account-switch-unsupported",
                         severity: .error,
-                        message: "\(clientName) 的\(client.kind.title)不支持自动切换账号，请只启用一个账号"
+                        message: "\(clientName) 的\(client.kind.title)不支持自动切换账号，请只启用一个账号",
+                        scope: .plan(plan.id)
                     ))
                 }
                 for account in targetAccounts where !account.accountSelector.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     result.append(.init(
                         id: "account-\(account.id)-selector-unsupported",
                         severity: .error,
-                        message: "\(account.displayName) 属于\(client.kind.title)，账号片段必须留空"
+                        message: "\(account.displayName) 属于\(client.kind.title)，账号片段必须留空",
+                        scope: .plan(plan.id)
                     ))
                 }
             } else if enabledAccounts.count > 1 {
@@ -199,7 +245,8 @@ public enum ConfigurationValidator {
                     result.append(.init(
                         id: "account-\(account.id)-selector-empty",
                         severity: .warning,
-                        message: "\(account.displayName) 缺少唯一账号片段，运行时会跳过该账号"
+                        message: "\(account.displayName) 缺少唯一账号片段，运行时会跳过该账号",
+                        scope: .plan(plan.id)
                     ))
                 }
                 let selectors = enabledAccounts
@@ -209,7 +256,8 @@ public enum ConfigurationValidator {
                     result.append(.init(
                         id: "client-\(client.id)-selector-duplicate",
                         severity: .error,
-                        message: "\(clientName) 的账号片段不能重复"
+                        message: "\(clientName) 的账号片段不能重复",
+                        scope: .plan(plan.id)
                     ))
                 }
             }
@@ -220,10 +268,10 @@ public enum ConfigurationValidator {
     private static func validate(
         _ value: FightConfiguration,
         prefix: String,
-        planName: String,
+        plan: AutomationPlan,
         into result: inout [ConfigurationProblem]
     ) {
-        let name = ConfigurationDisplayName.resolve(planName, fallback: "未命名方案")
+        let name = plan.displayName
         let checks: [(String, Bool, String)] = [
             ("medicine", value.medicine.map { $0 >= 0 } ?? true, "理智药数量不能为负数"),
             ("medicine-expire-days", value.medicineExpireDays.map { (1...365).contains($0) } ?? true, "临期理智药天数必须在 1 到 365 之间"),
@@ -232,19 +280,29 @@ public enum ConfigurationValidator {
             ("series", value.series.map { (-1...10).contains($0) } ?? true, "连战次数必须在 -1 到 10 之间"),
         ]
         for (field, valid, message) in checks where !valid {
-            result.append(.init(id: "\(prefix)-\(field)", severity: .error, message: "「\(name)」的\(message)"))
+            result.append(.init(
+                id: "\(prefix)-\(field)",
+                severity: .error,
+                message: "「\(name)」的\(message)",
+                scope: .plan(plan.id)
+            ))
         }
     }
 
     private static func validate(
         _ value: RecruitConfiguration,
         prefix: String,
-        planName: String,
+        plan: AutomationPlan,
         into result: inout [ConfigurationProblem]
     ) {
-        let name = ConfigurationDisplayName.resolve(planName, fallback: "未命名方案")
+        let name = plan.displayName
         if !(0...12).contains(value.times) {
-            result.append(.init(id: "\(prefix)-times", severity: .error, message: "「\(name)」的招募次数必须在 0 到 12 之间"))
+            result.append(.init(
+                id: "\(prefix)-times",
+                severity: .error,
+                message: "「\(name)」的招募次数必须在 0 到 12 之间",
+                scope: .plan(plan.id)
+            ))
         }
         for (field, values) in [("首选标签", value.firstTags), ("保留标签", value.preserveTags)] {
             let normalized = values.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -252,7 +310,8 @@ public enum ConfigurationValidator {
                 result.append(.init(
                     id: "\(prefix)-tags-\(field)",
                     severity: .error,
-                    message: "「\(name)」的\(field)不能包含空值或重复项"
+                    message: "「\(name)」的\(field)不能包含空值或重复项",
+                    scope: .plan(plan.id)
                 ))
             }
         }
@@ -261,31 +320,43 @@ public enum ConfigurationValidator {
     private static func validate(
         _ value: InfrastConfiguration,
         prefix: String,
-        planName: String,
+        plan: AutomationPlan,
         into result: inout [ConfigurationProblem]
     ) {
-        let name = ConfigurationDisplayName.resolve(planName, fallback: "未命名方案")
+        let name = plan.displayName
         if value.mode != .customSchedule,
            (value.facilities.isEmpty || Set(value.facilities).count != value.facilities.count) {
             result.append(.init(
                 id: "\(prefix)-facilities",
                 severity: .error,
-                message: "「\(name)」必须选择至少一个且不重复的基建设施"
+                message: "「\(name)」必须选择至少一个且不重复的基建设施",
+                scope: .plan(plan.id)
             ))
         }
         if !(0...1).contains(value.threshold) {
-            result.append(.init(id: "\(prefix)-threshold", severity: .error, message: "「\(name)」的基建心情阈值必须在 0 到 1 之间"))
+            result.append(.init(
+                id: "\(prefix)-threshold",
+                severity: .error,
+                message: "「\(name)」的基建心情阈值必须在 0 到 1 之间",
+                scope: .plan(plan.id)
+            ))
         } else if value.mode == .fullShift,
                   value.threshold < InfrastConfiguration.dailyFullShiftThreshold {
             let percentage = Int((value.threshold * 100).rounded())
             result.append(.init(
                 id: "\(prefix)-threshold-fatigue-risk",
                 severity: .warning,
-                message: "「\(name)」的上岗最低心情为 \(percentage)%；阈值只在换班时筛选候选干员，每天一次完整换班建议使用 90%，否则干员可能在下次换班前疲劳"
+                message: "「\(name)」的上岗最低心情为 \(percentage)%；阈值只在换班时筛选候选干员，每天一次完整换班建议使用 90%，否则干员可能在下次换班前疲劳",
+                scope: .plan(plan.id)
             ))
         }
         if value.customSchedulePlanIndex < 0 {
-            result.append(.init(id: "\(prefix)-plan-index", severity: .error, message: "「\(name)」的基建排班方案序号不能为负数"))
+            result.append(.init(
+                id: "\(prefix)-plan-index",
+                severity: .error,
+                message: "「\(name)」的基建排班方案序号不能为负数",
+                scope: .plan(plan.id)
+            ))
         }
     }
 

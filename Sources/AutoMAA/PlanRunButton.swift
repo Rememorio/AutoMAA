@@ -25,7 +25,7 @@ struct PlanRunButton: View {
             disabledButton("维护进行中", systemImage: "wrench.and.screwdriver")
         case .configurationIncomplete:
             disabledButton("配置未完成", systemImage: "exclamationmark.circle")
-                .help("请先处理当前方案的配置问题")
+                .help("请选择该方案并查看运行检查")
         }
     }
 

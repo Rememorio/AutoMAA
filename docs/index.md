@@ -48,13 +48,13 @@ features:
   <div class="showcase-heading">
     <span class="showcase-kicker">PRODUCT TOUR</span>
     <h2 id="product-tour-title">一眼看清每套日常怎样执行</h2>
-    <p>方案、目标账号、任务组合和定时时间集中呈现；运行前检查通过后，再交给 AutoMAA 串行完成。</p>
+    <p>方案、目标账号、任务组合、定时时间和各自的运行检查状态集中呈现；确认后，再交给 AutoMAA 串行完成。</p>
   </div>
 
   <figure class="product-shot product-shot-wide">
     <img class="theme-shot theme-shot-light" src="./assets/screenshots/overview-light.webp" width="2360" height="1560" alt="AutoMAA 今日总览：展示简中服与日服两个客户端、三个演示账号和两套日常方案" />
     <img class="theme-shot theme-shot-dark" src="./assets/screenshots/overview-dark.webp" width="2360" height="1560" alt="AutoMAA 今日总览：展示简中服与日服两个客户端、三个演示账号和两套日常方案" />
-    <figcaption><strong>今日总览</strong><span>先确认顺序与安全检查，再开始完整工作流。</span></figcaption>
+    <figcaption><strong>今日总览</strong><span>先比较全部方案的状态摘要，再展开当前方案的路径与检查详情。</span></figcaption>
   </figure>
 
   <div class="product-shot-grid">

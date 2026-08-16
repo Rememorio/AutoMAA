@@ -215,7 +215,7 @@ struct SidebarView: View {
 
     private var currentPlanPicker: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text("当前运行方案")
+            Text("查看与运行方案")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
 
@@ -247,7 +247,7 @@ struct SidebarView: View {
             }
             .menuStyle(.borderlessButton)
             .disabled(model.configuration.plans.isEmpty)
-            .help("切换运行与检查的方案，不会打开编辑页")
+            .help("切换要查看和运行的方案，不会打开编辑页")
         }
     }
 
@@ -275,35 +275,51 @@ struct SidebarView: View {
 
     private var statusColor: Color {
         if model.isWorkflowRunning { return model.activePhase.statusTint }
-        if hasReadinessErrors { return .red }
-        return model.readinessIssues.isEmpty ? .green : .orange
+        return switch currentReadinessState {
+        case .ready: .green
+        case .warnings: .orange
+        case .errors, .blockedByOtherPlan, nil: .red
+        }
     }
 
     private var statusSymbol: String {
         if model.isWorkflowRunning { return model.activePhase.statusSymbol }
-        if hasReadinessErrors { return "exclamationmark.triangle.fill" }
-        return model.readinessIssues.isEmpty ? "checkmark.circle.fill" : "exclamationmark.circle.fill"
+        return switch currentReadinessState {
+        case .ready: "checkmark.circle.fill"
+        case .warnings: "exclamationmark.circle.fill"
+        case .errors, .blockedByOtherPlan, nil: "exclamationmark.triangle.fill"
+        }
     }
 
     private var statusTitle: String {
         if model.isWorkflowRunning { return model.activePhase.displayName }
-        if !model.canRun { return "需要完善配置" }
-        return model.readinessIssues.isEmpty ? "已准备就绪" : "可以运行"
+        return switch currentReadinessState {
+        case .ready: "已准备就绪"
+        case .warnings: "可以运行"
+        case .errors, .blockedByOtherPlan, nil: "需要完善配置"
+        }
     }
 
     private var statusDetail: String {
         if model.isWorkflowRunning { return model.activeStatusMessage }
-        if model.readinessIssues.isEmpty {
+        switch currentReadinessState {
+        case .ready:
             let plan = model.currentPlan
             let accounts = model.configuration.clients.filter(\.enabled).flatMap { $0.accounts.filter { plan?.includes($0) == true } }.count
             return "\(accounts) 个账号 · \(plan?.enabledTasks.count ?? 0) 个步骤"
+        case let .warnings(count):
+            return "\(count) 项提醒"
+        case let .errors(count):
+            return "\(count) 项问题待处理"
+        case let .blockedByOtherPlan(count):
+            return "其他方案有 \(count) 项问题"
+        case nil:
+            return "请先创建自动化方案"
         }
-        return model.canRun
-            ? "\(model.readinessIssues.count) 项提醒"
-            : "\(model.readinessIssues.count) 项问题待处理"
     }
 
-    private var hasReadinessErrors: Bool {
-        model.readinessIssues.contains { $0.severity == .error }
+    private var currentReadinessState: PlanReadinessState? {
+        guard let currentPlanID = model.currentPlanID else { return nil }
+        return model.planReadiness(for: currentPlanID).state
     }
 }
