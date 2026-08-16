@@ -243,6 +243,23 @@ public enum PlanScheduleFormatter {
         after date: Date = Date(),
         calendar: Calendar = .current
     ) -> String? {
+        guard let next = nextRun(schedule, after: date, calendar: calendar) else { return nil }
+        return "\(next.slot.weekday.title) \(time(hour: next.slot.hour, minute: next.slot.minute))"
+    }
+
+    public static func nextRunDate(
+        _ schedule: PlanSchedule,
+        after date: Date = Date(),
+        calendar: Calendar = .current
+    ) -> Date? {
+        nextRun(schedule, after: date, calendar: calendar)?.date
+    }
+
+    private static func nextRun(
+        _ schedule: PlanSchedule,
+        after date: Date,
+        calendar: Calendar
+    ) -> (date: Date, slot: WeeklyScheduleSlot)? {
         guard schedule.enabled, PlanScheduleValidator.problem(in: schedule) == nil else { return nil }
         let candidates = schedule.slots.compactMap { slot -> (Date, WeeklyScheduleSlot)? in
             var components = DateComponents()
@@ -257,8 +274,8 @@ public enum PlanScheduleFormatter {
             ) else { return nil }
             return (next, slot)
         }
-        guard let next = candidates.min(by: { $0.0 < $1.0 })?.1 else { return nil }
-        return "\(next.weekday.title) \(time(hour: next.hour, minute: next.minute))"
+        guard let next = candidates.min(by: { $0.0 < $1.0 }) else { return nil }
+        return (next.0, next.1)
     }
 
     public static func time(hour: Int, minute: Int) -> String {

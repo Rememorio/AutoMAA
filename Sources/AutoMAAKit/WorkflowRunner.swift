@@ -501,6 +501,18 @@ public final class WorkflowRunner {
     public func hotUpdate(cliPath: String) async -> Bool {
         beginActivity()
         defer { endActivity() }
+        var lock: ProcessLock?
+        var lease: CaffeinateLease?
+        do {
+            try directories.prepare()
+            lock = try ProcessLock(url: directories.lock)
+            lease = CaffeinateLease()
+        } catch {
+            emit(.failed, "暂时无法热更新 MAA 资源：\(error.localizedDescription)", 1, .error)
+            return false
+        }
+        _ = lock
+        _ = lease
         emit(.updating, "正在热更新 MAA 资源", 0, .info)
         let result = await runCommand(executable: cliPath, arguments: ["hot-update", "--batch"], timeout: 180)
         if result.cancelled || Task.isCancelled {
@@ -521,11 +533,23 @@ public final class WorkflowRunner {
     public func updateCore(cliPath: String) async -> Bool {
         beginActivity()
         defer { endActivity() }
+        var lock: ProcessLock?
+        var lease: CaffeinateLease?
+        do {
+            try directories.prepare()
+            lock = try ProcessLock(url: directories.lock)
+            lease = CaffeinateLease()
+        } catch {
+            emit(.failed, "暂时无法更新 MAA：\(error.localizedDescription)", 1, .error)
+            return false
+        }
+        _ = lock
+        _ = lease
         emit(.updating, "正在更新 MAA 核心与基础资源", 0, .info)
         let result = await runCommand(
             executable: cliPath,
-            arguments: ["update", "stable", "--batch"],
-            timeout: 900
+            arguments: ["update", "stable", "--test-time", "10", "--batch"],
+            timeout: 3_600
         )
         if result.cancelled || Task.isCancelled {
             emit(.cancelled, "MAA 更新已停止", 1, .warning)

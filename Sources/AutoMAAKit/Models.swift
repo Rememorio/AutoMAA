@@ -47,8 +47,8 @@ public enum ClientKind: String, Codable, CaseIterable, Identifiable, Sendable {
 
     public var supportsAccountSwitching: Bool {
         switch self {
-        case .official, .bilibili, .txwy: true
-        case .yoStarEN, .yoStarJP, .yoStarKR: false
+        case .official, .bilibili, .txwy, .yoStarKR: true
+        case .yoStarEN, .yoStarJP: false
         }
     }
 
@@ -534,6 +534,14 @@ public struct ApplicationUpdateConfiguration: Codable, Equatable, Sendable {
     }
 }
 
+public struct MAAUpdateConfiguration: Codable, Equatable, Sendable {
+    public var automaticallyUpdatesCoreAndResources: Bool
+
+    public init(automaticallyUpdatesCoreAndResources: Bool = false) {
+        self.automaticallyUpdatesCoreAndResources = automaticallyUpdatesCoreAndResources
+    }
+}
+
 public struct AppConfiguration: Codable, Equatable, Sendable {
     public static let currentSchemaVersion = 5
 
@@ -543,6 +551,7 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
     public var plans: [AutomationPlan]
     public var notifications: NotificationConfiguration
     public var applicationUpdates: ApplicationUpdateConfiguration
+    public var maaUpdates: MAAUpdateConfiguration
 
     public init(
         schemaVersion: Int = Self.currentSchemaVersion,
@@ -550,7 +559,8 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
         clients: [ClientConfiguration],
         plans: [AutomationPlan] = [.lightRoutine, .completeRoutine],
         notifications: NotificationConfiguration = .init(),
-        applicationUpdates: ApplicationUpdateConfiguration = .init()
+        applicationUpdates: ApplicationUpdateConfiguration = .init(),
+        maaUpdates: MAAUpdateConfiguration = .init()
     ) {
         self.schemaVersion = schemaVersion
         self.cliPath = cliPath
@@ -558,10 +568,26 @@ public struct AppConfiguration: Codable, Equatable, Sendable {
         self.plans = plans
         self.notifications = notifications
         self.applicationUpdates = applicationUpdates
+        self.maaUpdates = maaUpdates
     }
 
     public static var defaults: AppConfiguration {
         AppConfiguration(clients: [])
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, cliPath, clients, plans, notifications, applicationUpdates, maaUpdates
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        cliPath = try container.decode(String.self, forKey: .cliPath)
+        clients = try container.decode([ClientConfiguration].self, forKey: .clients)
+        plans = try container.decode([AutomationPlan].self, forKey: .plans)
+        notifications = try container.decode(NotificationConfiguration.self, forKey: .notifications)
+        applicationUpdates = try container.decode(ApplicationUpdateConfiguration.self, forKey: .applicationUpdates)
+        maaUpdates = try container.decodeIfPresent(MAAUpdateConfiguration.self, forKey: .maaUpdates) ?? .init()
     }
 }
 

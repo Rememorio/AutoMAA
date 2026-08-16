@@ -82,6 +82,7 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertEqual(config.plans[1].schedule.rules[0].minute, 0)
         XCTAssertFalse(config.notifications.importantEventsEnabled)
         XCTAssertFalse(config.applicationUpdates.automaticallyDownloadsUpdates)
+        XCTAssertFalse(config.maaUpdates.automaticallyUpdatesCoreAndResources)
     }
 
     func testWeeklyScheduleSummaryAndNextRunAreDeterministic() throws {
@@ -103,6 +104,10 @@ final class AutoMAAKitTests: XCTestCase {
             PlanScheduleFormatter.nextRunLabel(schedule, after: mondayAtNoon, calendar: calendar),
             "周二 09:00"
         )
+        XCTAssertEqual(
+            PlanScheduleFormatter.nextRunDate(schedule, after: mondayAtNoon, calendar: calendar),
+            calendar.date(from: DateComponents(year: 2024, month: 1, day: 2, hour: 9))
+        )
     }
 
     func testCurrentConfigurationRequiresNotificationSettings() throws {
@@ -123,6 +128,66 @@ final class AutoMAAKitTests: XCTestCase {
 
         let invalidData = try JSONSerialization.data(withJSONObject: payload)
         XCTAssertThrowsError(try JSONDecoder().decode(AppConfiguration.self, from: invalidData))
+    }
+
+    func testCurrentConfigurationDefaultsMissingMAAUpdateSettingsToDisabled() throws {
+        var config = populatedConfiguration()
+        config.maaUpdates.automaticallyUpdatesCoreAndResources = true
+        let data = try JSONEncoder().encode(config)
+        var payload = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        payload.removeValue(forKey: "maaUpdates")
+
+        let compatibleData = try JSONSerialization.data(withJSONObject: payload)
+        let decoded = try JSONDecoder().decode(AppConfiguration.self, from: compatibleData)
+
+        XCTAssertEqual(decoded.schemaVersion, AppConfiguration.currentSchemaVersion)
+        XCTAssertFalse(decoded.maaUpdates.automaticallyUpdatesCoreAndResources)
+    }
+
+    func testAutomaticMAAUpdatePolicyThrottlesAndProtectsUpcomingSchedules() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+        XCTAssertTrue(AutomaticMAAUpdatePolicy.canStart(
+            enabled: true,
+            lastAttempt: nil,
+            nextScheduledRun: nil,
+            now: now
+        ))
+        XCTAssertFalse(AutomaticMAAUpdatePolicy.canStart(
+            enabled: false,
+            lastAttempt: nil,
+            nextScheduledRun: nil,
+            now: now
+        ))
+        XCTAssertFalse(AutomaticMAAUpdatePolicy.canStart(
+            enabled: true,
+            lastAttempt: now.addingTimeInterval(-60 * 60),
+            nextScheduledRun: nil,
+            now: now
+        ))
+        XCTAssertFalse(AutomaticMAAUpdatePolicy.canStart(
+            enabled: true,
+            lastAttempt: nil,
+            nextScheduledRun: now.addingTimeInterval(60 * 60),
+            now: now
+        ))
+        XCTAssertTrue(AutomaticMAAUpdatePolicy.canStart(
+            enabled: true,
+            lastAttempt: now.addingTimeInterval(-AutomaticMAAUpdatePolicy.checkInterval),
+            nextScheduledRun: now.addingTimeInterval(2 * 60 * 60),
+            now: now
+        ))
+    }
+
+    func testMAAMaintenanceStoreRoundTripsInIsolatedDirectory() throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MAAMaintenanceStore(directories: AppDirectories(root: root))
+        let state = MAAMaintenanceState(lastCoreUpdateAttempt: Date(timeIntervalSince1970: 1_700_000_000))
+
+        try store.save(state)
+
+        XCTAssertEqual(store.load(), state)
     }
 
     func testDisplayNamesTrimWhitespaceAndProvideContextualFallbacks() {
@@ -199,11 +264,12 @@ final class AutoMAAKitTests: XCTestCase {
             "Official", "Bilibili", "Txwy", "YoStarEN", "YoStarJP", "YoStarKR",
         ])
         XCTAssertEqual(ClientKind.allCases.map(\.supportsAccountSwitching), [
-            true, true, true, false, false, false,
+            true, true, true, false, false, true,
         ])
         XCTAssertEqual(ClientKind.txwy.maaTaskClientType, "txwy")
         XCTAssertEqual(ClientKind.yoStarEN.serverCode, "US")
         XCTAssertEqual(ClientKind.official.maaAccountSelector(from: " 1234 "), "1234")
+        XCTAssertEqual(ClientKind.yoStarKR.maaAccountSelector(from: " 01@gmail "), "01@gmail")
         XCTAssertNil(ClientKind.yoStarJP.maaAccountSelector(from: "private-fragment"))
     }
 
@@ -1086,17 +1152,45 @@ final class AutoMAAKitTests: XCTestCase {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let directories = AppDirectories(root: root)
+        try directories.prepare()
+        let cli = root.appending(path: "maa-cli")
+        try Data("""
+        #!/bin/sh
+        printf '%s\\n' "$@" > "$MAA_CONFIG_DIR/update-arguments.txt"
+        """.utf8).write(to: cli)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
 
-        let succeeded = await WorkflowRunner(directories: directories).updateCore(cliPath: "/usr/bin/true")
+        let succeeded = await WorkflowRunner(directories: directories).updateCore(cliPath: cli.path)
         let entries = HistoryStore(directories: directories).load()
         let runID = try XCTUnwrap(entries.first?.runID)
+        let arguments = try String(contentsOf: directories.maaConfig.appending(path: "update-arguments.txt"), encoding: .utf8)
 
         XCTAssertTrue(succeeded)
+        XCTAssertEqual(arguments, "update\nstable\n--test-time\n10\n--batch\n")
         XCTAssertEqual(entries.map(\.phase), [.updating, .completed])
         XCTAssertTrue(entries.allSatisfy { $0.runID == runID })
         XCTAssertTrue(FileManager.default.fileExists(
             atPath: DiagnosticLogStore(directories: directories).url(for: runID).path
         ))
+    }
+
+    @MainActor
+    func testCoreUpdateDoesNotRaceWithAWorkflowLock() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        try directories.prepare()
+        var lock: ProcessLock? = try ProcessLock(url: directories.lock)
+        XCTAssertNotNil(lock)
+
+        let succeeded = await WorkflowRunner(directories: directories).updateCore(cliPath: "/usr/bin/true")
+        let entries = HistoryStore(directories: directories).load()
+
+        XCTAssertFalse(succeeded)
+        XCTAssertEqual(entries.map(\.phase), [.failed])
+        XCTAssertTrue(entries[0].message.contains("已有一个 AutoMAA 流程正在运行"))
+        lock = nil
+        XCTAssertFalse(ProcessLock.isHeld(at: directories.lock))
     }
 
     func testStructuralValidationRejectsDamagedStepOrderAndInvalidSeries() {
@@ -1786,6 +1880,29 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertTrue(problems.contains {
             $0.severity == .error && $0.message.contains("账号片段必须留空")
         })
+    }
+
+    func testYoStarKRAccountSwitchingUsesTheSameUniqueSelectorRules() {
+        let first = AccountConfiguration(name: "韩服账号一", accountSelector: "01@gmail")
+        let second = AccountConfiguration(name: "韩服账号二", accountSelector: "02@gmail")
+        let client = ClientConfiguration(
+            name: "韩服测试客户端",
+            kind: .yoStarKR,
+            appPath: "/Applications/Definitely-Missing-YoStarKR.app",
+            address: "127.0.0.1:65528",
+            profileName: "supported-account-switch",
+            bundleIdentifier: "dev.automaa.tests.yostar-kr",
+            accounts: [first, second]
+        )
+        let plan = AutomationPlan.lightRoutine
+        let config = AppConfiguration(cliPath: "/usr/bin/true", clients: [client], plans: [plan])
+
+        let problems = ConfigurationValidator.readinessProblems(in: config, planID: plan.id)
+
+        XCTAssertFalse(problems.contains { $0.id.contains("account-switch-unsupported") })
+        XCTAssertFalse(problems.contains { $0.id.contains("selector-unsupported") })
+        XCTAssertFalse(problems.contains { $0.id.contains("selector-empty") })
+        XCTAssertFalse(problems.contains { $0.id.contains("selector-duplicate") })
     }
 
     private func populatedConfiguration() -> AppConfiguration {

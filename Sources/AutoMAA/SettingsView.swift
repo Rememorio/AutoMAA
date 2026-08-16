@@ -257,6 +257,19 @@ struct SettingsView: View {
                             .textSelection(.enabled)
                     }
                 }
+                VStack(alignment: .leading, spacing: 3) {
+                    Toggle("空闲时自动更新 MAA 核心与基础资源", isOn: Binding(
+                        get: { model.configuration.maaUpdates.automaticallyUpdatesCoreAndResources },
+                        set: { model.setAutomaticMAAUpdatesEnabled($0) }
+                    ))
+                    .font(.subheadline.weight(.medium))
+                    .toggleStyle(.switch)
+                    .disabled(model.isWorkflowRunning || model.applicationUpdateState.blocksWorkflow)
+                    .accessibilityHint("每天最多检查一次稳定通道，定时方案即将运行或其他流程忙碌时会自动推迟")
+                    Text("AutoMAA 打开时每天最多检查一次稳定通道；仅在没有流程运行且近期没有定时任务时更新。失败会写入活动记录，可稍后手动重试。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 HStack {
                     Text("稳定通道更新基础包；热更新只拉取可独立更新的识别资源。")
                         .font(.caption)

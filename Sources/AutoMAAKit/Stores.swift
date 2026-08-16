@@ -27,6 +27,7 @@ public struct AppDirectories: Sendable {
     public let configuration: URL
     public let history: URL
     public let executionState: URL
+    public let maaMaintenanceState: URL
     public let generatedManifest: URL
     public let lock: URL
 
@@ -39,6 +40,7 @@ public struct AppDirectories: Sendable {
         configuration = resolvedRoot.appending(path: "config.json")
         history = resolvedRoot.appending(path: "history.json")
         executionState = resolvedRoot.appending(path: "execution-state.json")
+        maaMaintenanceState = resolvedRoot.appending(path: "maa-maintenance.json")
         generatedManifest = resolvedRoot.appending(path: "generated-files.json")
         lock = resolvedRoot.appending(path: "runner.lock")
     }

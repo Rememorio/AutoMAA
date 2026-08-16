@@ -114,11 +114,15 @@ final class AppModel: ObservableObject {
     private let launchAgentManager: LaunchAgentManager
     private let softwareUpdateService: any SoftwareUpdateServing
     private let softwareUpdateResultStore: SoftwareUpdateResultStore
+    private let maaMaintenanceStore: MAAMaintenanceStore
     private let importantNotificationCenter: ImportantNotificationCenter
     private let commandRunner = CommandRunner()
     private let configuredRunnerExecutableURL: URL?
     private var saveTask: Task<Void, Never>?
     private var workflowTask: Task<Void, Never>?
+    private var automaticMAAUpdateTask: Task<Void, Never>?
+    private var automaticMAAUpdateWakeTask: Task<Void, Never>?
+    private var lastMAACoreUpdateAttempt: Date?
     private var applicationUpdateTask: Task<Void, Never>?
     private var notificationTask: Task<Void, Never>?
     private var scheduleSynchronizationTask: Task<Void, Never>?
@@ -164,6 +168,7 @@ final class AppModel: ObservableObject {
             repository: applicationUpdateRepository
         )
         softwareUpdateResultStore = SoftwareUpdateResultStore(directories: directories)
+        maaMaintenanceStore = MAAMaintenanceStore(directories: directories)
         importantNotificationCenter = ImportantNotificationCenter()
         do {
             configuration = try configurationStore.load()
@@ -196,6 +201,8 @@ final class AppModel: ObservableObject {
     deinit {
         saveTask?.cancel()
         workflowTask?.cancel()
+        automaticMAAUpdateTask?.cancel()
+        automaticMAAUpdateWakeTask?.cancel()
         applicationUpdateTask?.cancel()
         notificationTask?.cancel()
         scheduleSynchronizationTask?.cancel()
@@ -445,6 +452,7 @@ final class AppModel: ObservableObject {
                 self.showBanner("流程完成，但有 \(report.failedSteps) 个步骤失败\(suffix)")
             }
             self.resumeAutomaticApplicationUpdateIfNeeded()
+            self.resumeAutomaticMAAUpdateIfNeeded()
         }
     }
 
@@ -470,6 +478,7 @@ final class AppModel: ObservableObject {
             self.workflowTask = nil
             if Task.isCancelled { self.showBanner("资源更新已停止") }
             self.resumeAutomaticApplicationUpdateIfNeeded()
+            self.resumeAutomaticMAAUpdateIfNeeded()
         }
     }
 
@@ -486,11 +495,14 @@ final class AppModel: ObservableObject {
             applicationUpdateState = result.status == .success ? .upToDate : .failed(result.message)
             showBanner(result.message)
             refreshMAAStatus()
+            resumeAutomaticMAAUpdateIfNeeded()
             return
         }
         refreshMAAStatus()
         if checksForUpdatesAutomatically {
             restorePreparedApplicationUpdateOrCheck()
+        } else {
+            resumeAutomaticMAAUpdateIfNeeded()
         }
     }
 
@@ -591,6 +603,7 @@ final class AppModel: ObservableObject {
             showBanner("找不到可执行的 maa-cli")
             return
         }
+        recordMAACoreUpdateAttempt()
         isRunning = true
         let runner = WorkflowRunner(directories: directories) { [weak self] event in
             self?.consume(event)
@@ -603,6 +616,18 @@ final class AppModel: ObservableObject {
             self.showBanner(self.statusMessage)
             self.refreshMAAStatus()
             self.resumeAutomaticApplicationUpdateIfNeeded()
+            self.resumeAutomaticMAAUpdateIfNeeded()
+        }
+    }
+
+    func setAutomaticMAAUpdatesEnabled(_ enabled: Bool) {
+        configuration.maaUpdates.automaticallyUpdatesCoreAndResources = enabled
+        scheduleSave()
+        if enabled {
+            resumeAutomaticMAAUpdateIfNeeded()
+        } else {
+            automaticMAAUpdateWakeTask?.cancel()
+            automaticMAAUpdateWakeTask = nil
         }
     }
 
@@ -622,6 +647,7 @@ final class AppModel: ObservableObject {
             }
             self.applicationUpdateTask = nil
             self.resumeAutomaticApplicationUpdateIfNeeded()
+            self.resumeAutomaticMAAUpdateIfNeeded()
         }
     }
 
@@ -675,6 +701,97 @@ final class AppModel: ObservableObject {
         downloadApplicationUpdate(release)
     }
 
+    private func resumeAutomaticMAAUpdateIfNeeded(now: Date = Date()) {
+        automaticMAAUpdateWakeTask?.cancel()
+        automaticMAAUpdateWakeTask = nil
+        guard configuration.maaUpdates.automaticallyUpdatesCoreAndResources,
+              automaticMAAUpdateTask == nil,
+              workflowTask == nil,
+              applicationUpdateTask == nil,
+              !applicationUpdateState.isBusy,
+              !isWorkflowRunning
+        else { return }
+
+        let persistedAttempt = maaMaintenanceStore.load().lastCoreUpdateAttempt
+        let lastAttempt = [persistedAttempt, lastMAACoreUpdateAttempt].compactMap { $0 }.max()
+        let nextAttempt = AutomaticMAAUpdatePolicy.nextAttemptDate(
+            lastAttempt: lastAttempt,
+            now: now
+        )
+        guard nextAttempt <= now else {
+            scheduleAutomaticMAAUpdateWake(at: nextAttempt, now: now)
+            return
+        }
+
+        let nextScheduledRun = configuration.plans.compactMap {
+            PlanScheduleFormatter.nextRunDate($0.schedule, after: now)
+        }.min()
+        guard AutomaticMAAUpdatePolicy.canStart(
+            enabled: true,
+            lastAttempt: lastAttempt,
+            nextScheduledRun: nextScheduledRun,
+            now: now
+        ) else {
+            if let nextScheduledRun {
+                scheduleAutomaticMAAUpdateWake(
+                    at: nextScheduledRun.addingTimeInterval(
+                        AutomaticMAAUpdatePolicy.scheduledRunSafetyWindow
+                    ),
+                    now: now
+                )
+            }
+            return
+        }
+        guard !ProcessLock.isHeld(at: directories.lock) else {
+            scheduleAutomaticMAAUpdateWake(at: now.addingTimeInterval(15 * 60), now: now)
+            return
+        }
+        guard FileManager.default.isExecutableFile(atPath: configuration.cliPath) else {
+            scheduleAutomaticMAAUpdateWake(at: now.addingTimeInterval(60 * 60), now: now)
+            return
+        }
+
+        recordMAACoreUpdateAttempt(at: now)
+        isRunning = true
+        let cliPath = configuration.cliPath
+        let runner = WorkflowRunner(directories: directories) { [weak self] event in
+            self?.consume(event)
+        }
+        automaticMAAUpdateTask = Task { [weak self] in
+            let succeeded = await runner.updateCore(cliPath: cliPath)
+            guard let self else { return }
+            let cancelled = Task.isCancelled
+            self.isRunning = false
+            self.automaticMAAUpdateTask = nil
+            self.refreshMAAStatus()
+            if !succeeded, !cancelled {
+                self.showBanner("MAA 自动更新未完成；已记录到活动记录，稍后可以在全局设置中重试")
+            }
+            self.resumeAutomaticApplicationUpdateIfNeeded()
+            self.resumeAutomaticMAAUpdateIfNeeded()
+        }
+    }
+
+    private func scheduleAutomaticMAAUpdateWake(at date: Date, now: Date) {
+        guard configuration.maaUpdates.automaticallyUpdatesCoreAndResources else { return }
+        let delay = max(1, date.timeIntervalSince(now))
+        automaticMAAUpdateWakeTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(delay))
+            } catch {
+                return
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.automaticMAAUpdateWakeTask = nil
+            self.resumeAutomaticMAAUpdateIfNeeded()
+        }
+    }
+
+    private func recordMAACoreUpdateAttempt(at date: Date = Date()) {
+        lastMAACoreUpdateAttempt = date
+        try? maaMaintenanceStore.save(.init(lastCoreUpdateAttempt: date))
+    }
+
     func checkForApplicationUpdate(showResult: Bool = true) {
         guard !applicationUpdateState.isBusy else { return }
         applicationUpdateTask?.cancel()
@@ -684,6 +801,7 @@ final class AppModel: ObservableObject {
             await self.performApplicationUpdateCheck(showResult: showResult)
             self.applicationUpdateTask = nil
             self.resumeAutomaticApplicationUpdateIfNeeded()
+            self.resumeAutomaticMAAUpdateIfNeeded()
         }
     }
 
@@ -711,6 +829,7 @@ final class AppModel: ObservableObject {
             guard let self else { return }
             await self.prepareApplicationUpdate(release)
             self.applicationUpdateTask = nil
+            self.resumeAutomaticMAAUpdateIfNeeded()
         }
     }
 
@@ -1129,7 +1248,10 @@ final class AppModel: ObservableObject {
         guard ProcessLock.isHeld(at: directories.lock) else {
             let ended = externalRunState != nil
             externalRunState = nil
-            if ended { resumeAutomaticApplicationUpdateIfNeeded() }
+            if ended {
+                resumeAutomaticApplicationUpdateIfNeeded()
+                resumeAutomaticMAAUpdateIfNeeded()
+            }
             return
         }
         let latest = latestExternalRunEntry()
