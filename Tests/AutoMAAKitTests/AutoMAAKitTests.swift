@@ -823,6 +823,32 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertFalse(manager.isInstalled(planID: plan.id))
     }
 
+    func testSystemLaunchAgentRejectsRunnerInTemporaryDirectoryBeforeWritingFiles() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let launchAgents = root.appending(path: "LaunchAgents", directoryHint: .isDirectory)
+        var plan = AutomationPlan.lightRoutine
+        plan.schedule.enabled = true
+        let manager = LaunchAgentManager(
+            directories: AppDirectories(root: root),
+            launchAgentsDirectory: launchAgents,
+            systemIntegrationEnabled: true
+        )
+        try FileManager.default.createDirectory(at: launchAgents, withIntermediateDirectories: true)
+        let existingData = Data("existing production schedule".utf8)
+        try existingData.write(to: manager.plistURL(planID: plan.id))
+        let runnerURL = FileManager.default.temporaryDirectory
+            .appending(path: "automaa-qa-\(UUID().uuidString)/AutoMAA.app/Contents/MacOS/AutoMAARunner")
+
+        do {
+            try await manager.synchronize(runnerURL: runnerURL, plans: [plan])
+            XCTFail("Expected transient runner rejection")
+        } catch {
+            XCTAssertEqual(error as? LaunchAgentError, .transientRunner)
+        }
+        XCTAssertEqual(try Data(contentsOf: manager.plistURL(planID: plan.id)), existingData)
+    }
+
     func testLaunchAgentRunnerIdentityChangeInvalidatesInstalledSchedule() async throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }

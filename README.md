@@ -160,6 +160,8 @@ swift test --parallel
 open .build/AutoMAA.app --args --data-directory /tmp/automaa-development
 ```
 
+`--data-directory` 在 Debug 与 Release 构建中都会隔离配置、日志和 LaunchAgent，并关闭系统定时任务集成；开发和界面验收不得省略该参数。
+
 快速制作与 Release 相同结构的 DMG：
 
 ```bash

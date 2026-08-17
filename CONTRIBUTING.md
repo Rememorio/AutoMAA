@@ -124,7 +124,7 @@ npm run docs:build
 - 使用临时 `AppDirectories(root:)`；
 - 使用假 Bundle Identifier、测试端口和无副作用的命令；
 - 不连接默认 MaaTools 地址或端口，不启动真实游戏，不读取用户的 AutoMAA 数据目录；
-- LaunchAgent 测试必须注入临时目录并关闭系统集成；SwiftUI 冒烟测试必须使用 Debug `--data-directory <临时目录>`，或仅在独立 QA Bundle 中注入 `AUTOMAA_DEVELOPMENT_DATA_DIRECTORY`；
+- LaunchAgent 测试必须注入临时目录并关闭系统集成；所有 SwiftUI 冒烟测试，无论 Debug 还是 Release 构建，都必须使用 `--data-directory <临时目录>`，或在独立 QA Bundle 中注入 `AUTOMAA_DEVELOPMENT_DATA_DIRECTORY`；
 - 错误修复应包含能在修复前失败、修复后通过的回归测试；
 - UI 改动在 PR 中提供深色和浅色模式截图，涉及状态变化时说明动画和无障碍表现。
 

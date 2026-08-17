@@ -5,6 +5,20 @@ import Testing
 
 @Suite("Schedule management")
 struct ScheduleManagementTests {
+    @Test("data directory arguments isolate packaged builds")
+    @MainActor
+    func packagedBuildDataDirectoryIsolation() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "automaa-packaged-isolation-\(UUID().uuidString)", directoryHint: .isDirectory)
+
+        let resolved = AutoMAAApp.developmentDataDirectory(
+            environment: [:],
+            arguments: ["AutoMAA", "--data-directory", root.path]
+        )
+
+        #expect(resolved == root.standardizedFileURL)
+    }
+
     @Test("rapid schedule edits converge on the latest saved state")
     @MainActor
     func scheduleChangesAreSerialized() async throws {

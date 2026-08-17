@@ -9,7 +9,8 @@ fi
 APP_PATH="${1:A}"
 EXECUTABLE="$APP_PATH/Contents/MacOS/AutoMAA"
 QA_HOME="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/automaa-app-smoke.XXXXXX")"
-CONFIG_PATH="$QA_HOME/Library/Application Support/AutoMAA/config.json"
+QA_DATA="$QA_HOME/AutoMAAData"
+CONFIG_PATH="$QA_DATA/config.json"
 APP_PID=""
 
 cleanup() {
@@ -25,7 +26,7 @@ trap cleanup EXIT INT TERM
 /bin/test -d "$APP_PATH"
 /bin/test -x "$EXECUTABLE"
 
-CFFIXED_USER_HOME="$QA_HOME" "$EXECUTABLE" >/dev/null 2>&1 &
+CFFIXED_USER_HOME="$QA_HOME" "$EXECUTABLE" --data-directory "$QA_DATA" >/dev/null 2>&1 &
 APP_PID=$!
 READY=false
 

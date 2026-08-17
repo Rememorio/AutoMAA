@@ -4,6 +4,7 @@ import Foundation
 public enum LaunchAgentError: LocalizedError, Equatable {
     case invalidSchedule(plan: String, problem: PlanScheduleProblem)
     case duplicateSchedule(first: String, second: String, slot: WeeklyScheduleSlot)
+    case transientRunner
 
     public var errorDescription: String? {
         switch self {
@@ -11,6 +12,8 @@ public enum LaunchAgentError: LocalizedError, Equatable {
             problem.message(planName: plan)
         case let .duplicateSchedule(first, second, slot):
             "「\(first)」与「\(second)」都设置为\(slot.weekday.title) \(PlanScheduleFormatter.time(hour: slot.hour, minute: slot.minute))，请错开运行时间"
+        case .transientRunner:
+            "AutoMAARunner 位于临时目录，不能注册系统定时任务；请先将 AutoMAA 移到稳定位置"
         }
     }
 }
@@ -47,6 +50,7 @@ public struct LaunchAgentManager: Sendable {
     }
 
     public func install(runnerURL: URL, plan: AutomationPlan) async throws {
+        try validate(runnerURL: runnerURL)
         try validate(plan)
         try directories.prepare()
         try FileManager.default.createDirectory(at: launchAgentsDirectory, withIntermediateDirectories: true)
@@ -93,6 +97,7 @@ public struct LaunchAgentManager: Sendable {
     }
 
     public func synchronize(runnerURL: URL, plans: [AutomationPlan]) async throws {
+        try validate(runnerURL: runnerURL)
         try validate(plans)
         let desired = Set(plans.filter(\.schedule.enabled).map(\.id))
         for planID in installedPlanIDs.subtracting(desired) {
@@ -179,6 +184,18 @@ public struct LaunchAgentManager: Sendable {
         throw LaunchAgentError.invalidSchedule(plan: plan.displayName, problem: problem)
     }
 
+    private func validate(runnerURL: URL) throws {
+        guard systemIntegrationEnabled else { return }
+        let runnerURL = runnerURL.resolvingSymlinksInPath().standardizedFileURL
+        let transientDirectories = [
+            FileManager.default.temporaryDirectory,
+            URL(filePath: "/private/tmp", directoryHint: .isDirectory),
+            URL(filePath: "/private/var/folders", directoryHint: .isDirectory),
+        ].map { $0.resolvingSymlinksInPath().standardizedFileURL }
+        guard transientDirectories.contains(where: { runnerURL.isDescendant(of: $0) }) else { return }
+        throw LaunchAgentError.transientRunner
+    }
+
     private func uninstallLegacyAgentIfNeeded() async throws {
         let url = launchAgentsDirectory.appending(path: "\(Self.labelPrefix).plist")
         guard FileManager.default.fileExists(atPath: url.path) else { return }
@@ -221,5 +238,12 @@ public struct LaunchAgentManager: Sendable {
             timeout: 10
         ) else { return false }
         return result.exitCode == 0
+    }
+}
+
+private extension URL {
+    func isDescendant(of directory: URL) -> Bool {
+        let directoryPath = directory.path.hasSuffix("/") ? directory.path : "\(directory.path)/"
+        return path.hasPrefix(directoryPath)
     }
 }

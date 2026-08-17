@@ -38,4 +38,4 @@ open .build/AutoMAA.app --args --data-directory /tmp/automaa-development
 - 不读取 `~/Library/Application Support/AutoMAA`；
 - 不依赖网络、PlayCover 或已登录账号。
 
-Debug 构建支持 `--data-directory <临时目录>`，它会同时隔离配置、日志和 LaunchAgent，并关闭系统 LaunchAgent 集成与自动更新检查。提交前至少运行 `swift test --parallel` 和 `git diff --check`；涉及发布结构时运行 `./scripts/verify-release.sh`。
+所有构建配置都支持 `--data-directory <临时目录>`，它会同时隔离配置、日志和 LaunchAgent，并关闭系统 LaunchAgent 集成与自动更新检查。界面验收必须显式传入该参数；系统 LaunchAgent 也会拒绝注册位于系统临时目录的 Runner，避免临时 QA App 覆盖正式定时任务。提交前至少运行 `swift test --parallel` 和 `git diff --check`；涉及发布结构时运行 `./scripts/verify-release.sh`。

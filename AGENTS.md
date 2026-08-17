@@ -127,7 +127,7 @@ swift test --parallel
 - 不得依赖已经安装的账号、密码、PlayCover 状态、MAA Profile 或网络。
 - 修改账号切换、端口释放、断点、取消、任务参数和人工处理分类时必须补充回归测试。
 - 真机或真实账号测试只在用户明确授权时进行；开始前说明范围，结束后确认客户端关闭和端口释放，并在结果中隐去敏感信息。
-- SwiftUI 冒烟测试使用 Debug 构建的 `--data-directory <临时目录>`，或仅在独立 QA Bundle 中注入 `AUTOMAA_DEVELOPMENT_DATA_DIRECTORY`；该入口同时隔离配置、日志和 LaunchAgent，禁止用它指向默认用户目录。
+- 所有 SwiftUI 冒烟测试，无论 Debug 还是 Release 构建，都必须使用 `--data-directory <临时目录>`，或仅在独立 QA Bundle 中注入 `AUTOMAA_DEVELOPMENT_DATA_DIRECTORY`；该入口同时隔离配置、日志和 LaunchAgent，禁止用它指向默认用户目录。
 
 ## 文档与视觉资产
 

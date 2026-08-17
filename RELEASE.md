@@ -84,7 +84,7 @@ npm run docs:build
 
 ## 4. 隔离界面验收
 
-使用 Debug App、独立 QA Bundle Identifier 和 `--data-directory <临时目录>` 验收界面。不得指向用户默认数据目录，也不得选择或启动真实游戏 App。至少覆盖：
+使用独立 QA Bundle Identifier 和 `--data-directory <临时目录>` 验收界面；Debug 与 Release 构建都必须显式传入隔离目录。不得指向用户默认数据目录，也不得选择或启动真实游戏 App。至少覆盖：
 
 1. 全新空配置、首次引导、配置恢复提示和关于页；
 2. 客户端、任意数量账号、方案增删改排、账号范围和开关反复切换；
