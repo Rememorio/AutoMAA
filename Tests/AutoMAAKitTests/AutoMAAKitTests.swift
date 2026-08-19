@@ -1149,9 +1149,11 @@ final class AutoMAAKitTests: XCTestCase {
         let center = ImportantNotificationCenter(canUseSystemCenter: false)
         let current = await center.authorizationState()
         let requested = try await center.requestAuthorization()
+        let delivery = await center.postTestNotification()
 
         XCTAssertEqual(current, .denied)
         XCTAssertEqual(requested, .denied)
+        XCTAssertEqual(delivery, .unavailable)
     }
 
     @MainActor
@@ -1346,6 +1348,89 @@ final class AutoMAAKitTests: XCTestCase {
         let failed = WorkflowNotificationComposer.notification(for: WorkflowReport(failedSteps: 2))
         XCTAssertEqual(failed?.title, "自动化流程有步骤失败")
         XCTAssertEqual(failed?.body, "有 2 个步骤未完成，请打开 AutoMAA 查看活动记录。")
+    }
+
+    func testImportantNotificationComposerDoesNotRepeatDeliveredRecruitNotice() {
+        let notice = WorkflowNotice(
+            message: "公招发现 6★ 组合",
+            kind: .highRarityRecruit(level: 6)
+        )
+        let completed = WorkflowReport(
+            notices: [notice],
+            pendingNotificationNotices: []
+        )
+        let failed = WorkflowReport(
+            failedSteps: 1,
+            notices: [notice],
+            pendingNotificationNotices: []
+        )
+
+        XCTAssertNil(WorkflowNotificationComposer.notification(for: completed))
+        XCTAssertEqual(
+            WorkflowNotificationComposer.notification(for: failed)?.title,
+            "自动化流程有步骤失败"
+        )
+    }
+
+    @MainActor
+    func testWorkflowDeliversRecruitNoticeBeforeFinalReport() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = root.appending(path: "Applications/Test Game.app", directoryHint: .isDirectory)
+        let bin = root.appending(path: "bin", directoryHint: .isDirectory)
+        let cli = bin.appending(path: "fake-maa")
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let script = """
+        #!/bin/zsh
+        if [[ "$1" == "run" ]]; then
+          printf '%s\\n' \
+            'Detected tags:' \
+            '1. ★★★★★★ 高级资深干员, 远程位, 输出, 生存, 狙击干员'
+        fi
+        """
+        try Data(script.utf8).write(to: cli)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
+
+        let account = AccountConfiguration(name: "测试账号", accountSelector: "fixture-selector")
+        let client = ClientConfiguration(
+            name: "测试客户端",
+            kind: .official,
+            appPath: app.path,
+            address: "127.0.0.1:65494",
+            profileName: "notification-test",
+            bundleIdentifier: "dev.automaa.tests.notification",
+            accounts: [account]
+        )
+        var plan = AutomationPlan.lightRoutine
+        plan.fight.enabled = false
+        plan.infrast.enabled = false
+        plan.mall.enabled = false
+        plan.award.enabled = false
+        plan.policy.hotUpdateBeforeRun = false
+        plan.policy.maxRetries = 0
+        let configuration = AppConfiguration(cliPath: cli.path, clients: [client], plans: [plan])
+        let runtime = StubClientRuntime(closesOnForce: true)
+        var delivered: [[WorkflowNotice]] = []
+        let runner = WorkflowRunner(
+            directories: AppDirectories(root: root),
+            portProbe: runtime,
+            gameController: runtime,
+            shutdownPolicy: .immediate,
+            noticeSink: { notices, _ in
+                delivered.append(notices)
+                return .delivered
+            },
+            eventSink: runtime.record
+        )
+
+        let report = await runner.run(configuration, planID: plan.id, resumeToday: false)
+
+        XCTAssertTrue(report.isSuccess, report.fatalError ?? report.attentionMessages.joined(separator: " / "))
+        XCTAssertEqual(delivered, [report.notices])
+        XCTAssertEqual(report.notices.count, 1)
+        XCTAssertTrue(report.pendingNotificationNotices.isEmpty)
+        XCTAssertNil(WorkflowNotificationComposer.notification(for: report))
     }
 
     func testImportantNotificationComposerCombinesRecruitAndWorkflowAttention() {

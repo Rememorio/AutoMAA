@@ -42,6 +42,7 @@ struct ClientShutdownPolicy: Sendable, Equatable {
 @MainActor
 public final class WorkflowRunner {
     public typealias EventSink = @MainActor @Sendable (RunnerEvent) -> Void
+    public typealias NoticeSink = @MainActor @Sendable ([WorkflowNotice], UUID) async -> NotificationDeliveryResult
 
     private let directories: AppDirectories
     private let commandRunner = CommandRunner()
@@ -51,6 +52,7 @@ public final class WorkflowRunner {
     private let historyStore: HistoryStore
     private let diagnosticLogStore: DiagnosticLogStore
     private let stateStore: ExecutionStateStore
+    private let noticeSink: NoticeSink?
     private let eventSink: EventSink
     private var currentPlanID: UUID?
     private var currentRunID: UUID?
@@ -67,6 +69,22 @@ public final class WorkflowRunner {
             portProbe: PortProbe(),
             gameController: GameProcessController(),
             shutdownPolicy: .playCover,
+            noticeSink: nil,
+            eventSink: eventSink
+        )
+    }
+
+    public convenience init(
+        directories: AppDirectories = .init(),
+        noticeSink: NoticeSink?,
+        eventSink: @escaping EventSink
+    ) {
+        self.init(
+            directories: directories,
+            portProbe: PortProbe(),
+            gameController: GameProcessController(),
+            shutdownPolicy: .playCover,
+            noticeSink: noticeSink,
             eventSink: eventSink
         )
     }
@@ -76,6 +94,7 @@ public final class WorkflowRunner {
         portProbe: any PortProbing,
         gameController: any GameProcessControlling,
         shutdownPolicy: ClientShutdownPolicy,
+        noticeSink: NoticeSink? = nil,
         eventSink: @escaping EventSink = { _ in }
     ) {
         self.directories = directories
@@ -85,6 +104,7 @@ public final class WorkflowRunner {
         historyStore = HistoryStore(directories: directories)
         diagnosticLogStore = DiagnosticLogStore(directories: directories)
         stateStore = ExecutionStateStore(directories: directories)
+        self.noticeSink = noticeSink
         self.eventSink = eventSink
     }
 
@@ -381,6 +401,16 @@ public final class WorkflowRunner {
                         break taskLoop
                     }
                     report.notices.append(contentsOf: outcome.notices)
+                    if !outcome.notices.isEmpty {
+                        let delivered = if let noticeSink {
+                            await noticeSink(outcome.notices, plan.id).wasDelivered
+                        } else {
+                            false
+                        }
+                        if !delivered {
+                            report.pendingNotificationNotices.append(contentsOf: outcome.notices)
+                        }
+                    }
                     visitedSteps += 1
                     if outcome.succeeded {
                         report.succeededSteps += 1

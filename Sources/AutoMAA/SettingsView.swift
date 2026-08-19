@@ -205,9 +205,19 @@ struct SettingsView: View {
                 case .authorized:
                     Label("macOS 已允许横幅与声音", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
+                    Spacer()
+                    Button(model.isTestingImportantNotification ? "正在测试…" : "测试后台通知") {
+                        model.testImportantNotification()
+                    }
+                    .disabled(model.isTestingImportantNotification)
                 case .provisional:
                     Label("macOS 当前以静默方式投递", systemImage: "bell.and.waves.left.and.right")
                         .foregroundStyle(.secondary)
+                    Spacer()
+                    Button(model.isTestingImportantNotification ? "正在测试…" : "测试后台通知") {
+                        model.testImportantNotification()
+                    }
+                    .disabled(model.isTestingImportantNotification)
                 case .notDetermined:
                     Label("尚未授予 macOS 通知权限", systemImage: "questionmark.circle")
                         .foregroundStyle(.orange)

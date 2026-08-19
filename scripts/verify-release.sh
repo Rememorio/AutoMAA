@@ -46,6 +46,8 @@ APP_PATH="$MOUNT_DIR/AutoMAA.app"
 /bin/test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist")" = "$VERSION"
 /bin/test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Contents/Info.plist")" = "com.rememorio.AutoMAA"
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+RUNNER_IDENTIFIER="$(/usr/bin/codesign -dvv "$APP_PATH/Contents/MacOS/AutoMAARunner" 2>&1 | /usr/bin/sed -n 's/^Identifier=//p')"
+/bin/test "$RUNNER_IDENTIFIER" = "com.rememorio.AutoMAA"
 /usr/bin/file "$APP_PATH/Contents/MacOS/AutoMAA" | /usr/bin/grep -q arm64
 /usr/bin/file "$APP_PATH/Contents/MacOS/AutoMAARunner" | /usr/bin/grep -q arm64
 /usr/bin/file "$APP_PATH/Contents/MacOS/AutoMAAUpdater" | /usr/bin/grep -q arm64

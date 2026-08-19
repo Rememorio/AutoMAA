@@ -103,6 +103,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var applicationUpdateState: ApplicationUpdateState = .idle
     @Published private(set) var notificationAuthorizationState: NotificationAuthorizationState = .notDetermined
     @Published private(set) var isRequestingNotificationAuthorization = false
+    @Published private(set) var isTestingImportantNotification = false
 
     let directories: AppDirectories
     let currentApplicationVersion: String
@@ -125,6 +126,7 @@ final class AppModel: ObservableObject {
     private var lastMAACoreUpdateAttempt: Date?
     private var applicationUpdateTask: Task<Void, Never>?
     private var notificationTask: Task<Void, Never>?
+    private var notificationTestTask: Task<Void, Never>?
     private var scheduleSynchronizationTask: Task<Void, Never>?
     private var applicationUpdateInstallLock: ProcessLock?
     private var scheduleSynchronizationRevision = 0
@@ -205,6 +207,7 @@ final class AppModel: ObservableObject {
         automaticMAAUpdateWakeTask?.cancel()
         applicationUpdateTask?.cancel()
         notificationTask?.cancel()
+        notificationTestTask?.cancel()
         scheduleSynchronizationTask?.cancel()
     }
 
@@ -425,7 +428,16 @@ final class AppModel: ObservableObject {
         lastReport = nil
         progress = 0
         let snapshot = configuration
-        let runner = WorkflowRunner(directories: directories) { [weak self] event in
+        let notificationCenter = importantNotificationCenter
+        let noticeSink: WorkflowRunner.NoticeSink?
+        if snapshot.notifications.importantEventsEnabled {
+            noticeSink = { @MainActor @Sendable notices, planID in
+                await notificationCenter.post(notices: notices, planID: planID)
+            }
+        } else {
+            noticeSink = nil
+        }
+        let runner = WorkflowRunner(directories: directories, noticeSink: noticeSink) { [weak self] event in
             self?.consume(event)
         }
         workflowTask = Task { [weak self] in
@@ -558,15 +570,69 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func testImportantNotification() {
+        guard !isTestingImportantNotification else { return }
+        guard configuration.notifications.importantEventsEnabled else {
+            showBanner("请先开启重要通知")
+            return
+        }
+        guard FileManager.default.isExecutableFile(atPath: runnerExecutableURL.path) else {
+            showBanner("找不到后台 Runner，无法测试定时通知")
+            return
+        }
+        isTestingImportantNotification = true
+        notificationTestTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                self.isTestingImportantNotification = false
+                self.notificationTestTask = nil
+            }
+            do {
+                let result = try await self.commandRunner.run(
+                    executable: self.runnerExecutableURL.path,
+                    arguments: ["--test-notification"],
+                    timeout: 15
+                )
+                guard !Task.isCancelled else { return }
+                self.refreshNotificationAuthorization()
+                if result.exitCode == 0 {
+                    self.showBanner("后台测试通知已发送")
+                } else {
+                    let message = result.combinedOutput.isEmpty ? "未知错误" : result.combinedOutput
+                    self.showBanner("后台测试通知未送达：\(String(message.prefix(180)))")
+                }
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.showBanner("无法测试后台通知：\(error.localizedDescription)")
+            }
+        }
+    }
+
     private func postImportantNotification(for report: WorkflowReport, planID: UUID) async {
         guard configuration.notifications.importantEventsEnabled else { return }
         let state = await importantNotificationCenter.authorizationState()
         notificationAuthorizationState = state
-        guard state.canDeliver else { return }
-        _ = try? await importantNotificationCenter.post(
+        let result = await importantNotificationCenter.post(
             report: report,
             planID: planID
         )
+        recordNotificationFailure(result, planID: planID)
+    }
+
+    private func recordNotificationFailure(_ result: NotificationDeliveryResult, planID: UUID) {
+        guard let failure = result.failureDescription else { return }
+        let runID = activityEntries.last(where: { $0.planID == planID })?.runID
+        let entry = LogEntry(
+            level: .warning,
+            message: "重要通知未送达：\(failure)",
+            runID: runID,
+            phase: .completed,
+            progress: 1,
+            planID: planID
+        )
+        historyStore.append(entry)
+        activityEntries.append(entry)
+        if activityEntries.count > 1_000 { activityEntries.removeFirst(activityEntries.count - 1_000) }
     }
 
     func refreshMAAStatus(showResult: Bool = false) {

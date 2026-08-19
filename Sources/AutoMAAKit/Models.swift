@@ -772,6 +772,7 @@ public struct WorkflowReport: Sendable {
     public var totalSteps: Int
     public var attentionMessages: [String]
     public var notices: [WorkflowNotice]
+    public var pendingNotificationNotices: [WorkflowNotice]
     public var cancelled: Bool
     public var fatalError: String?
 
@@ -783,6 +784,7 @@ public struct WorkflowReport: Sendable {
         totalSteps: Int = 0,
         attentionMessages: [String] = [],
         notices: [WorkflowNotice] = [],
+        pendingNotificationNotices: [WorkflowNotice]? = nil,
         cancelled: Bool = false,
         fatalError: String? = nil
     ) {
@@ -793,6 +795,7 @@ public struct WorkflowReport: Sendable {
         self.totalSteps = totalSteps
         self.attentionMessages = attentionMessages
         self.notices = notices
+        self.pendingNotificationNotices = pendingNotificationNotices ?? notices
         self.cancelled = cancelled
         self.fatalError = fatalError
     }

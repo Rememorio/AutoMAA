@@ -22,19 +22,42 @@ public struct WorkflowSystemNotification: Equatable, Sendable {
     }
 }
 
+public enum NotificationDeliveryResult: Equatable, Sendable {
+    case delivered
+    case noContent
+    case unavailable
+    case notAuthorized(NotificationAuthorizationState)
+    case failed(String)
+
+    public var wasDelivered: Bool {
+        self == .delivered
+    }
+
+    public var failureDescription: String? {
+        switch self {
+        case .delivered, .noContent:
+            nil
+        case .unavailable:
+            "当前进程无法使用 macOS 通知中心"
+        case .notAuthorized(.notDetermined):
+            "macOS 尚未允许此运行器发送通知"
+        case .notAuthorized(.denied):
+            "macOS 已关闭 AutoMAA 通知"
+        case .notAuthorized(.provisional), .notAuthorized(.authorized):
+            nil
+        case let .failed(message):
+            "macOS 通知投递失败：\(message)"
+        }
+    }
+}
+
 public enum WorkflowNotificationComposer {
     public static func notification(for report: WorkflowReport) -> WorkflowSystemNotification? {
-        if let level = report.notices.compactMap(highRarityLevel).max() {
-            return WorkflowSystemNotification(
-                title: "公开招募发现 \(level)★ 组合",
-                body: "请打开 AutoMAA 查看对应账号与识别标签。\(issueSuffix(for: report))"
-            )
-        }
-        if !report.notices.isEmpty {
-            return WorkflowSystemNotification(
-                title: "公开招募需要确认",
-                body: "发现 \(report.notices.count) 项稀有或保留标签结果，请打开 AutoMAA 查看活动记录。\(issueSuffix(for: report))"
-            )
+        if let notification = notification(
+            for: report.pendingNotificationNotices,
+            suffix: issueSuffix(for: report)
+        ) {
+            return notification
         }
         if report.cancelled { return nil }
         if report.fatalError != nil {
@@ -62,6 +85,27 @@ public enum WorkflowNotificationComposer {
             )
         }
         return nil
+    }
+
+    public static func notification(for notices: [WorkflowNotice]) -> WorkflowSystemNotification? {
+        notification(for: notices, suffix: "")
+    }
+
+    private static func notification(
+        for notices: [WorkflowNotice],
+        suffix: String
+    ) -> WorkflowSystemNotification? {
+        if let level = notices.compactMap(highRarityLevel).max() {
+            return WorkflowSystemNotification(
+                title: "公开招募发现 \(level)★ 组合",
+                body: "请打开 AutoMAA 查看对应账号与识别标签。\(suffix)"
+            )
+        }
+        guard !notices.isEmpty else { return nil }
+        return WorkflowSystemNotification(
+            title: "公开招募需要确认",
+            body: "发现 \(notices.count) 项稀有或保留标签结果，请打开 AutoMAA 查看活动记录。\(suffix)"
+        )
     }
 
     private static func highRarityLevel(_ notice: WorkflowNotice) -> Int? {
@@ -121,23 +165,55 @@ public final class ImportantNotificationCenter {
     public func post(
         report: WorkflowReport,
         planID: UUID
-    ) async throws -> Bool {
-        guard let notification = WorkflowNotificationComposer.notification(for: report) else { return false }
-        guard let center else { return false }
-        guard await authorizationState().canDeliver else { return false }
+    ) async -> NotificationDeliveryResult {
+        guard let notification = WorkflowNotificationComposer.notification(for: report) else { return .noContent }
+        return await post(notification, threadIdentifier: "workflow.\(planID.uuidString.lowercased())")
+    }
+
+    @discardableResult
+    public func post(
+        notices: [WorkflowNotice],
+        planID: UUID
+    ) async -> NotificationDeliveryResult {
+        guard let notification = WorkflowNotificationComposer.notification(for: notices) else { return .noContent }
+        return await post(notification, threadIdentifier: "workflow.\(planID.uuidString.lowercased())")
+    }
+
+    @discardableResult
+    public func postTestNotification() async -> NotificationDeliveryResult {
+        await post(
+            WorkflowSystemNotification(
+                title: "AutoMAA 通知测试",
+                body: "后台定时通知可以正常送达。"
+            ),
+            threadIdentifier: "notification-test"
+        )
+    }
+
+    private func post(
+        _ notification: WorkflowSystemNotification,
+        threadIdentifier: String
+    ) async -> NotificationDeliveryResult {
+        guard let center else { return .unavailable }
+        let state = await authorizationState()
+        guard state.canDeliver else { return .notAuthorized(state) }
         let content = UNMutableNotificationContent()
         content.title = notification.title
         content.body = notification.body
         content.sound = .default
         content.interruptionLevel = .active
-        content.threadIdentifier = "workflow.\(planID.uuidString.lowercased())"
+        content.threadIdentifier = threadIdentifier
         let request = UNNotificationRequest(
             identifier: "workflow-\(UUID().uuidString.lowercased())",
             content: content,
             trigger: nil
         )
-        try await center.add(request)
-        return true
+        do {
+            try await center.add(request)
+            return .delivered
+        } catch {
+            return .failed(error.localizedDescription)
+        }
     }
 
     private var center: UNUserNotificationCenter? {
