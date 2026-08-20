@@ -7,6 +7,7 @@ public enum RuntimeError: LocalizedError {
     case cancelled
     case invalidAddress(String)
     case portOccupied(String)
+    case portOccupiedByClient(address: String, client: String)
     case appNotFound(String)
     case bundleIdentifierMissing(String)
     case launchFailed(String)
@@ -21,7 +22,10 @@ public enum RuntimeError: LocalizedError {
         case .alreadyRunning: "已有一个 AutoMAA 流程正在运行"
         case .cancelled: "用户已停止流程"
         case let .invalidAddress(value): "连接地址无效：\(value)"
-        case let .portOccupied(value): "端口 \(value) 已被其他程序占用"
+        case let .portOccupied(value):
+            "MaaTools 端口 \(value) 已被未知程序占用。为避免连接错误客户端，请关闭相关游戏和 MAA 后重新运行"
+        case let .portOccupiedByClient(address, client):
+            "客户端「\(client)」仍在运行并占用 MaaTools 端口 \(address)。为避免连接错误客户端，请关闭该客户端及其他 MAA 后重新运行"
         case let .appNotFound(path): "找不到游戏：\(path)"
         case let .bundleIdentifierMissing(client): "客户端「\(client)」缺少 Bundle Identifier"
         case let .launchFailed(message): "游戏启动失败：\(message)"

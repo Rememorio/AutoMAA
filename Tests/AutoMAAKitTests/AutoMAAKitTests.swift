@@ -16,12 +16,18 @@ private final class StubClientRuntime: PortProbing, GameProcessControlling {
     var isPortOpen = true
     let closesOnForce: Bool
     let opensOnWait: Bool
+    var runningClientIDs: Set<UUID>?
     private(set) var terminationRequests: [Bool] = []
     private(set) var events: [RunnerEvent] = []
 
-    init(closesOnForce: Bool, opensOnWait: Bool = false) {
+    init(
+        closesOnForce: Bool,
+        opensOnWait: Bool = false,
+        runningClientIDs: Set<UUID>? = nil
+    ) {
         self.closesOnForce = closesOnForce
         self.opensOnWait = opensOnWait
+        self.runningClientIDs = runningClientIDs
     }
 
     func isOpen(_ value: String, observeCancellation: Bool) async -> Bool {
@@ -42,13 +48,14 @@ private final class StubClientRuntime: PortProbing, GameProcessControlling {
     }
 
     func isRunning(_ client: ClientConfiguration) -> Bool {
-        isClientRunning
+        runningClientIDs?.contains(client.id) ?? isClientRunning
     }
 
     func terminate(_ client: ClientConfiguration, force: Bool) -> Bool {
         terminationRequests.append(force)
         if force, closesOnForce {
             isClientRunning = false
+            runningClientIDs?.remove(client.id)
             isPortOpen = false
         }
         return true
@@ -337,6 +344,70 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertEqual(completion.message, "客户端「测试客户端」已关闭，MaaTools 连接已释放")
         XCTAssertEqual(completion.log.details, "客户端未响应常规退出请求，已由 macOS 完成进程清理。")
         XCTAssertFalse(closingEvents.contains { $0.log.level == .warning })
+    }
+
+    @MainActor
+    func testSharedPortOwnedByAnotherConfiguredClientStopsWithoutClosingEitherClient() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let officialApp = root.appending(path: "Applications/Official.app", directoryHint: .isDirectory)
+        let japaneseApp = root.appending(path: "Applications/Japanese.app", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: officialApp, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: japaneseApp, withIntermediateDirectories: true)
+        let address = "127.0.0.1:65492"
+        let official = ClientConfiguration(
+            name: "官服测试",
+            kind: .official,
+            appPath: officialApp.path,
+            address: address,
+            profileName: "official-conflict-test",
+            bundleIdentifier: "dev.automaa.tests.official-conflict",
+            accounts: [AccountConfiguration(name: "官服账号")]
+        )
+        let japanese = ClientConfiguration(
+            name: "日服测试",
+            kind: .yoStarJP,
+            appPath: japaneseApp.path,
+            address: address,
+            profileName: "japanese-conflict-test",
+            bundleIdentifier: "dev.automaa.tests.japanese-conflict",
+            accounts: [AccountConfiguration(name: "日服账号")]
+        )
+        var plan = AutomationPlan.lightRoutine
+        plan.policy.hotUpdateBeforeRun = false
+        let configuration = AppConfiguration(
+            cliPath: "/usr/bin/true",
+            clients: [official, japanese],
+            plans: [plan]
+        )
+        let runtime = StubClientRuntime(
+            closesOnForce: true,
+            runningClientIDs: [official.id, japanese.id]
+        )
+        let runner = WorkflowRunner(
+            directories: AppDirectories(root: root),
+            portProbe: runtime,
+            gameController: runtime,
+            shutdownPolicy: .immediate,
+            eventSink: runtime.record
+        )
+
+        let report = await runner.run(configuration, planID: plan.id, resumeToday: false)
+
+        let message = "客户端「日服测试」仍在运行并占用 MaaTools 端口 \(address)。为避免连接错误客户端，请关闭该客户端及其他 MAA 后重新运行"
+        XCTAssertEqual(report.fatalError, message)
+        XCTAssertEqual(report.succeededSteps, 0)
+        XCTAssertTrue(runtime.terminationRequests.isEmpty)
+        XCTAssertTrue(runtime.events.contains {
+            $0.phase == .failed && $0.message == message && $0.log.level == .error
+        })
+    }
+
+    func testUnknownPortOwnerProvidesActionableSafetyGuidance() {
+        XCTAssertEqual(
+            RuntimeError.portOccupied("127.0.0.1:65493").localizedDescription,
+            "MaaTools 端口 127.0.0.1:65493 已被未知程序占用。为避免连接错误客户端，请关闭相关游戏和 MAA 后重新运行"
+        )
     }
 
     @MainActor

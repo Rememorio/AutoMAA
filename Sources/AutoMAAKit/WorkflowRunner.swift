@@ -224,7 +224,7 @@ public final class WorkflowRunner {
                 continue
             }
             do {
-                try await launch(client)
+                try await launch(client, configuredClients: configuration.clients)
             } catch {
                 if isCancellation(error) {
                     report.cancelled = true
@@ -596,10 +596,13 @@ public final class WorkflowRunner {
         return success
     }
 
-    private func launch(_ client: ClientConfiguration) async throws {
+    private func launch(
+        _ client: ClientConfiguration,
+        configuredClients: [ClientConfiguration]
+    ) async throws {
         guard !Task.isCancelled else { throw RuntimeError.cancelled }
         emit(.launching, "正在启动\(clientText(client))", 0, .info, client: client)
-        _ = try PortAddress(client.address)
+        let address = try PortAddress(client.address)
         guard !client.bundleIdentifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw RuntimeError.bundleIdentifierMissing(client.displayName)
         }
@@ -607,6 +610,16 @@ public final class WorkflowRunner {
             throw RuntimeError.appNotFound(client.appPath)
         }
         if await portProbe.isOpen(client.address) {
+            if let conflict = configuredClients.first(where: {
+                $0.id != client.id
+                    && (try? PortAddress($0.address)) == address
+                    && gameController.isRunning($0)
+            }) {
+                throw RuntimeError.portOccupiedByClient(
+                    address: client.address,
+                    client: conflict.displayName
+                )
+            }
             guard gameController.isRunning(client) else {
                 throw RuntimeError.portOccupied(client.address)
             }
@@ -680,7 +693,7 @@ public final class WorkflowRunner {
                     details: detail
                 )
                 try await close(client, configuration: configuration)
-                try await launch(client)
+                try await launch(client, configuredClients: configuration.clients)
                 continue
             }
             guard remainingRetries > 0 else { break }
@@ -787,7 +800,7 @@ public final class WorkflowRunner {
                     details: failureDetails
                 )
                 if !(await portProbe.isOpen(client.address)) {
-                    try await launch(client)
+                    try await launch(client, configuredClients: configuration.clients)
                 }
                 try await switchAccount(
                     account,
@@ -986,7 +999,7 @@ public final class WorkflowRunner {
     private func isSafetyCritical(_ error: Error) -> Bool {
         guard let runtimeError = error as? RuntimeError else { return false }
         switch runtimeError {
-        case .alreadyRunning, .portOccupied, .portReleaseTimeout:
+        case .alreadyRunning, .portOccupied, .portOccupiedByClient, .portReleaseTimeout:
             return true
         default:
             return false
