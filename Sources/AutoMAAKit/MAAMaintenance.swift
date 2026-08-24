@@ -64,3 +64,28 @@ public enum AutomaticMAAUpdatePolicy {
         return nextScheduledRun.timeIntervalSince(now) >= scheduledRunSafetyWindow
     }
 }
+
+enum MAAMaintenanceFailureClassifier {
+    static func isTransientNetworkFailure(_ result: CommandResult) -> Bool {
+        guard result.exitCode != 0, !result.cancelled else { return false }
+        let output = result.combinedOutput.lowercased()
+        return [
+            "couldn't connect",
+            "could not connect",
+            "failed to connect",
+            "connection timed out",
+            "operation timed out",
+            "network is unreachable",
+            "could not resolve host",
+            "couldn't resolve host",
+            "temporary failure in name resolution",
+            "connection reset",
+            "connection was reset",
+            "connection refused",
+            "remote end hung up unexpectedly",
+            "tls handshake timeout",
+            "unexpected disconnect",
+            "early eof",
+        ].contains { output.contains($0) }
+    }
+}

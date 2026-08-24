@@ -27,6 +27,11 @@ private struct TaskCompletionSummary {
     let details: String?
 }
 
+private struct MaintenanceCommandOutcome {
+    let result: CommandResult
+    let recoveredAfterRetry: Bool
+}
+
 struct ClientShutdownPolicy: Sendable, Equatable {
     let maaGracePeriod: TimeInterval
     let systemGracePeriod: TimeInterval
@@ -49,6 +54,7 @@ public final class WorkflowRunner {
     private let portProbe: any PortProbing
     private let gameController: any GameProcessControlling
     private let shutdownPolicy: ClientShutdownPolicy
+    private let maintenanceRetryDelay: Duration
     private let historyStore: HistoryStore
     private let diagnosticLogStore: DiagnosticLogStore
     private let stateStore: ExecutionStateStore
@@ -94,6 +100,7 @@ public final class WorkflowRunner {
         portProbe: any PortProbing,
         gameController: any GameProcessControlling,
         shutdownPolicy: ClientShutdownPolicy,
+        maintenanceRetryDelay: Duration = .seconds(5),
         noticeSink: NoticeSink? = nil,
         eventSink: @escaping EventSink = { _ in }
     ) {
@@ -101,6 +108,7 @@ public final class WorkflowRunner {
         self.portProbe = portProbe
         self.gameController = gameController
         self.shutdownPolicy = shutdownPolicy
+        self.maintenanceRetryDelay = maintenanceRetryDelay
         historyStore = HistoryStore(directories: directories)
         diagnosticLogStore = DiagnosticLogStore(directories: directories)
         stateStore = ExecutionStateStore(directories: directories)
@@ -544,15 +552,23 @@ public final class WorkflowRunner {
         _ = lock
         _ = lease
         emit(.updating, "正在热更新 MAA 资源", 0, .info)
-        let result = await runCommand(executable: cliPath, arguments: ["hot-update", "--batch"], timeout: 180)
+        let outcome = await runMaintenanceCommand(
+            executable: cliPath,
+            arguments: ["hot-update", "--batch"],
+            timeout: 180,
+            operation: "热更新 MAA 资源"
+        )
+        let result = outcome.result
         if result.cancelled || Task.isCancelled {
             emit(.cancelled, "资源更新已停止", 1, .warning)
             return false
         }
-        let success = result.exitCode == 0
+        let success = result.exitCode == 0 && !result.timedOut
         emit(
             success ? .completed : .failed,
-            success ? "MAA 资源已经是最新" : "资源更新失败",
+            success
+                ? (outcome.recoveredAfterRetry ? "MAA 资源重试后已经是最新" : "MAA 资源已经是最新")
+                : "资源更新失败",
             1,
             success ? .success : .error,
             details: success ? nil : shortOutput(result)
@@ -576,11 +592,13 @@ public final class WorkflowRunner {
         _ = lock
         _ = lease
         emit(.updating, "正在更新 MAA 核心与基础资源", 0, .info)
-        let result = await runCommand(
+        let outcome = await runMaintenanceCommand(
             executable: cliPath,
             arguments: ["update", "stable", "--test-time", "10", "--batch"],
-            timeout: 3_600
+            timeout: 3_600,
+            operation: "更新 MAA 核心与基础资源"
         )
+        let result = outcome.result
         if result.cancelled || Task.isCancelled {
             emit(.cancelled, "MAA 更新已停止", 1, .warning)
             return false
@@ -588,12 +606,46 @@ public final class WorkflowRunner {
         let success = result.exitCode == 0 && !result.timedOut
         emit(
             success ? .completed : .failed,
-            success ? "MAA 核心与基础资源已更新" : "MAA 更新失败",
+            success
+                ? (outcome.recoveredAfterRetry ? "MAA 核心与基础资源重试后已更新" : "MAA 核心与基础资源已更新")
+                : "MAA 更新失败",
             1,
             success ? .success : .error,
             details: success ? nil : shortOutput(result)
         )
         return success
+    }
+
+    private func runMaintenanceCommand(
+        executable: String,
+        arguments: [String],
+        timeout: TimeInterval,
+        operation: String
+    ) async -> MaintenanceCommandOutcome {
+        let first = await runCommand(executable: executable, arguments: arguments, timeout: timeout)
+        guard MAAMaintenanceFailureClassifier.isTransientNetworkFailure(first), !Task.isCancelled else {
+            return .init(result: first, recoveredAfterRetry: false)
+        }
+        emit(
+            .updating,
+            "\(operation)遇到临时网络问题，正在自动重试（1/1）",
+            0,
+            .info,
+            details: shortOutput(first)
+        )
+        do {
+            try await Task.sleep(for: maintenanceRetryDelay)
+        } catch {
+            return .init(result: first, recoveredAfterRetry: false)
+        }
+        guard !Task.isCancelled else {
+            return .init(result: first, recoveredAfterRetry: false)
+        }
+        let retried = await runCommand(executable: executable, arguments: arguments, timeout: timeout)
+        return .init(
+            result: retried,
+            recoveredAfterRetry: retried.exitCode == 0 && !retried.timedOut
+        )
     }
 
     private func launch(

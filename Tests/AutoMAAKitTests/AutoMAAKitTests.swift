@@ -1292,6 +1292,75 @@ final class AutoMAAKitTests: XCTestCase {
     }
 
     @MainActor
+    func testMaintenanceUpdateRetriesOneTransientNetworkFailure() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        try directories.prepare()
+        let cli = root.appending(path: "maa-cli")
+        try Data("""
+        #!/bin/sh
+        attempts="$MAA_CONFIG_DIR/update-attempts.txt"
+        count=0
+        if [ -f "$attempts" ]; then
+          count="$(/bin/cat "$attempts")"
+        fi
+        count=$((count + 1))
+        printf '%s\\n' "$count" > "$attempts"
+        if [ "$count" -eq 1 ]; then
+          printf '%s\\n' "fatal: Failed to connect to github.com: Couldn't connect to server" >&2
+          exit 1
+        fi
+        """.utf8).write(to: cli)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
+        let runtime = StubClientRuntime(closesOnForce: true)
+        let runner = WorkflowRunner(
+            directories: directories,
+            portProbe: runtime,
+            gameController: runtime,
+            shutdownPolicy: .immediate,
+            maintenanceRetryDelay: .zero,
+            eventSink: runtime.record
+        )
+
+        let succeeded = await runner.updateCore(cliPath: cli.path)
+        let attempts = try String(
+            contentsOf: directories.maaConfig.appending(path: "update-attempts.txt"),
+            encoding: .utf8
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+        let entries = HistoryStore(directories: directories).load()
+
+        XCTAssertTrue(succeeded)
+        XCTAssertEqual(attempts, "2")
+        XCTAssertEqual(entries.map(\.phase), [.updating, .updating, .completed])
+        XCTAssertEqual(entries[1].level, .info)
+        XCTAssertTrue(entries[1].message.contains("临时网络问题"))
+        XCTAssertEqual(entries.last?.message, "MAA 核心与基础资源重试后已更新")
+    }
+
+    func testMaintenanceRetryClassifierRejectsNonNetworkFailuresAndCancellation() {
+        XCTAssertTrue(MAAMaintenanceFailureClassifier.isTransientNetworkFailure(.init(
+            exitCode: 1,
+            standardOutput: "",
+            standardError: "Could not resolve host: github.com",
+            timedOut: false
+        )))
+        XCTAssertFalse(MAAMaintenanceFailureClassifier.isTransientNetworkFailure(.init(
+            exitCode: 1,
+            standardOutput: "",
+            standardError: "checksum mismatch",
+            timedOut: false
+        )))
+        XCTAssertFalse(MAAMaintenanceFailureClassifier.isTransientNetworkFailure(.init(
+            exitCode: 1,
+            standardOutput: "",
+            standardError: "Failed to connect",
+            timedOut: false,
+            cancelled: true
+        )))
+    }
+
+    @MainActor
     func testCoreUpdateDoesNotRaceWithAWorkflowLock() async throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }

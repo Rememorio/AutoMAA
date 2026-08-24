@@ -276,7 +276,7 @@ struct SettingsView: View {
                     .toggleStyle(.switch)
                     .disabled(model.isWorkflowRunning || model.applicationUpdateState.blocksWorkflow)
                     .accessibilityHint("每天最多检查一次稳定通道，定时方案即将运行或其他流程忙碌时会自动推迟")
-                    Text("AutoMAA 打开时每天最多检查一次稳定通道；仅在没有流程运行且近期没有定时任务时更新。失败会写入活动记录，可稍后手动重试。")
+                    Text("AutoMAA 打开时每天最多检查一次稳定通道；仅在没有流程运行且近期没有定时任务时更新。临时网络错误会自动重试一次；最终失败会写入活动记录，可稍后手动重试。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
