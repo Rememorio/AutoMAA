@@ -52,6 +52,7 @@ npm run docs:build
 | `Sources/AutoMAAKit/Stores.swift` | 配置、历史与当日执行状态的持久化 |
 | `Sources/AutoMAAKit/LaunchAgentManager.swift` | macOS LaunchAgent 定时任务 |
 | `Sources/AutoMAARunner/` | 无界面定时运行入口 |
+| `Sources/AutoMAAResourceProbe/` | 在独立进程中调用 MaaCore 验证基础与增量资源组合 |
 | `Sources/AutoMAAUpdater/` | 等待主 App 退出、原子替换、失败回滚和重新启动 |
 | `Tests/AutoMAAKitTests/` | 核心配置与工作流测试 |
 | `scripts/` | App、图标和 DMG 构建脚本 |
@@ -75,6 +76,7 @@ npm run docs:build
 8. 每个客户端使用独立的 MAA Profile；生成文件只能清理由 AutoMAA 清单或命名规则确认归属的文件。
 9. AutoMAA 本体更新只接受构建时配置仓库中固定命名的正式 Release；替换前必须校验大小、SHA-256、Bundle ID、版本、架构和代码签名，失败时保留或恢复旧 App。
 10. 图形界面、定时 Runner 和直接调用 `WorkflowRunner` 必须使用同一套运行前校验；不能只在按钮层阻止危险配置。
+11. MaaCore、基础资源和热更新资源必须先写入隔离候选目录，并由候选 Core 在独立进程中按实际顺序加载；只有验证通过后才能启用，失败时不得破坏当前安装或启动游戏。
 
 官方构建的更新仓库由 `scripts/Info.plist` 中的 `AutoMAAUpdateRepository` 指定。下游发行版可以在构建时改为自己的仓库，不要在界面或业务代码中另行写死维护者信息。
 

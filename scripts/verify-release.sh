@@ -48,8 +48,11 @@ APP_PATH="$MOUNT_DIR/AutoMAA.app"
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 RUNNER_IDENTIFIER="$(/usr/bin/codesign -dvv "$APP_PATH/Contents/MacOS/AutoMAARunner" 2>&1 | /usr/bin/sed -n 's/^Identifier=//p')"
 /bin/test "$RUNNER_IDENTIFIER" = "com.rememorio.AutoMAA"
+PROBE_IDENTIFIER="$(/usr/bin/codesign -dvv "$APP_PATH/Contents/MacOS/AutoMAAResourceProbe" 2>&1 | /usr/bin/sed -n 's/^Identifier=//p')"
+/bin/test "$PROBE_IDENTIFIER" = "com.rememorio.AutoMAA.resource-probe"
 /usr/bin/file "$APP_PATH/Contents/MacOS/AutoMAA" | /usr/bin/grep -q arm64
 /usr/bin/file "$APP_PATH/Contents/MacOS/AutoMAARunner" | /usr/bin/grep -q arm64
+/usr/bin/file "$APP_PATH/Contents/MacOS/AutoMAAResourceProbe" | /usr/bin/grep -q arm64
 /usr/bin/file "$APP_PATH/Contents/MacOS/AutoMAAUpdater" | /usr/bin/grep -q arm64
 ./scripts/smoke-test-app.sh "$APP_PATH"
 

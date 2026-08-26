@@ -5,57 +5,122 @@ public enum MAAUpdateChannel: String, Sendable {
     case beta
 }
 
-struct MAACoreVersion: Comparable, CustomStringConvertible, Equatable {
-    let major: Int
-    let minor: Int
-    let patch: Int
-
-    var description: String { "\(major).\(minor).\(patch)" }
-
-    static func parse(_ output: String) -> Self? {
-        let pattern = #"MaaCore\s+v?(\d+)\.(\d+)\.(\d+)"#
-        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
-              let match = expression.firstMatch(
-                in: output,
-                range: NSRange(output.startIndex..., in: output)
-              ),
-              let majorRange = Range(match.range(at: 1), in: output),
-              let minorRange = Range(match.range(at: 2), in: output),
-              let patchRange = Range(match.range(at: 3), in: output),
-              let major = Int(output[majorRange]),
-              let minor = Int(output[minorRange]),
-              let patch = Int(output[patchRange])
-        else { return nil }
-        return .init(major: major, minor: minor, patch: patch)
-    }
-
-    static func < (lhs: Self, rhs: Self) -> Bool {
-        (lhs.major, lhs.minor, lhs.patch) < (rhs.major, rhs.minor, rhs.patch)
-    }
-}
-
 struct MAAResourceCompatibilityIssue: Equatable {
-    let coreVersion: MAACoreVersion
-    let requiredCoreVersion: MAACoreVersion
+    let details: String
+    let candidateWasNotActivated: Bool
 
     var guidance: String {
-        "MaaCore \(coreVersion) 与已安装的基建热更新资源不兼容；该资源需要 MaaCore \(requiredCoreVersion) 或更新版本。请在“全局设置 → MAA”手动选择“更新 Beta 核心与基础资源”，或等待兼容版本进入稳定通道。AutoMAA 未回退资源，也未启动游戏"
+        let state = candidateWasNotActivated
+            ? "下载的候选组件没有启用，当前安装保持不变"
+            : "AutoMAA 未启动游戏"
+        return "MaaCore 无法完整加载 MAA 资源。请先在“全局设置 → MAA”更新稳定版核心与基础资源；若稳定通道尚未包含修复，可手动确认更新 Beta，或等待修复进入稳定通道。\(state)"
     }
 }
 
-enum MAAResourceCompatibility {
-    private static let crossFacilityInfrastCoreVersion = MAACoreVersion(major: 6, minor: 17, patch: 0)
+enum MAAComponentUpdate {
+    case resources
+    case core(MAAUpdateChannel)
 
-    static func issue(coreVersionOutput: String, infrastData: Data) -> MAAResourceCompatibilityIssue? {
-        guard let coreVersion = MAACoreVersion.parse(coreVersionOutput),
-              coreVersion < crossFacilityInfrastCoreVersion,
-              let object = try? JSONSerialization.jsonObject(with: infrastData) as? [String: Any],
-              object["Processing"] != nil || object["Training"] != nil
-        else { return nil }
-        return .init(
-            coreVersion: coreVersion,
-            requiredCoreVersion: crossFacilityInfrastCoreVersion
-        )
+    var includesCore: Bool {
+        switch self {
+        case .resources: false
+        case .core: true
+        }
+    }
+
+    var arguments: [String] {
+        switch self {
+        case .resources:
+            ["hot-update", "--batch"]
+        case let .core(channel):
+            ["update", channel.rawValue, "--test-time", "10", "--batch"]
+        }
+    }
+
+    var timeout: TimeInterval {
+        includesCore ? 3_600 : 180
+    }
+}
+
+struct MAAInstallationPaths {
+    let data: URL
+    let cache: URL
+    let library: URL
+    let resource: URL
+    let hotUpdate: URL
+}
+
+struct MAAUpdateStaging {
+    let data: URL
+    let cache: URL
+    let state: URL
+
+    var library: URL { data.appending(path: "lib", directoryHint: .isDirectory) }
+    var resource: URL { data.appending(path: "resource", directoryHint: .isDirectory) }
+    var hotUpdate: URL { data.appending(path: "MaaResource", directoryHint: .isDirectory) }
+
+    func remove() {
+        try? FileManager.default.removeItem(at: data)
+        try? FileManager.default.removeItem(at: cache)
+        try? FileManager.default.removeItem(at: state)
+    }
+}
+
+struct FileReplacement {
+    let source: URL
+    let target: URL
+}
+
+enum FileReplacementTransaction {
+    private struct AppliedReplacement {
+        let target: URL
+        let backup: URL?
+    }
+
+    static func commit(_ replacements: [FileReplacement]) throws {
+        let manager = FileManager.default
+        var applied: [AppliedReplacement] = []
+        do {
+            for replacement in replacements {
+                guard manager.fileExists(atPath: replacement.source.path) else { continue }
+                try manager.createDirectory(
+                    at: replacement.target.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                let backup: URL?
+                if manager.fileExists(atPath: replacement.target.path) {
+                    let candidate = replacement.target.deletingLastPathComponent().appending(
+                        path: ".automaa-backup-\(replacement.target.lastPathComponent)-\(UUID().uuidString)"
+                    )
+                    try manager.moveItem(at: replacement.target, to: candidate)
+                    backup = candidate
+                } else {
+                    backup = nil
+                }
+                do {
+                    try manager.moveItem(at: replacement.source, to: replacement.target)
+                    applied.append(.init(target: replacement.target, backup: backup))
+                } catch {
+                    if let backup {
+                        try? manager.moveItem(at: backup, to: replacement.target)
+                    }
+                    throw error
+                }
+            }
+        } catch {
+            for replacement in applied.reversed() {
+                try? manager.removeItem(at: replacement.target)
+                if let backup = replacement.backup {
+                    try? manager.moveItem(at: backup, to: replacement.target)
+                }
+            }
+            throw error
+        }
+        for replacement in applied {
+            if let backup = replacement.backup {
+                try? manager.removeItem(at: backup)
+            }
+        }
     }
 }
 

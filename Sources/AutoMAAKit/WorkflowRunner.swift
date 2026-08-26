@@ -32,6 +32,13 @@ private struct MaintenanceCommandOutcome {
     let recoveredAfterRetry: Bool
 }
 
+private enum StagedMAAUpdateResult {
+    case success(recoveredAfterRetry: Bool)
+    case incompatible(MAAResourceCompatibilityIssue)
+    case failed(String)
+    case cancelled
+}
+
 struct ClientShutdownPolicy: Sendable, Equatable {
     let maaGracePeriod: TimeInterval
     let systemGracePeriod: TimeInterval
@@ -51,6 +58,7 @@ public final class WorkflowRunner {
 
     private let directories: AppDirectories
     private let commandRunner = CommandRunner()
+    private let resourceProbeExecutable: URL
     private let portProbe: any PortProbing
     private let gameController: any GameProcessControlling
     private let shutdownPolicy: ClientShutdownPolicy
@@ -68,6 +76,7 @@ public final class WorkflowRunner {
 
     public convenience init(
         directories: AppDirectories = .init(),
+        resourceProbeExecutable: URL? = nil,
         eventSink: @escaping EventSink = { _ in }
     ) {
         self.init(
@@ -75,6 +84,7 @@ public final class WorkflowRunner {
             portProbe: PortProbe(),
             gameController: GameProcessController(),
             shutdownPolicy: .playCover,
+            resourceProbeExecutable: resourceProbeExecutable,
             noticeSink: nil,
             eventSink: eventSink
         )
@@ -82,6 +92,7 @@ public final class WorkflowRunner {
 
     public convenience init(
         directories: AppDirectories = .init(),
+        resourceProbeExecutable: URL? = nil,
         noticeSink: NoticeSink?,
         eventSink: @escaping EventSink
     ) {
@@ -90,6 +101,7 @@ public final class WorkflowRunner {
             portProbe: PortProbe(),
             gameController: GameProcessController(),
             shutdownPolicy: .playCover,
+            resourceProbeExecutable: resourceProbeExecutable,
             noticeSink: noticeSink,
             eventSink: eventSink
         )
@@ -101,6 +113,7 @@ public final class WorkflowRunner {
         gameController: any GameProcessControlling,
         shutdownPolicy: ClientShutdownPolicy,
         maintenanceRetryDelay: Duration = .seconds(5),
+        resourceProbeExecutable: URL? = nil,
         noticeSink: NoticeSink? = nil,
         eventSink: @escaping EventSink = { _ in }
     ) {
@@ -109,6 +122,7 @@ public final class WorkflowRunner {
         self.gameController = gameController
         self.shutdownPolicy = shutdownPolicy
         self.maintenanceRetryDelay = maintenanceRetryDelay
+        self.resourceProbeExecutable = resourceProbeExecutable ?? Self.defaultResourceProbeExecutable()
         historyStore = HistoryStore(directories: directories)
         diagnosticLogStore = DiagnosticLogStore(directories: directories)
         stateStore = ExecutionStateStore(directories: directories)
@@ -185,22 +199,31 @@ public final class WorkflowRunner {
         emit(.preparing, "正在准备「\(plan.displayName)」", 0, .info)
         if plan.policy.hotUpdateBeforeRun {
             emit(.updating, "正在热更新 MAA 资源", 0, .info)
-            let result = await runCommand(
-                executable: configuration.cliPath,
-                arguments: ["hot-update", "--batch"],
-                timeout: 120
+            let update = await performStagedMAAUpdate(
+                cliPath: configuration.cliPath,
+                component: .resources,
+                operation: "热更新 MAA 资源"
             )
-            if result.cancelled || Task.isCancelled {
+            switch update {
+            case .cancelled:
                 report.cancelled = true
-            } else if result.exitCode == 0 {
+            case .success:
                 emit(.updating, "MAA 资源已更新", 0, .success)
-            } else {
+            case let .incompatible(issue):
+                emit(
+                    .updating,
+                    "新资源与当前 MaaCore 不兼容，未启用",
+                    0,
+                    .warning,
+                    details: issue.guidance + "\n" + issue.details
+                )
+            case let .failed(details):
                 emit(
                     .updating,
                     "资源更新失败，继续使用本地资源",
                     0,
                     .warning,
-                    details: shortOutput(result)
+                    details: details
                 )
             }
         }
@@ -559,42 +582,36 @@ public final class WorkflowRunner {
         _ = lock
         _ = lease
         emit(.updating, "正在热更新 MAA 资源", 0, .info)
-        let outcome = await runMaintenanceCommand(
-            executable: cliPath,
-            arguments: ["hot-update", "--batch"],
-            timeout: 180,
+        let outcome = await performStagedMAAUpdate(
+            cliPath: cliPath,
+            component: .resources,
             operation: "热更新 MAA 资源"
         )
-        let result = outcome.result
-        if result.cancelled || Task.isCancelled {
+        switch outcome {
+        case .cancelled:
             emit(.cancelled, "资源更新已停止", 1, .warning)
             return false
-        }
-        let success = result.exitCode == 0 && !result.timedOut
-        if success, let issue = await maaResourceCompatibilityIssue(cliPath: cliPath) {
+        case let .incompatible(issue):
             emit(
                 .failed,
-                "资源已更新，但当前 MaaCore 与新资源不兼容",
+                "新资源与当前 MaaCore 不兼容，未启用",
                 1,
                 .error,
-                details: issue.guidance
+                details: issue.guidance + "\n" + issue.details
             )
             return false
-        }
-        if Task.isCancelled {
-            emit(.cancelled, "资源更新已停止", 1, .warning)
+        case let .failed(details):
+            emit(.failed, "资源更新失败", 1, .error, details: details)
             return false
+        case let .success(recoveredAfterRetry):
+            emit(
+                .completed,
+                recoveredAfterRetry ? "MAA 资源重试后已经是最新" : "MAA 资源已经是最新",
+                1,
+                .success
+            )
+            return true
         }
-        emit(
-            success ? .completed : .failed,
-            success
-                ? (outcome.recoveredAfterRetry ? "MAA 资源重试后已经是最新" : "MAA 资源已经是最新")
-                : "资源更新失败",
-            1,
-            success ? .success : .error,
-            details: success ? nil : shortOutput(result)
-        )
-        return success
     }
 
     public func updateCore(
@@ -619,53 +636,278 @@ public final class WorkflowRunner {
             ? "更新 MAA 核心与基础资源"
             : "更新 MAA Beta 核心与基础资源"
         emit(.updating, "正在\(operation)", 0, .info)
-        let outcome = await runMaintenanceCommand(
-            executable: cliPath,
-            arguments: ["update", channel.rawValue, "--test-time", "10", "--batch"],
-            timeout: 3_600,
+        let outcome = await performStagedMAAUpdate(
+            cliPath: cliPath,
+            component: .core(channel),
             operation: operation
         )
-        let result = outcome.result
-        if result.cancelled || Task.isCancelled {
+        switch outcome {
+        case .cancelled:
             emit(.cancelled, "MAA 更新已停止", 1, .warning)
             return false
-        }
-        let success = result.exitCode == 0 && !result.timedOut
-        if success, let issue = await maaResourceCompatibilityIssue(cliPath: cliPath) {
+        case let .incompatible(issue):
             emit(
                 .failed,
                 channel == .stable
-                    ? "稳定通道更新完成，但当前 Core 仍不兼容热更新资源"
-                    : "Beta 更新完成，但 Core 与热更新资源仍不兼容",
+                    ? "稳定通道候选组件未通过资源验证，未启用"
+                    : "Beta 候选组件未通过资源验证，未启用",
                 1,
                 .error,
-                details: issue.guidance
+                details: issue.guidance + "\n" + issue.details
             )
             return false
-        }
-        if Task.isCancelled {
-            emit(.cancelled, "MAA 更新已停止", 1, .warning)
+        case let .failed(details):
+            emit(.failed, "MAA 更新失败", 1, .error, details: details)
             return false
+        case let .success(recoveredAfterRetry):
+            emit(
+                .completed,
+                updateCoreSuccessMessage(
+                    channel: channel,
+                    recoveredAfterRetry: recoveredAfterRetry
+                ),
+                1,
+                .success
+            )
+            return true
         }
-        emit(
-            success ? .completed : .failed,
-            success
-                ? updateCoreSuccessMessage(channel: channel, recoveredAfterRetry: outcome.recoveredAfterRetry)
-                : "MAA 更新失败",
-            1,
-            success ? .success : .error,
-            details: success ? nil : shortOutput(result)
+    }
+
+    private func performStagedMAAUpdate(
+        cliPath: String,
+        component: MAAComponentUpdate,
+        operation: String
+    ) async -> StagedMAAUpdateResult {
+        guard let paths = await maaInstallationPaths(cliPath: cliPath) else {
+            return .failed("无法定位 MaaCore、基础资源或热更新目录；当前安装没有更改")
+        }
+        let installationLock: ProcessLock
+        do {
+            installationLock = try ProcessLock(
+                url: paths.data.appending(path: ".automaa-update.lock")
+            )
+        } catch {
+            return .failed("另一个 AutoMAA 实例正在维护同一套 MAA 组件；当前安装没有更改")
+        }
+        _ = installationLock
+
+        let staging: MAAUpdateStaging
+        do {
+            staging = try prepareMAAUpdateStaging(paths: paths, includesCore: component.includesCore)
+        } catch {
+            return .failed("无法准备隔离更新目录；当前安装没有更改：\(error.localizedDescription)")
+        }
+        defer { staging.remove() }
+
+        let outcome = await runMaintenanceCommand(
+            executable: cliPath,
+            arguments: component.arguments,
+            timeout: component.timeout,
+            operation: operation,
+            environment: [
+                "MAA_DATA_DIR": staging.data.path,
+                "MAA_CACHE_DIR": staging.cache.path,
+                "MAA_STATE_DIR": staging.state.path,
+            ]
         )
-        return success
+        let result = outcome.result
+        guard !result.cancelled, !Task.isCancelled else { return .cancelled }
+        guard result.exitCode == 0, !result.timedOut else {
+            return .failed(shortOutput(result))
+        }
+        if result.combinedOutput.localizedCaseInsensitiveContains("failed to update resource repository") {
+            return .failed(shortOutput(result))
+        }
+        guard FileManager.default.fileExists(
+            atPath: staging.hotUpdate.appending(path: "resource", directoryHint: .isDirectory).path
+        ) else {
+            return .failed("maa-cli 未生成可验证的热更新资源；当前安装没有更改")
+        }
+
+        let library = component.includesCore ? staging.library : paths.library
+        let resource = component.includesCore ? staging.resource : paths.resource
+        if let issue = await maaResourceCompatibilityIssue(
+            libraryDirectory: library,
+            resourceDirectory: resource,
+            hotUpdateDirectory: staging.hotUpdate,
+            cacheDirectory: staging.cache,
+            candidateWasNotActivated: true
+        ) {
+            return .incompatible(issue)
+        }
+
+        do {
+            try FileReplacementTransaction.commit(
+                replacements(
+                    for: component,
+                    paths: paths,
+                    staging: staging
+                )
+            )
+        } catch {
+            return .failed("无法启用已验证的候选组件；当前安装已尝试恢复：\(error.localizedDescription)")
+        }
+        return .success(recoveredAfterRetry: outcome.recoveredAfterRetry)
+    }
+
+    private func maaInstallationPaths(cliPath: String) async -> MAAInstallationPaths? {
+        async let data = maaDirectory(cliPath: cliPath, name: "data")
+        async let cache = maaDirectory(cliPath: cliPath, name: "cache")
+        async let library = maaDirectory(cliPath: cliPath, name: "library")
+        async let resource = maaDirectory(cliPath: cliPath, name: "resource")
+        async let hotUpdate = maaDirectory(cliPath: cliPath, name: "hot-update")
+        guard let data = await data,
+              let cache = await cache,
+              let library = await library,
+              let resource = await resource,
+              let hotUpdate = await hotUpdate
+        else { return nil }
+        return .init(
+            data: data,
+            cache: cache,
+            library: library,
+            resource: resource,
+            hotUpdate: hotUpdate
+        )
+    }
+
+    private func maaDirectory(cliPath: String, name: String) async -> URL? {
+        let result = await runCommand(
+            executable: cliPath,
+            arguments: ["dir", name, "--batch"],
+            timeout: 20
+        )
+        guard result.exitCode == 0, !result.timedOut, !result.cancelled,
+              let path = result.standardOutput
+                .split(whereSeparator: \Character.isNewline)
+                .last
+                .map(String.init)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              path.hasPrefix("/")
+        else { return nil }
+        return URL(filePath: path, directoryHint: .isDirectory)
+    }
+
+    private func prepareMAAUpdateStaging(
+        paths: MAAInstallationPaths,
+        includesCore: Bool
+    ) throws -> MAAUpdateStaging {
+        try removeOwnedStagingItems(in: paths.data, prefix: ".automaa-update-")
+        try removeOwnedStagingItems(in: paths.cache, prefix: ".automaa-update-")
+        try removeOwnedStagingItems(in: directories.root, prefix: ".maa-update-state-")
+        let identifier = UUID().uuidString
+        let staging = MAAUpdateStaging(
+            data: paths.data.appending(
+                path: ".automaa-update-\(identifier)",
+                directoryHint: .isDirectory
+            ),
+            cache: paths.cache.appending(
+                path: ".automaa-update-\(identifier)",
+                directoryHint: .isDirectory
+            ),
+            state: directories.root.appending(
+                path: ".maa-update-state-\(identifier)",
+                directoryHint: .isDirectory
+            )
+        )
+        do {
+            try FileManager.default.createDirectory(at: staging.data, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: staging.cache, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: staging.state, withIntermediateDirectories: true)
+            if includesCore {
+                try copyIfPresent(from: paths.library, to: staging.library)
+                try copyIfPresent(from: paths.resource, to: staging.resource)
+            }
+            try copyIfPresent(from: paths.hotUpdate, to: staging.hotUpdate)
+            try copyIfPresent(
+                from: paths.cache.appending(path: "resource", directoryHint: .isDirectory),
+                to: staging.cache.appending(path: "resource", directoryHint: .isDirectory)
+            )
+            try copyIfPresent(
+                from: paths.cache.appending(path: "StageActivityV2.json"),
+                to: staging.cache.appending(path: "StageActivityV2.json")
+            )
+            try copyIfPresent(
+                from: paths.cache.appending(path: "StageActivityV2.json.etag"),
+                to: staging.cache.appending(path: "StageActivityV2.json.etag")
+            )
+            return staging
+        } catch {
+            staging.remove()
+            throw error
+        }
+    }
+
+    private func copyIfPresent(from source: URL, to target: URL) throws {
+        guard FileManager.default.fileExists(atPath: source.path) else { return }
+        try FileManager.default.createDirectory(
+            at: target.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.copyItem(at: source, to: target)
+    }
+
+    private func removeOwnedStagingItems(in directory: URL, prefix: String) throws {
+        guard FileManager.default.fileExists(atPath: directory.path) else { return }
+        let cutoff = Date().addingTimeInterval(-24 * 60 * 60)
+        for item in try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: []
+        ) where item.lastPathComponent.hasPrefix(prefix) {
+            let values = try item.resourceValues(forKeys: [.contentModificationDateKey])
+            guard let modificationDate = values.contentModificationDate,
+                  modificationDate < cutoff
+            else { continue }
+            try FileManager.default.removeItem(at: item)
+        }
+    }
+
+    private func replacements(
+        for component: MAAComponentUpdate,
+        paths: MAAInstallationPaths,
+        staging: MAAUpdateStaging
+    ) -> [FileReplacement] {
+        var replacements: [FileReplacement] = []
+        if component.includesCore {
+            replacements.append(.init(
+                source: staging.library,
+                target: paths.data.appending(path: "lib", directoryHint: .isDirectory)
+            ))
+            replacements.append(.init(
+                source: staging.resource,
+                target: paths.data.appending(path: "resource", directoryHint: .isDirectory)
+            ))
+        }
+        replacements.append(.init(source: staging.hotUpdate, target: paths.hotUpdate))
+        replacements.append(.init(
+            source: staging.cache.appending(path: "resource", directoryHint: .isDirectory),
+            target: paths.cache.appending(path: "resource", directoryHint: .isDirectory)
+        ))
+        replacements.append(.init(
+            source: staging.cache.appending(path: "StageActivityV2.json"),
+            target: paths.cache.appending(path: "StageActivityV2.json")
+        ))
+        replacements.append(.init(
+            source: staging.cache.appending(path: "StageActivityV2.json.etag"),
+            target: paths.cache.appending(path: "StageActivityV2.json.etag")
+        ))
+        return replacements
     }
 
     private func runMaintenanceCommand(
         executable: String,
         arguments: [String],
         timeout: TimeInterval,
-        operation: String
+        operation: String,
+        environment: [String: String] = [:]
     ) async -> MaintenanceCommandOutcome {
-        let first = await runCommand(executable: executable, arguments: arguments, timeout: timeout)
+        let first = await runCommand(
+            executable: executable,
+            arguments: arguments,
+            timeout: timeout,
+            environment: environment
+        )
         guard MAAMaintenanceFailureClassifier.isTransientNetworkFailure(first), !Task.isCancelled else {
             return .init(result: first, recoveredAfterRetry: false)
         }
@@ -684,7 +926,12 @@ public final class WorkflowRunner {
         guard !Task.isCancelled else {
             return .init(result: first, recoveredAfterRetry: false)
         }
-        let retried = await runCommand(executable: executable, arguments: arguments, timeout: timeout)
+        let retried = await runCommand(
+            executable: executable,
+            arguments: arguments,
+            timeout: timeout,
+            environment: environment
+        )
         return .init(
             result: retried,
             recoveredAfterRetry: retried.exitCode == 0 && !retried.timedOut
@@ -823,36 +1070,99 @@ public final class WorkflowRunner {
     }
 
     private func maaResourceCompatibilityIssue(cliPath: String) async -> MAAResourceCompatibilityIssue? {
-        let version = await runCommand(
-            executable: cliPath,
-            arguments: ["version", "--batch"],
-            timeout: 20
+        guard let paths = await maaInstallationPaths(cliPath: cliPath) else { return nil }
+        return await maaResourceCompatibilityIssue(
+            libraryDirectory: paths.library,
+            resourceDirectory: paths.resource,
+            hotUpdateDirectory: paths.hotUpdate,
+            cacheDirectory: paths.cache,
+            candidateWasNotActivated: false
         )
-        guard version.exitCode == 0, !version.timedOut, !version.cancelled else { return nil }
-        let directory = await runCommand(
-            executable: cliPath,
-            arguments: ["dir", "hot-update", "--batch"],
-            timeout: 20
+    }
+
+    private func maaResourceCompatibilityIssue(
+        libraryDirectory: URL,
+        resourceDirectory: URL,
+        hotUpdateDirectory: URL,
+        cacheDirectory: URL,
+        candidateWasNotActivated: Bool
+    ) async -> MAAResourceCompatibilityIssue? {
+        let manager = FileManager.default
+        let library = libraryDirectory.appending(path: "libMaaCore.dylib")
+        guard manager.isReadableFile(atPath: library.path),
+              manager.fileExists(atPath: resourceDirectory.path)
+        else {
+            return .init(
+                details: "无法读取 MaaCore 动态库或基础资源目录",
+                candidateWasNotActivated: candidateWasNotActivated
+            )
+        }
+
+        var baseRoots = [resourceDirectory.deletingLastPathComponent()]
+        if manager.fileExists(
+            atPath: hotUpdateDirectory.appending(path: "resource", directoryHint: .isDirectory).path
+        ) {
+            baseRoots.append(hotUpdateDirectory)
+        }
+        if manager.fileExists(
+            atPath: cacheDirectory.appending(path: "resource", directoryHint: .isDirectory).path
+        ) {
+            baseRoots.append(cacheDirectory)
+        }
+
+        let globalResources: [String?] = [nil, "txwy", "YoStarEN", "YoStarJP", "YoStarKR"]
+        for globalResource in globalResources {
+            var roots = baseRoots
+            if let globalResource {
+                roots += overlayRoots(
+                    in: baseRoots,
+                    relativePath: "resource/global/\(globalResource)/resource"
+                )
+            }
+            roots += overlayRoots(
+                in: baseRoots,
+                relativePath: "resource/platform_diff/iOS/resource"
+            )
+            if let details = await resourceProbeFailure(library: library, resourceRoots: roots) {
+                return .init(
+                    details: details,
+                    candidateWasNotActivated: candidateWasNotActivated
+                )
+            }
+        }
+        return nil
+    }
+
+    private func overlayRoots(in baseRoots: [URL], relativePath: String) -> [URL] {
+        baseRoots.compactMap { root in
+            let resource = root.appending(path: relativePath)
+            guard FileManager.default.fileExists(atPath: resource.path) else { return nil }
+            return resource.deletingLastPathComponent()
+        }
+    }
+
+    private func resourceProbeFailure(library: URL, resourceRoots: [URL]) async -> String? {
+        let userDirectory = directories.root.appending(
+            path: ".maa-resource-probe-\(UUID().uuidString)",
+            directoryHint: .isDirectory
         )
-        guard directory.exitCode == 0, !directory.timedOut, !directory.cancelled,
-              let path = directory.standardOutput
-                .split(whereSeparator: \Character.isNewline)
-                .last
-                .map(String.init)?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-              path.hasPrefix("/")
-        else { return nil }
-        let resource = URL(filePath: path, directoryHint: .isDirectory)
-            .appending(path: "resource/infrast.json")
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: resource.path),
-              let size = attributes[.size] as? NSNumber,
-              size.intValue <= 32 * 1_024 * 1_024,
-              let data = try? Data(contentsOf: resource, options: [.mappedIfSafe])
-        else { return nil }
-        return MAAResourceCompatibility.issue(
-            coreVersionOutput: version.combinedOutput,
-            infrastData: data
+        defer { try? FileManager.default.removeItem(at: userDirectory) }
+        var environment: [String: String] = [
+            "DYLD_LIBRARY_PATH": library.deletingLastPathComponent().path,
+        ]
+        if let inherited = ProcessInfo.processInfo.environment["DYLD_LIBRARY_PATH"], !inherited.isEmpty {
+            environment["DYLD_LIBRARY_PATH"]? += ":\(inherited)"
+        }
+        let result = await runCommand(
+            executable: resourceProbeExecutable.path,
+            arguments: [library.path, userDirectory.path] + resourceRoots.map(\.path),
+            timeout: 30,
+            environment: environment
         )
+        guard result.exitCode == 0, !result.timedOut, !result.cancelled else {
+            return shortOutput(result)
+        }
+        return nil
     }
 
     private func updateCoreSuccessMessage(
@@ -1197,15 +1507,18 @@ public final class WorkflowRunner {
         executable: String,
         arguments: [String],
         timeout: TimeInterval,
+        environment: [String: String] = [:],
         ignoreCancellation: Bool = false
     ) async -> CommandResult {
         let command = arguments.first(where: { !$0.hasPrefix("-") }) ?? URL(filePath: executable).lastPathComponent
         let result: CommandResult
         do {
+            var commandEnvironment = environment
+            commandEnvironment["MAA_CONFIG_DIR"] = directories.maaConfig.path
             result = try await commandRunner.run(
                 executable: executable,
                 arguments: arguments,
-                environment: ["MAA_CONFIG_DIR": directories.maaConfig.path],
+                environment: commandEnvironment,
                 timeout: timeout,
                 observeCancellation: !ignoreCancellation
             )
@@ -1227,6 +1540,12 @@ public final class WorkflowRunner {
             )
         }
         return result
+    }
+
+    private static func defaultResourceProbeExecutable() -> URL {
+        let executable = Bundle.main.executableURL
+            ?? URL(filePath: CommandLine.arguments.first ?? "AutoMAA")
+        return executable.deletingLastPathComponent().appending(path: "AutoMAAResourceProbe")
     }
 
     private func beginActivity(sensitiveValues: [String] = []) {

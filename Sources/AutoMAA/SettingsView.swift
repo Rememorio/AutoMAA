@@ -293,7 +293,7 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                Text("自动维护只使用稳定通道；Beta 仅在你手动确认时更新。热更新后若资源需要更新 Core，AutoMAA 会在启动游戏前停止并说明。")
+                Text("自动维护只使用稳定通道；Beta 仅在你手动确认时更新。Core 与资源会先在隔离目录中验证，通过后才启用；不兼容候选不会影响当前安装。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 HStack {

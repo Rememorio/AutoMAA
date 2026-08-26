@@ -128,7 +128,7 @@ hdiutil verify "dist/AutoMAA-X.Y.Z-macOS-arm64.dmg"
 - `Applications` 是指向 `/Applications` 的符号链接；
 - `codesign --verify --deep --strict` 通过；
 - App 和 `AutoMAARunner` 都是 arm64；
-- App 内包含可执行的 `AutoMAAUpdater`，并已通过隔离临时目录中的替换冒烟测试；
+- App 内包含可执行的 `AutoMAAUpdater` 和独立签名的 `AutoMAAResourceProbe`，更新器已通过隔离临时目录中的替换冒烟测试；
 - Info.plist 版本正确；
 - `smoke-test-app.sh` 能从 DMG 启动 App，在临时用户目录生成空白配置并完整退出，不读取默认 AutoMAA 数据或安装系统 LaunchAgent；
 - 退出 App 后能够正常卸载镜像。

@@ -1270,24 +1270,20 @@ final class AutoMAAKitTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let directories = AppDirectories(root: root)
         try directories.prepare()
+        let installation = try makeFakeMAAInstallation(at: root)
         let cli = root.appending(path: "maa-cli")
-        try Data("""
-        #!/bin/sh
-        case "$1" in
-          update)
-            printf '%s\\n' "$@" > "$MAA_CONFIG_DIR/update-arguments.txt"
-            ;;
-          version)
-            printf '%s\\n' "maa-cli v0.7.5" "MaaCore v6.17.0"
-            ;;
-          dir)
-            printf '%s\\n' "$MAA_CONFIG_DIR/missing-hot-update"
-            ;;
-        esac
-        """.utf8).write(to: cli)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
+        try writeFakeMAACLI(at: cli, installation: installation, body: """
+        if [ "$1" = "update" ]; then
+          printf '%s\\n' "$@" > "$MAA_CONFIG_DIR/update-arguments.txt"
+          printf '%s\\n' "updated core" > "$MAA_DATA_DIR/lib/libMaaCore.dylib"
+          printf '%s\\n' "updated base resource" > "$MAA_DATA_DIR/resource/version.json"
+        fi
+        """)
 
-        let succeeded = await WorkflowRunner(directories: directories).updateCore(cliPath: cli.path)
+        let succeeded = await WorkflowRunner(
+            directories: directories,
+            resourceProbeExecutable: installation.probe
+        ).updateCore(cliPath: cli.path)
         let entries = HistoryStore(directories: directories).load()
         let runID = try XCTUnwrap(entries.first?.runID)
         let arguments = try String(contentsOf: directories.maaConfig.appending(path: "update-arguments.txt"), encoding: .utf8)
@@ -1299,6 +1295,16 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(
             atPath: DiagnosticLogStore(directories: directories).url(for: runID).path
         ))
+        XCTAssertEqual(
+            try String(contentsOf: installation.library.appending(path: "libMaaCore.dylib"), encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            "updated core"
+        )
+        XCTAssertEqual(
+            try String(contentsOf: installation.resource.appending(path: "version.json"), encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            "updated base resource"
+        )
     }
 
     @MainActor
@@ -1307,17 +1313,9 @@ final class AutoMAAKitTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let directories = AppDirectories(root: root)
         try directories.prepare()
+        let installation = try makeFakeMAAInstallation(at: root)
         let cli = root.appending(path: "maa-cli")
-        try Data("""
-        #!/bin/sh
-        if [ "$1" = "version" ]; then
-          printf '%s\\n' "MaaCore v6.17.0"
-          exit 0
-        fi
-        if [ "$1" = "dir" ]; then
-          printf '%s\\n' "$MAA_CONFIG_DIR/missing-hot-update"
-          exit 0
-        fi
+        try writeFakeMAACLI(at: cli, installation: installation, body: """
         attempts="$MAA_CONFIG_DIR/update-attempts.txt"
         count=0
         if [ -f "$attempts" ]; then
@@ -1329,8 +1327,7 @@ final class AutoMAAKitTests: XCTestCase {
           printf '%s\\n' "fatal: Failed to connect to github.com: Couldn't connect to server" >&2
           exit 1
         fi
-        """.utf8).write(to: cli)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
+        """)
         let runtime = StubClientRuntime(closesOnForce: true)
         let runner = WorkflowRunner(
             directories: directories,
@@ -1338,6 +1335,7 @@ final class AutoMAAKitTests: XCTestCase {
             gameController: runtime,
             shutdownPolicy: .immediate,
             maintenanceRetryDelay: .zero,
+            resourceProbeExecutable: installation.probe,
             eventSink: runtime.record
         )
 
@@ -1362,24 +1360,18 @@ final class AutoMAAKitTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let directories = AppDirectories(root: root)
         try directories.prepare()
+        let installation = try makeFakeMAAInstallation(at: root)
         let cli = root.appending(path: "maa-cli")
-        try Data("""
-        #!/bin/sh
-        case "$1" in
-          update)
-            printf '%s\\n' "$@" > "$MAA_CONFIG_DIR/update-arguments.txt"
-            ;;
-          version)
-            printf '%s\\n' "MaaCore v6.17.0-beta.6"
-            ;;
-          dir)
-            printf '%s\\n' "$MAA_CONFIG_DIR/missing-hot-update"
-            ;;
-        esac
-        """.utf8).write(to: cli)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
+        try writeFakeMAACLI(at: cli, installation: installation, body: """
+        if [ "$1" = "update" ]; then
+          printf '%s\\n' "$@" > "$MAA_CONFIG_DIR/update-arguments.txt"
+        fi
+        """)
 
-        let succeeded = await WorkflowRunner(directories: directories).updateCore(
+        let succeeded = await WorkflowRunner(
+            directories: directories,
+            resourceProbeExecutable: installation.probe
+        ).updateCore(
             cliPath: cli.path,
             channel: .beta
         )
@@ -1394,30 +1386,35 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertEqual(entries.last?.message, "MAA Beta 核心与基础资源已更新")
     }
 
-    func testResourceCompatibilityRecognizesTheCrossFacilitySchemaBoundary() throws {
-        let newResource = try JSONSerialization.data(withJSONObject: [
-            "Control": [:],
-            "Processing": [:],
-            "Training": [:],
-        ])
-        let oldResource = try JSONSerialization.data(withJSONObject: ["Control": [:]])
+    func testResourceProbeRejectsAnUnreadableCoreWithoutInspectingResourceJSON() {
+        XCTAssertThrowsError(try MAACoreResourceProbe.validate(
+            libraryURL: URL(filePath: "/tmp/automaa-tests-missing-libMaaCore.dylib"),
+            userDirectory: temporaryRoot(),
+            resourceRoots: [temporaryRoot()]
+        )) { error in
+            XCTAssertTrue(error.localizedDescription.contains("动态库不存在"))
+        }
+    }
 
-        let issue = MAAResourceCompatibility.issue(
-            coreVersionOutput: "maa-cli v0.7.5\nMaaCore v6.16.8",
-            infrastData: newResource
-        )
+    func testComponentReplacementRestoresEarlierTargetsWhenCommitFails() throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let firstSource = root.appending(path: "first-candidate")
+        let firstTarget = root.appending(path: "first-current")
+        let secondSource = root.appending(path: "second-candidate")
+        let blockedParent = root.appending(path: "not-a-directory")
+        try Data("new".utf8).write(to: firstSource)
+        try Data("old".utf8).write(to: firstTarget)
+        try Data("candidate".utf8).write(to: secondSource)
+        try Data("blocker".utf8).write(to: blockedParent)
 
-        XCTAssertEqual(issue?.coreVersion.description, "6.16.8")
-        XCTAssertEqual(issue?.requiredCoreVersion.description, "6.17.0")
-        XCTAssertTrue(issue?.guidance.contains("未回退资源") == true)
-        XCTAssertNil(MAAResourceCompatibility.issue(
-            coreVersionOutput: "MaaCore v6.17.0-beta.6",
-            infrastData: newResource
-        ))
-        XCTAssertNil(MAAResourceCompatibility.issue(
-            coreVersionOutput: "MaaCore v6.16.8",
-            infrastData: oldResource
-        ))
+        XCTAssertThrowsError(try FileReplacementTransaction.commit([
+            .init(source: firstSource, target: firstTarget),
+            .init(source: secondSource, target: blockedParent.appending(path: "target")),
+        ]))
+
+        XCTAssertEqual(try String(contentsOf: firstTarget, encoding: .utf8), "old")
     }
 
     @MainActor
@@ -1426,30 +1423,27 @@ final class AutoMAAKitTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let directories = AppDirectories(root: root)
         try directories.prepare()
-        let hotUpdate = root.appending(path: "hot-update", directoryHint: .isDirectory)
-        let resource = hotUpdate.appending(path: "resource", directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: resource, withIntermediateDirectories: true)
-        try JSONSerialization.data(withJSONObject: ["Processing": [:]])
-            .write(to: resource.appending(path: "infrast.json"))
+        let installation = try makeFakeMAAInstallation(at: root)
         let cli = root.appending(path: "maa-cli")
-        try Data("""
-        #!/bin/sh
-        if [ "$1" = "version" ]; then
-          printf '%s\\n' "MaaCore v6.16.8"
-        elif [ "$1" = "dir" ]; then
-          printf '%s\\n' "\(hotUpdate.path)"
+        try writeFakeMAACLI(at: cli, installation: installation, body: """
+        if [ "$1" = "update" ]; then
+          /usr/bin/touch "$MAA_DATA_DIR/MaaResource/resource/incompatible"
         fi
-        """.utf8).write(to: cli)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
+        """)
 
-        let succeeded = await WorkflowRunner(directories: directories).updateCore(cliPath: cli.path)
+        let succeeded = await WorkflowRunner(
+            directories: directories,
+            resourceProbeExecutable: installation.probe
+        ).updateCore(cliPath: cli.path)
         let entries = HistoryStore(directories: directories).load()
 
         XCTAssertFalse(succeeded)
         XCTAssertEqual(entries.map(\.phase), [.updating, .failed])
         XCTAssertTrue(entries.last?.message.contains("稳定通道") == true)
         XCTAssertTrue(entries.last?.details?.contains("更新 Beta") == true)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: resource.appending(path: "infrast.json").path))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: installation.hotUpdate.appending(path: "resource/incompatible").path
+        ))
     }
 
     @MainActor
@@ -1458,30 +1452,60 @@ final class AutoMAAKitTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let directories = AppDirectories(root: root)
         try directories.prepare()
-        let hotUpdate = root.appending(path: "hot-update", directoryHint: .isDirectory)
-        let resource = hotUpdate.appending(path: "resource", directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: resource, withIntermediateDirectories: true)
-        let infrast = resource.appending(path: "infrast.json")
-        let original = try JSONSerialization.data(withJSONObject: ["Training": [:]])
-        try original.write(to: infrast)
+        let installation = try makeFakeMAAInstallation(at: root)
+        let original = try Data(contentsOf: installation.hotUpdate.appending(path: "resource/version.json"))
         let cli = root.appending(path: "maa-cli")
-        try Data("""
-        #!/bin/sh
-        if [ "$1" = "version" ]; then
-          printf '%s\\n' "MaaCore v6.16.8"
-        elif [ "$1" = "dir" ]; then
-          printf '%s\\n' "\(hotUpdate.path)"
+        try writeFakeMAACLI(at: cli, installation: installation, body: """
+        if [ "$1" = "hot-update" ]; then
+          /usr/bin/touch "$MAA_DATA_DIR/MaaResource/resource/incompatible"
         fi
-        """.utf8).write(to: cli)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
+        """)
 
-        let succeeded = await WorkflowRunner(directories: directories).hotUpdate(cliPath: cli.path)
+        let succeeded = await WorkflowRunner(
+            directories: directories,
+            resourceProbeExecutable: installation.probe
+        ).hotUpdate(cliPath: cli.path)
         let entries = HistoryStore(directories: directories).load()
 
         XCTAssertFalse(succeeded)
         XCTAssertEqual(entries.map(\.phase), [.updating, .failed])
-        XCTAssertTrue(entries.last?.details?.contains("未回退资源") == true)
-        XCTAssertEqual(try Data(contentsOf: infrast), original)
+        XCTAssertTrue(entries.last?.details?.contains("候选组件没有启用") == true)
+        XCTAssertEqual(
+            try Data(contentsOf: installation.hotUpdate.appending(path: "resource/version.json")),
+            original
+        )
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: installation.hotUpdate.appending(path: "resource/incompatible").path
+        ))
+    }
+
+    @MainActor
+    func testHotUpdateActivatesAValidatedCandidate() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        try directories.prepare()
+        let installation = try makeFakeMAAInstallation(at: root)
+        let cli = root.appending(path: "maa-cli")
+        try writeFakeMAACLI(at: cli, installation: installation, body: """
+        if [ "$1" = "hot-update" ]; then
+          printf '%s\\n' "validated candidate" > "$MAA_DATA_DIR/MaaResource/resource/version.json"
+        fi
+        """)
+
+        let succeeded = await WorkflowRunner(
+            directories: directories,
+            resourceProbeExecutable: installation.probe
+        ).hotUpdate(cliPath: cli.path)
+
+        XCTAssertTrue(succeeded)
+        XCTAssertEqual(
+            try String(
+                contentsOf: installation.hotUpdate.appending(path: "resource/version.json"),
+                encoding: .utf8
+            ).trimmingCharacters(in: .whitespacesAndNewlines),
+            "validated candidate"
+        )
     }
 
     @MainActor
@@ -1490,24 +1514,10 @@ final class AutoMAAKitTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let directories = AppDirectories(root: root)
         try directories.prepare()
-        let hotUpdate = root.appending(path: "hot-update", directoryHint: .isDirectory)
-        let resource = hotUpdate.appending(path: "resource", directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: resource, withIntermediateDirectories: true)
-        try JSONSerialization.data(withJSONObject: [
-            "Control": [:],
-            "Processing": [:],
-            "Training": [:],
-        ]).write(to: resource.appending(path: "infrast.json"))
+        let installation = try makeFakeMAAInstallation(at: root)
+        try Data().write(to: installation.hotUpdate.appending(path: "resource/incompatible"))
         let cli = root.appending(path: "maa-cli")
-        try Data("""
-        #!/bin/sh
-        if [ "$1" = "version" ]; then
-          printf '%s\\n' "MaaCore v6.16.8"
-        elif [ "$1" = "dir" ]; then
-          printf '%s\\n' "\(hotUpdate.path)"
-        fi
-        """.utf8).write(to: cli)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
+        try writeFakeMAACLI(at: cli, installation: installation, body: "exit 0")
         var plan = AutomationPlan.lightRoutine
         plan.policy.hotUpdateBeforeRun = false
         let client = missingClient(
@@ -1522,12 +1532,13 @@ final class AutoMAAKitTests: XCTestCase {
             portProbe: runtime,
             gameController: runtime,
             shutdownPolicy: .immediate,
+            resourceProbeExecutable: installation.probe,
             eventSink: runtime.record
         )
 
         let report = await runner.run(configuration, planID: plan.id, resumeToday: false)
 
-        XCTAssertTrue(report.fatalError?.contains("MaaCore 6.16.8") == true)
+        XCTAssertTrue(report.fatalError?.contains("MaaCore 无法完整加载") == true)
         XCTAssertEqual(report.unexecutedSteps, report.totalSteps)
         XCTAssertFalse(runtime.events.contains { $0.phase == .launching })
         XCTAssertTrue(runtime.terminationRequests.isEmpty)
@@ -2377,6 +2388,79 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertFalse(problems.contains { $0.id.contains("selector-unsupported") })
         XCTAssertFalse(problems.contains { $0.id.contains("selector-empty") })
         XCTAssertFalse(problems.contains { $0.id.contains("selector-duplicate") })
+    }
+
+    private struct FakeMAAInstallation {
+        let data: URL
+        let cache: URL
+        let library: URL
+        let resource: URL
+        let hotUpdate: URL
+        let probe: URL
+    }
+
+    private func makeFakeMAAInstallation(at root: URL) throws -> FakeMAAInstallation {
+        let data = root.appending(path: "maa-data", directoryHint: .isDirectory)
+        let cache = root.appending(path: "maa-cache", directoryHint: .isDirectory)
+        let library = data.appending(path: "lib", directoryHint: .isDirectory)
+        let resource = data.appending(path: "resource", directoryHint: .isDirectory)
+        let hotUpdate = data.appending(path: "MaaResource", directoryHint: .isDirectory)
+        let probe = root.appending(path: "resource-probe")
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: resource, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: hotUpdate.appending(path: "resource", directoryHint: .isDirectory),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: cache.appending(path: "resource", directoryHint: .isDirectory),
+            withIntermediateDirectories: true
+        )
+        try Data("fake MaaCore".utf8).write(to: library.appending(path: "libMaaCore.dylib"))
+        try Data("base".utf8).write(to: resource.appending(path: "version.json"))
+        try Data("hot".utf8).write(to: hotUpdate.appending(path: "resource/version.json"))
+        try Data("""
+        #!/bin/sh
+        shift 2
+        for root in "$@"; do
+          if [ -f "$root/resource/incompatible" ]; then
+            printf '%s\n' "MaaCore rejected staged resources" >&2
+            exit 1
+          fi
+        done
+        exit 0
+        """.utf8).write(to: probe)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: probe.path)
+        return .init(
+            data: data,
+            cache: cache,
+            library: library,
+            resource: resource,
+            hotUpdate: hotUpdate,
+            probe: probe
+        )
+    }
+
+    private func writeFakeMAACLI(
+        at cli: URL,
+        installation: FakeMAAInstallation,
+        body: String
+    ) throws {
+        try Data("""
+        #!/bin/sh
+        if [ "$1" = "dir" ]; then
+          case "$2" in
+            data) printf '%s\n' "\(installation.data.path)" ;;
+            cache) printf '%s\n' "\(installation.cache.path)" ;;
+            library) printf '%s\n' "\(installation.library.path)" ;;
+            resource) printf '%s\n' "\(installation.resource.path)" ;;
+            hot-update) printf '%s\n' "\(installation.hotUpdate.path)" ;;
+          esac
+          exit 0
+        fi
+        \(body)
+        """.utf8).write(to: cli)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
     }
 
     private func populatedConfiguration() -> AppConfiguration {

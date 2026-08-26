@@ -119,6 +119,7 @@ final class AppModel: ObservableObject {
     private let importantNotificationCenter: ImportantNotificationCenter
     private let commandRunner = CommandRunner()
     private let configuredRunnerExecutableURL: URL?
+    private let resourceProbeExecutable: URL?
     private var saveTask: Task<Void, Never>?
     private var workflowTask: Task<Void, Never>?
     private var automaticMAAUpdateTask: Task<Void, Never>?
@@ -141,6 +142,7 @@ final class AppModel: ObservableObject {
         managesSystemLaunchAgents: Bool = true,
         checksForUpdatesAutomatically: Bool = true,
         runnerExecutableURL: URL? = nil,
+        resourceProbeExecutable: URL? = nil,
         softwareUpdateService: (any SoftwareUpdateServing)? = nil,
         applicationUpdateAvailabilityValidator: (@MainActor () throws -> Void)? = nil
     ) {
@@ -148,6 +150,7 @@ final class AppModel: ObservableObject {
         self.checksForUpdatesAutomatically = checksForUpdatesAutomatically
         self.applicationUpdateAvailabilityValidator = applicationUpdateAvailabilityValidator
         configuredRunnerExecutableURL = runnerExecutableURL
+        self.resourceProbeExecutable = resourceProbeExecutable
         configurationStore = ConfigurationStore(directories: directories)
         historyStore = HistoryStore(directories: directories)
         executionStateStore = ExecutionStateStore(directories: directories)
@@ -437,7 +440,11 @@ final class AppModel: ObservableObject {
         } else {
             noticeSink = nil
         }
-        let runner = WorkflowRunner(directories: directories, noticeSink: noticeSink) { [weak self] event in
+        let runner = WorkflowRunner(
+            directories: directories,
+            resourceProbeExecutable: resourceProbeExecutable,
+            noticeSink: noticeSink
+        ) { [weak self] event in
             self?.consume(event)
         }
         workflowTask = Task { [weak self] in
@@ -485,7 +492,10 @@ final class AppModel: ObservableObject {
         reloadActivityHistory()
         guard !isWorkflowRunning, !applicationUpdateState.blocksWorkflow else { return }
         isRunning = true
-        let runner = WorkflowRunner(directories: directories) { [weak self] event in
+        let runner = WorkflowRunner(
+            directories: directories,
+            resourceProbeExecutable: resourceProbeExecutable
+        ) { [weak self] event in
             self?.consume(event)
         }
         workflowTask = Task { [weak self] in
@@ -676,7 +686,10 @@ final class AppModel: ObservableObject {
         }
         recordMAACoreUpdateAttempt()
         isRunning = true
-        let runner = WorkflowRunner(directories: directories) { [weak self] event in
+        let runner = WorkflowRunner(
+            directories: directories,
+            resourceProbeExecutable: resourceProbeExecutable
+        ) { [weak self] event in
             self?.consume(event)
         }
         workflowTask = Task { [weak self] in
@@ -825,7 +838,10 @@ final class AppModel: ObservableObject {
         recordMAACoreUpdateAttempt(at: now)
         isRunning = true
         let cliPath = configuration.cliPath
-        let runner = WorkflowRunner(directories: directories) { [weak self] event in
+        let runner = WorkflowRunner(
+            directories: directories,
+            resourceProbeExecutable: resourceProbeExecutable
+        ) { [weak self] event in
             self?.consume(event)
         }
         automaticMAAUpdateTask = Task { [weak self] in

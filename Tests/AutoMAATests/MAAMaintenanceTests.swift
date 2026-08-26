@@ -61,17 +61,43 @@ struct MAAMaintenanceTests {
             .appending(path: "automaa-maa-maintenance-\(UUID().uuidString)", directoryHint: .isDirectory)
         let directories = AppDirectories(root: root)
         let cli = root.appending(path: "maa-cli")
+        let probe = root.appending(path: "resource-probe")
+        let data = root.appending(path: "maa-data", directoryHint: .isDirectory)
+        let cache = root.appending(path: "maa-cache", directoryHint: .isDirectory)
+        let library = data.appending(path: "lib", directoryHint: .isDirectory)
+        let resource = data.appending(path: "resource", directoryHint: .isDirectory)
+        let hotUpdate = data.appending(path: "MaaResource", directoryHint: .isDirectory)
         let arguments = directories.maaConfig.appending(path: "update-arguments.txt")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: resource, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: hotUpdate.appending(path: "resource", directoryHint: .isDirectory),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: cache.appending(path: "resource", directoryHint: .isDirectory),
+            withIntermediateDirectories: true
+        )
+        try Data("fake MaaCore".utf8).write(to: library.appending(path: "libMaaCore.dylib"))
+        try Data("base".utf8).write(to: resource.appending(path: "version.json"))
+        try Data("hot".utf8).write(to: hotUpdate.appending(path: "resource/version.json"))
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: probe)
         try Data("""
         #!/bin/sh
-        if [ "$1" = "version" ]; then
-          printf '%s\\n' 'maa-cli v0.7.5' 'MaaCore v9.9.9'
+        if [ "$1" = "dir" ]; then
+          case "$2" in
+            data) printf '%s\\n' "\(data.path)" ;;
+            cache) printf '%s\\n' "\(cache.path)" ;;
+            library) printf '%s\\n' "\(library.path)" ;;
+            resource) printf '%s\\n' "\(resource.path)" ;;
+            hot-update) printf '%s\\n' "\(hotUpdate.path)" ;;
+          esac
         elif [ "$1" = "update" ]; then
           printf '%s\\n' "$@" > "$MAA_CONFIG_DIR/update-arguments.txt"
         fi
         """.utf8).write(to: cli)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: probe.path)
         var configuration = AppConfiguration.defaults
         configuration.cliPath = cli.path
         configuration.maaUpdates.automaticallyUpdatesCoreAndResources = true
@@ -92,7 +118,8 @@ struct MAAMaintenanceTests {
             directories: directories,
             launchAgentsDirectory: root.appending(path: "LaunchAgents", directoryHint: .isDirectory),
             managesSystemLaunchAgents: false,
-            checksForUpdatesAutomatically: false
+            checksForUpdatesAutomatically: false,
+            resourceProbeExecutable: probe
         )
         return (root, model, arguments)
     }
