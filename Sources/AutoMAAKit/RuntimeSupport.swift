@@ -49,6 +49,13 @@ struct StartupFailureDiagnosis: Equatable {
 }
 
 enum StartupFailureClassifier {
+    static func isMAACoreInitializationFailure(_ output: String) -> Bool {
+        containsAny(output.lowercased(), [
+            "maacore returned an error", "json parse failed", "load resource failed",
+            "infrastconfig load failed", "核心初始化失败", "资源加载失败",
+        ])
+    }
+
     static func isGameOffline(_ output: String) -> Bool {
         containsAny(output.lowercased(), [
             "gameoffline", "game offline", "auto reconnect disabled", "游戏连接已离线",
@@ -64,6 +71,12 @@ enum StartupFailureClassifier {
             return .init(
                 scope: .account,
                 guidance: "请检查该账号的唯一匹配片段和当前登录状态；其他账号仍会继续执行"
+            )
+        }
+        if isMAACoreInitializationFailure(value) {
+            return .init(
+                scope: .client,
+                guidance: "MaaCore 初始化或资源加载失败，请先在全局设置检测环境并更新核心与基础资源；若稳定版仍不兼容，可手动选择 Beta，处理前不应反复运行客户端"
             )
         }
         if containsAny(value, [

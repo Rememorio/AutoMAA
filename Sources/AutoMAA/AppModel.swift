@@ -667,7 +667,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func updateMAACore() {
+    func updateMAACore(channel: MAAUpdateChannel = .stable) {
         reloadActivityHistory()
         guard !isWorkflowRunning, !applicationUpdateState.blocksWorkflow else { return }
         guard FileManager.default.isExecutableFile(atPath: configuration.cliPath) else {
@@ -681,7 +681,7 @@ final class AppModel: ObservableObject {
         }
         workflowTask = Task { [weak self] in
             guard let self else { return }
-            _ = await runner.updateCore(cliPath: self.configuration.cliPath)
+            _ = await runner.updateCore(cliPath: self.configuration.cliPath, channel: channel)
             self.isRunning = false
             self.workflowTask = nil
             self.showBanner(self.statusMessage)

@@ -1273,7 +1273,17 @@ final class AutoMAAKitTests: XCTestCase {
         let cli = root.appending(path: "maa-cli")
         try Data("""
         #!/bin/sh
-        printf '%s\\n' "$@" > "$MAA_CONFIG_DIR/update-arguments.txt"
+        case "$1" in
+          update)
+            printf '%s\\n' "$@" > "$MAA_CONFIG_DIR/update-arguments.txt"
+            ;;
+          version)
+            printf '%s\\n' "maa-cli v0.7.5" "MaaCore v6.17.0"
+            ;;
+          dir)
+            printf '%s\\n' "$MAA_CONFIG_DIR/missing-hot-update"
+            ;;
+        esac
         """.utf8).write(to: cli)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
 
@@ -1300,6 +1310,14 @@ final class AutoMAAKitTests: XCTestCase {
         let cli = root.appending(path: "maa-cli")
         try Data("""
         #!/bin/sh
+        if [ "$1" = "version" ]; then
+          printf '%s\\n' "MaaCore v6.17.0"
+          exit 0
+        fi
+        if [ "$1" = "dir" ]; then
+          printf '%s\\n' "$MAA_CONFIG_DIR/missing-hot-update"
+          exit 0
+        fi
         attempts="$MAA_CONFIG_DIR/update-attempts.txt"
         count=0
         if [ -f "$attempts" ]; then
@@ -1336,6 +1354,183 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertEqual(entries[1].level, .info)
         XCTAssertTrue(entries[1].message.contains("临时网络问题"))
         XCTAssertEqual(entries.last?.message, "MAA 核心与基础资源重试后已更新")
+    }
+
+    @MainActor
+    func testBetaCoreUpdateRequiresAnExplicitChannel() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        try directories.prepare()
+        let cli = root.appending(path: "maa-cli")
+        try Data("""
+        #!/bin/sh
+        case "$1" in
+          update)
+            printf '%s\\n' "$@" > "$MAA_CONFIG_DIR/update-arguments.txt"
+            ;;
+          version)
+            printf '%s\\n' "MaaCore v6.17.0-beta.6"
+            ;;
+          dir)
+            printf '%s\\n' "$MAA_CONFIG_DIR/missing-hot-update"
+            ;;
+        esac
+        """.utf8).write(to: cli)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
+
+        let succeeded = await WorkflowRunner(directories: directories).updateCore(
+            cliPath: cli.path,
+            channel: .beta
+        )
+        let arguments = try String(
+            contentsOf: directories.maaConfig.appending(path: "update-arguments.txt"),
+            encoding: .utf8
+        )
+        let entries = HistoryStore(directories: directories).load()
+
+        XCTAssertTrue(succeeded)
+        XCTAssertEqual(arguments, "update\nbeta\n--test-time\n10\n--batch\n")
+        XCTAssertEqual(entries.last?.message, "MAA Beta 核心与基础资源已更新")
+    }
+
+    func testResourceCompatibilityRecognizesTheCrossFacilitySchemaBoundary() throws {
+        let newResource = try JSONSerialization.data(withJSONObject: [
+            "Control": [:],
+            "Processing": [:],
+            "Training": [:],
+        ])
+        let oldResource = try JSONSerialization.data(withJSONObject: ["Control": [:]])
+
+        let issue = MAAResourceCompatibility.issue(
+            coreVersionOutput: "maa-cli v0.7.5\nMaaCore v6.16.8",
+            infrastData: newResource
+        )
+
+        XCTAssertEqual(issue?.coreVersion.description, "6.16.8")
+        XCTAssertEqual(issue?.requiredCoreVersion.description, "6.17.0")
+        XCTAssertTrue(issue?.guidance.contains("未回退资源") == true)
+        XCTAssertNil(MAAResourceCompatibility.issue(
+            coreVersionOutput: "MaaCore v6.17.0-beta.6",
+            infrastData: newResource
+        ))
+        XCTAssertNil(MAAResourceCompatibility.issue(
+            coreVersionOutput: "MaaCore v6.16.8",
+            infrastData: oldResource
+        ))
+    }
+
+    @MainActor
+    func testStableCoreUpdateReportsAnIncompatibleHotUpdate() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        try directories.prepare()
+        let hotUpdate = root.appending(path: "hot-update", directoryHint: .isDirectory)
+        let resource = hotUpdate.appending(path: "resource", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: resource, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: ["Processing": [:]])
+            .write(to: resource.appending(path: "infrast.json"))
+        let cli = root.appending(path: "maa-cli")
+        try Data("""
+        #!/bin/sh
+        if [ "$1" = "version" ]; then
+          printf '%s\\n' "MaaCore v6.16.8"
+        elif [ "$1" = "dir" ]; then
+          printf '%s\\n' "\(hotUpdate.path)"
+        fi
+        """.utf8).write(to: cli)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
+
+        let succeeded = await WorkflowRunner(directories: directories).updateCore(cliPath: cli.path)
+        let entries = HistoryStore(directories: directories).load()
+
+        XCTAssertFalse(succeeded)
+        XCTAssertEqual(entries.map(\.phase), [.updating, .failed])
+        XCTAssertTrue(entries.last?.message.contains("稳定通道") == true)
+        XCTAssertTrue(entries.last?.details?.contains("更新 Beta") == true)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: resource.appending(path: "infrast.json").path))
+    }
+
+    @MainActor
+    func testHotUpdateReportsIncompatibilityWithoutChangingTheResourceAgain() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        try directories.prepare()
+        let hotUpdate = root.appending(path: "hot-update", directoryHint: .isDirectory)
+        let resource = hotUpdate.appending(path: "resource", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: resource, withIntermediateDirectories: true)
+        let infrast = resource.appending(path: "infrast.json")
+        let original = try JSONSerialization.data(withJSONObject: ["Training": [:]])
+        try original.write(to: infrast)
+        let cli = root.appending(path: "maa-cli")
+        try Data("""
+        #!/bin/sh
+        if [ "$1" = "version" ]; then
+          printf '%s\\n' "MaaCore v6.16.8"
+        elif [ "$1" = "dir" ]; then
+          printf '%s\\n' "\(hotUpdate.path)"
+        fi
+        """.utf8).write(to: cli)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
+
+        let succeeded = await WorkflowRunner(directories: directories).hotUpdate(cliPath: cli.path)
+        let entries = HistoryStore(directories: directories).load()
+
+        XCTAssertFalse(succeeded)
+        XCTAssertEqual(entries.map(\.phase), [.updating, .failed])
+        XCTAssertTrue(entries.last?.details?.contains("未回退资源") == true)
+        XCTAssertEqual(try Data(contentsOf: infrast), original)
+    }
+
+    @MainActor
+    func testIncompatibleHotUpdateStopsBeforeOpeningAnyClient() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        try directories.prepare()
+        let hotUpdate = root.appending(path: "hot-update", directoryHint: .isDirectory)
+        let resource = hotUpdate.appending(path: "resource", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: resource, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: [
+            "Control": [:],
+            "Processing": [:],
+            "Training": [:],
+        ]).write(to: resource.appending(path: "infrast.json"))
+        let cli = root.appending(path: "maa-cli")
+        try Data("""
+        #!/bin/sh
+        if [ "$1" = "version" ]; then
+          printf '%s\\n' "MaaCore v6.16.8"
+        elif [ "$1" = "dir" ]; then
+          printf '%s\\n' "\(hotUpdate.path)"
+        fi
+        """.utf8).write(to: cli)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
+        var plan = AutomationPlan.lightRoutine
+        plan.policy.hotUpdateBeforeRun = false
+        let client = missingClient(
+            name: "不应启动的测试客户端",
+            path: "/Applications/Definitely-Missing-Compatibility-Test.app",
+            port: 65527
+        )
+        let configuration = AppConfiguration(cliPath: cli.path, clients: [client], plans: [plan])
+        let runtime = StubClientRuntime(closesOnForce: true)
+        let runner = WorkflowRunner(
+            directories: directories,
+            portProbe: runtime,
+            gameController: runtime,
+            shutdownPolicy: .immediate,
+            eventSink: runtime.record
+        )
+
+        let report = await runner.run(configuration, planID: plan.id, resumeToday: false)
+
+        XCTAssertTrue(report.fatalError?.contains("MaaCore 6.16.8") == true)
+        XCTAssertEqual(report.unexecutedSteps, report.totalSteps)
+        XCTAssertFalse(runtime.events.contains { $0.phase == .launching })
+        XCTAssertTrue(runtime.terminationRequests.isEmpty)
     }
 
     func testMaintenanceRetryClassifierRejectsNonNetworkFailuresAndCancellation() {
@@ -1457,6 +1652,16 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertTrue(StartupFailureClassifier.isGameOffline(output))
         XCTAssertEqual(result.scope, .client)
         XCTAssertTrue(result.guidance.contains("重启客户端后仍未恢复"))
+    }
+
+    func testStartupFailureClassifierRecognizesMAACoreInitializationFailure() {
+        let output = "Error: MaaCore returned an error, check its log for details"
+        let result = StartupFailureClassifier.diagnose(output: output, hasAccountSelector: false)
+
+        XCTAssertTrue(StartupFailureClassifier.isMAACoreInitializationFailure(output))
+        XCTAssertEqual(result.scope, .client)
+        XCTAssertTrue(result.guidance.contains("更新核心与基础资源"))
+        XCTAssertTrue(result.guidance.contains("不应反复运行客户端"))
     }
 
     func testWorkflowReportRequiresAttentionIsNotSuccess() {

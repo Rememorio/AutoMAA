@@ -1,5 +1,64 @@
 import Foundation
 
+public enum MAAUpdateChannel: String, Sendable {
+    case stable
+    case beta
+}
+
+struct MAACoreVersion: Comparable, CustomStringConvertible, Equatable {
+    let major: Int
+    let minor: Int
+    let patch: Int
+
+    var description: String { "\(major).\(minor).\(patch)" }
+
+    static func parse(_ output: String) -> Self? {
+        let pattern = #"MaaCore\s+v?(\d+)\.(\d+)\.(\d+)"#
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+              let match = expression.firstMatch(
+                in: output,
+                range: NSRange(output.startIndex..., in: output)
+              ),
+              let majorRange = Range(match.range(at: 1), in: output),
+              let minorRange = Range(match.range(at: 2), in: output),
+              let patchRange = Range(match.range(at: 3), in: output),
+              let major = Int(output[majorRange]),
+              let minor = Int(output[minorRange]),
+              let patch = Int(output[patchRange])
+        else { return nil }
+        return .init(major: major, minor: minor, patch: patch)
+    }
+
+    static func < (lhs: Self, rhs: Self) -> Bool {
+        (lhs.major, lhs.minor, lhs.patch) < (rhs.major, rhs.minor, rhs.patch)
+    }
+}
+
+struct MAAResourceCompatibilityIssue: Equatable {
+    let coreVersion: MAACoreVersion
+    let requiredCoreVersion: MAACoreVersion
+
+    var guidance: String {
+        "MaaCore \(coreVersion) 与已安装的基建热更新资源不兼容；该资源需要 MaaCore \(requiredCoreVersion) 或更新版本。请在“全局设置 → MAA”手动选择“更新 Beta 核心与基础资源”，或等待兼容版本进入稳定通道。AutoMAA 未回退资源，也未启动游戏"
+    }
+}
+
+enum MAAResourceCompatibility {
+    private static let crossFacilityInfrastCoreVersion = MAACoreVersion(major: 6, minor: 17, patch: 0)
+
+    static func issue(coreVersionOutput: String, infrastData: Data) -> MAAResourceCompatibilityIssue? {
+        guard let coreVersion = MAACoreVersion.parse(coreVersionOutput),
+              coreVersion < crossFacilityInfrastCoreVersion,
+              let object = try? JSONSerialization.jsonObject(with: infrastData) as? [String: Any],
+              object["Processing"] != nil || object["Training"] != nil
+        else { return nil }
+        return .init(
+            coreVersion: coreVersion,
+            requiredCoreVersion: crossFacilityInfrastCoreVersion
+        )
+    }
+}
+
 public struct MAAMaintenanceState: Codable, Equatable, Sendable {
     public var lastCoreUpdateAttempt: Date?
 

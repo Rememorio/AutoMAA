@@ -4,6 +4,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
+    @State private var showsBetaUpdateConfirmation = false
 
     var body: some View {
         ScrollView {
@@ -18,6 +19,18 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity)
         }
         .navigationTitle("全局设置")
+        .confirmationDialog(
+            "更新到 MAA Beta？",
+            isPresented: $showsBetaUpdateConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("更新 Beta 核心与基础资源") {
+                model.updateMAACore(channel: .beta)
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("Beta 可适配最新热更新资源，但属于上游预发布版本。AutoMAA 不会自动切换；确认后仅执行这一次 Beta 更新。")
+        }
     }
 
     private var applicationUpdatePanel: some View {
@@ -280,10 +293,10 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                Text("自动维护只使用稳定通道；Beta 仅在你手动确认时更新。热更新后若资源需要更新 Core，AutoMAA 会在启动游戏前停止并说明。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 HStack {
-                    Text("稳定通道更新基础包；热更新只拉取可独立更新的识别资源。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                     Spacer()
                     Button("检测环境") { model.refreshMAAStatus(showResult: true) }
                         .disabled(
@@ -291,7 +304,14 @@ struct SettingsView: View {
                                 || model.applicationUpdateState.blocksWorkflow
                                 || model.isCheckingMAAEnvironment
                         )
-                    Button("更新核心与基础资源") { model.updateMAACore() }
+                    Menu {
+                        Button("更新稳定版核心与基础资源") { model.updateMAACore() }
+                        Button("更新 Beta 核心与基础资源…") {
+                            showsBetaUpdateConfirmation = true
+                        }
+                    } label: {
+                        Text("更新核心与基础资源")
+                    }
                         .disabled(model.isWorkflowRunning || model.applicationUpdateState.blocksWorkflow)
                     Button {
                         model.hotUpdate()

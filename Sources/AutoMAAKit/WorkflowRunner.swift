@@ -205,6 +205,13 @@ public final class WorkflowRunner {
             }
         }
 
+        if let issue = await maaResourceCompatibilityIssue(cliPath: configuration.cliPath) {
+            report.fatalError = issue.guidance
+            report.unexecutedSteps = totalSteps
+            emit(.failed, issue.guidance, 0, .error)
+            return report
+        }
+
         clientLoop: for client in activeClients {
             if Task.isCancelled {
                 report.cancelled = true
@@ -564,6 +571,20 @@ public final class WorkflowRunner {
             return false
         }
         let success = result.exitCode == 0 && !result.timedOut
+        if success, let issue = await maaResourceCompatibilityIssue(cliPath: cliPath) {
+            emit(
+                .failed,
+                "资源已更新，但当前 MaaCore 与新资源不兼容",
+                1,
+                .error,
+                details: issue.guidance
+            )
+            return false
+        }
+        if Task.isCancelled {
+            emit(.cancelled, "资源更新已停止", 1, .warning)
+            return false
+        }
         emit(
             success ? .completed : .failed,
             success
@@ -576,7 +597,10 @@ public final class WorkflowRunner {
         return success
     }
 
-    public func updateCore(cliPath: String) async -> Bool {
+    public func updateCore(
+        cliPath: String,
+        channel: MAAUpdateChannel = .stable
+    ) async -> Bool {
         beginActivity()
         defer { endActivity() }
         var lock: ProcessLock?
@@ -591,12 +615,15 @@ public final class WorkflowRunner {
         }
         _ = lock
         _ = lease
-        emit(.updating, "正在更新 MAA 核心与基础资源", 0, .info)
+        let operation = channel == .stable
+            ? "更新 MAA 核心与基础资源"
+            : "更新 MAA Beta 核心与基础资源"
+        emit(.updating, "正在\(operation)", 0, .info)
         let outcome = await runMaintenanceCommand(
             executable: cliPath,
-            arguments: ["update", "stable", "--test-time", "10", "--batch"],
+            arguments: ["update", channel.rawValue, "--test-time", "10", "--batch"],
             timeout: 3_600,
-            operation: "更新 MAA 核心与基础资源"
+            operation: operation
         )
         let result = outcome.result
         if result.cancelled || Task.isCancelled {
@@ -604,10 +631,26 @@ public final class WorkflowRunner {
             return false
         }
         let success = result.exitCode == 0 && !result.timedOut
+        if success, let issue = await maaResourceCompatibilityIssue(cliPath: cliPath) {
+            emit(
+                .failed,
+                channel == .stable
+                    ? "稳定通道更新完成，但当前 Core 仍不兼容热更新资源"
+                    : "Beta 更新完成，但 Core 与热更新资源仍不兼容",
+                1,
+                .error,
+                details: issue.guidance
+            )
+            return false
+        }
+        if Task.isCancelled {
+            emit(.cancelled, "MAA 更新已停止", 1, .warning)
+            return false
+        }
         emit(
             success ? .completed : .failed,
             success
-                ? (outcome.recoveredAfterRetry ? "MAA 核心与基础资源重试后已更新" : "MAA 核心与基础资源已更新")
+                ? updateCoreSuccessMessage(channel: channel, recoveredAfterRetry: outcome.recoveredAfterRetry)
                 : "MAA 更新失败",
             1,
             success ? .success : .error,
@@ -731,6 +774,9 @@ public final class WorkflowRunner {
                 return
             }
             let detail = shortOutput(lastResult, sensitiveValues: [selector].compactMap { $0 })
+            if StartupFailureClassifier.isMAACoreInitializationFailure(detail) {
+                break
+            }
             if StartupFailureClassifier.isGameOffline(detail),
                !restartedClientsForGameOffline.contains(client.id) {
                 restartedClientsForGameOffline.insert(client.id)
@@ -774,6 +820,53 @@ public final class WorkflowRunner {
             guidance: diagnosis.guidance,
             details: detail
         )
+    }
+
+    private func maaResourceCompatibilityIssue(cliPath: String) async -> MAAResourceCompatibilityIssue? {
+        let version = await runCommand(
+            executable: cliPath,
+            arguments: ["version", "--batch"],
+            timeout: 20
+        )
+        guard version.exitCode == 0, !version.timedOut, !version.cancelled else { return nil }
+        let directory = await runCommand(
+            executable: cliPath,
+            arguments: ["dir", "hot-update", "--batch"],
+            timeout: 20
+        )
+        guard directory.exitCode == 0, !directory.timedOut, !directory.cancelled,
+              let path = directory.standardOutput
+                .split(whereSeparator: \Character.isNewline)
+                .last
+                .map(String.init)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              path.hasPrefix("/")
+        else { return nil }
+        let resource = URL(filePath: path, directoryHint: .isDirectory)
+            .appending(path: "resource/infrast.json")
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: resource.path),
+              let size = attributes[.size] as? NSNumber,
+              size.intValue <= 32 * 1_024 * 1_024,
+              let data = try? Data(contentsOf: resource, options: [.mappedIfSafe])
+        else { return nil }
+        return MAAResourceCompatibility.issue(
+            coreVersionOutput: version.combinedOutput,
+            infrastData: data
+        )
+    }
+
+    private func updateCoreSuccessMessage(
+        channel: MAAUpdateChannel,
+        recoveredAfterRetry: Bool
+    ) -> String {
+        if channel == .beta {
+            return recoveredAfterRetry
+                ? "MAA Beta 核心与基础资源重试后已更新"
+                : "MAA Beta 核心与基础资源已更新"
+        }
+        return recoveredAfterRetry
+            ? "MAA 核心与基础资源重试后已更新"
+            : "MAA 核心与基础资源已更新"
     }
 
     private func runTask(
