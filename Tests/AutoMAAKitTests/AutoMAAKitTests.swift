@@ -524,10 +524,26 @@ final class AutoMAAKitTests: XCTestCase {
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
         XCTAssertEqual(json["settingsMode"] as? String, "custom")
-        XCTAssertEqual(Set(json.keys), ["drGrandet", "enabled", "settingsMode", "stage"])
+        XCTAssertEqual(json["stageStrategy"] as? String, "gameCurrentOrLast")
+        XCTAssertEqual(Set(json.keys), ["drGrandet", "enabled", "settingsMode", "stage", "stageStrategy"])
 
         let incomplete = Data(#"{"enabled":true,"stage":"","drGrandet":false}"#.utf8)
         XCTAssertThrowsError(try JSONDecoder().decode(FightConfiguration.self, from: incomplete))
+    }
+
+    func testFightStageStrategyDecodesExistingSchemaWithoutMigration() throws {
+        let legacyCurrent = Data(#"{"enabled":true,"settingsMode":"custom","stage":"","drGrandet":false}"#.utf8)
+        let legacyFixed = Data(#"{"enabled":true,"settingsMode":"custom","stage":"Annihilation","drGrandet":false}"#.utf8)
+
+        XCTAssertEqual(
+            try JSONDecoder().decode(FightConfiguration.self, from: legacyCurrent).stageStrategy,
+            .gameCurrentOrLast
+        )
+        XCTAssertEqual(
+            try JSONDecoder().decode(FightConfiguration.self, from: legacyFixed).stageStrategy,
+            .fixed
+        )
+        XCTAssertEqual(AppConfiguration.currentSchemaVersion, 5)
     }
 
     func testPlanScopesAccountsDynamically() {
@@ -549,6 +565,7 @@ final class AutoMAAKitTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let directories = AppDirectories(root: root)
         var config = populatedConfiguration()
+        config.plans[0].fight.stageStrategy = .fixed
         config.plans[0].fight.stage = FightStagePreset.annihilation.rawValue
         config.plans[0].fight.medicine = 3
         config.plans[0].fight.medicineExpireDays = 2
@@ -570,11 +587,105 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertNil(params["series"])
     }
 
+    func testRememberedRegularStageResolvesPerAccountAndMissingTaskIsRemoved() throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        var config = populatedConfiguration()
+        config.plans[0].fight.stageStrategy = .rememberedRegular
+        let plan = config.plans[0]
+        let firstClient = config.clients[0]
+        let firstAccount = firstClient.accounts[0]
+        let secondClient = config.clients[1]
+        let secondAccount = secondClient.accounts[0]
+        var memory = FightStageMemory()
+        memory.remember("AT-4", clientID: firstClient.id, accountID: firstAccount.id)
+        memory.remember("EA-3", clientID: secondClient.id, accountID: secondAccount.id)
+        let writer = MAAConfigurationWriter(directories: directories)
+
+        try writer.prepare(config, fightStageMemory: memory)
+
+        XCTAssertEqual(
+            try generatedParams(.fight, plan: plan, client: firstClient, account: firstAccount, writer: writer, root: root)["stage"] as? String,
+            "AT-4"
+        )
+        XCTAssertEqual(
+            try generatedParams(.fight, plan: plan, client: secondClient, account: secondAccount, writer: writer, root: root)["stage"] as? String,
+            "EA-3"
+        )
+
+        let missingMemory = FightStageMemory(entries: [memory.entries[0]])
+        try writer.prepare(config, fightStageMemory: missingMemory)
+        let missingName = writer.taskName(
+            planID: plan.id,
+            clientID: secondClient.id,
+            accountID: secondAccount.id,
+            task: .fight
+        )
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: root.appending(path: "MAA/tasks/\(missingName).json").path
+        ))
+    }
+
+    func testRememberedRegularStageMustExistForEveryTargetAccount() {
+        var config = populatedConfiguration()
+        config.cliPath = "/usr/bin/true"
+        config.plans[0].fight.stageStrategy = .rememberedRegular
+        let plan = config.plans[0]
+        let firstClient = config.clients[0]
+        let firstAccount = firstClient.accounts[0]
+        var memory = FightStageMemory()
+        memory.remember("AT-4", clientID: firstClient.id, accountID: firstAccount.id)
+
+        let problems = ConfigurationValidator.readinessProblems(
+            in: config,
+            planID: plan.id,
+            fightStageMemory: memory
+        )
+
+        XCTAssertFalse(problems.contains { $0.id.contains(firstAccount.id.uuidString) })
+        XCTAssertTrue(problems.contains {
+            $0.severity == .error
+                && $0.id.contains(config.clients[1].accounts[0].id.uuidString)
+                && $0.message.contains("尚未记住")
+        })
+    }
+
+    func testFightStageMemoryStoresOnlySuccessfulRegularStages() {
+        XCTAssertEqual(FightStagePolicy.regularStage(from: " AT-4 ", times: 3), "AT-4")
+        XCTAssertNil(FightStagePolicy.regularStage(from: "AT-4", times: 0))
+        XCTAssertNil(FightStagePolicy.regularStage(from: "Annihilation", times: 1))
+        XCTAssertNil(FightStagePolicy.regularStage(from: "Chernobog@Annihilation", times: 1))
+    }
+
+    func testFightStageMemoryStoreRoundTripsAndRejectsInvalidEntries() throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = FightStageMemoryStore(directories: AppDirectories(root: root))
+        let clientID = UUID()
+        let accountID = UUID()
+        var memory = FightStageMemory()
+        memory.remember(
+            "AT-4",
+            clientID: clientID,
+            accountID: accountID,
+            at: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        try store.save(memory)
+
+        XCTAssertEqual(try store.load(), memory)
+        XCTAssertThrowsError(try store.save(FightStageMemory(entries: [
+            FightStageMemoryEntry(clientID: clientID, accountID: accountID, stage: "Annihilation"),
+        ])))
+    }
+
     func testDisablingCustomSettingsUsesMAADefaultsWithoutErasingPlanValues() throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let directories = AppDirectories(root: root)
         var config = populatedConfiguration()
+        config.plans[0].fight.stageStrategy = .fixed
         config.plans[0].fight.stage = "1-7"
         config.plans[0].fight.medicine = 3
         config.plans[0].fight.usesCustomSettings = false
@@ -868,6 +979,7 @@ final class AutoMAAKitTests: XCTestCase {
         ])
         var annihilation = AutomationPlan.lightRoutine
         annihilation.name = "周日剿灭"
+        annihilation.fight.stageStrategy = .fixed
         annihilation.fight.stage = FightStagePreset.annihilation.rawValue
         annihilation.schedule = PlanSchedule(enabled: true, rules: [
             WeeklyScheduleRule(weekdays: [.sunday], hour: 9),
@@ -2095,6 +2207,12 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertEqual(
             completion.log.details,
             "总掉落：沿途的点滴 × 156, 装置 × 10, 酮凝集 × 4, 龙门币 × 1872"
+        )
+        XCTAssertEqual(
+            try FightStageMemoryStore(directories: AppDirectories(root: root))
+                .load()
+                .stage(clientID: client.id, accountID: account.id),
+            "TO-5"
         )
     }
 

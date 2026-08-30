@@ -110,6 +110,7 @@ public enum ConfigurationValidator {
     public static func readinessProblems(
         in configuration: AppConfiguration,
         planID: UUID?,
+        fightStageMemory: FightStageMemory = .init(),
         fileManager: FileManager = .default
     ) -> [ConfigurationProblem] {
         var result = structuralProblems(in: configuration)
@@ -215,6 +216,21 @@ public enum ConfigurationValidator {
 
             let enabledAccounts = client.accounts.filter(\.enabled)
             let targetAccounts = client.accounts.filter(plan.includes)
+            if plan.fight.enabled,
+               plan.fight.usesCustomSettings,
+               plan.fight.stageStrategy == .rememberedRegular {
+                for account in targetAccounts where fightStageMemory.stage(
+                    clientID: client.id,
+                    accountID: account.id
+                ) == nil {
+                    result.append(.init(
+                        id: "plan-\(plan.id)-fight-memory-\(client.id)-\(account.id)",
+                        severity: .error,
+                        message: "「\(planName)」尚未记住\(clientName) / \(account.displayName)的常规关卡；请先用“游戏当前/上次”或固定关卡成功作战一次",
+                        scope: .plan(plan.id)
+                    ))
+                }
+            }
             for account in targetAccounts where account.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 result.append(.init(
                     id: "account-\(account.id)-name-empty",
@@ -272,6 +288,17 @@ public enum ConfigurationValidator {
         into result: inout [ConfigurationProblem]
     ) {
         let name = plan.displayName
+        if value.stageStrategy == .fixed {
+            let stage = value.stage.trimmingCharacters(in: .whitespacesAndNewlines)
+            if stage.isEmpty || stage.count > 128 || stage.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) {
+                result.append(.init(
+                    id: "\(prefix)-stage",
+                    severity: .error,
+                    message: "「\(name)」的固定关卡名必须为 1 到 128 个有效字符",
+                    scope: .plan(plan.id)
+                ))
+            }
+        }
         let checks: [(String, Bool, String)] = [
             ("medicine", value.medicine.map { $0 >= 0 } ?? true, "理智药数量不能为负数"),
             ("medicine-expire-days", value.medicineExpireDays.map { (1...365).contains($0) } ?? true, "临期理智药天数必须在 1 到 365 之间"),

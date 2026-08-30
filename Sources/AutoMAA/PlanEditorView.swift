@@ -245,22 +245,54 @@ struct PlanEditorView: View {
 
     private var fightCard: some View {
         PlanTaskCard(task: .fight, enabled: $plan.fight.enabled, usesCustomSettings: $plan.fight.usesCustomSettings) {
-            LabeledContent("关卡") {
-                if customFightStage.wrappedValue {
-                    TextField("如 1-7 或活动关卡", text: $plan.fight.stage)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 190)
-                } else {
-                    Picker("关卡", selection: $plan.fight.stage) {
-                        ForEach(FightStagePreset.allCases) { preset in
-                            Text(preset.title).tag(preset.rawValue)
-                        }
-                    }
-                    .labelsHidden()
-                    .frame(width: 190)
+            Picker("关卡策略", selection: fightStageStrategy) {
+                ForEach(FightStageStrategy.allCases) { strategy in
+                    Text(strategy.title).tag(strategy)
                 }
             }
-            Toggle("手动输入关卡名", isOn: customFightStage)
+            Text(plan.fight.stageStrategy.detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if plan.fight.stageStrategy == .fixed {
+                LabeledContent("关卡") {
+                    if customFightStage.wrappedValue {
+                        TextField("如 1-7 或活动关卡", text: $plan.fight.stage)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 190)
+                    } else {
+                        Picker("关卡", selection: $plan.fight.stage) {
+                            ForEach(FightStagePreset.allCases.filter { $0 != .currentOrLast }) { preset in
+                                Text(preset.title).tag(preset.rawValue)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 190)
+                    }
+                }
+                Toggle("手动输入关卡名", isOn: customFightStage)
+            } else if plan.fight.stageStrategy == .rememberedRegular {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("账号记录")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    ForEach(fightStageMemoryRows) { row in
+                        HStack(spacing: 8) {
+                            Image(systemName: row.stage == nil ? "exclamationmark.circle.fill" : "bookmark.fill")
+                                .foregroundStyle(row.stage == nil ? Color.orange : Color.maaAccent)
+                            Text(row.label)
+                                .lineLimit(1)
+                            Spacer(minLength: 8)
+                            Text(row.stage ?? "未记录")
+                                .font(.caption.monospaced())
+                                .foregroundStyle(row.stage == nil ? Color.orange : Color.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+                .padding(10)
+                .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            }
             Divider()
             optionalStepper("吃理智药", value: $plan.fight.medicine, defaultValue: 999, range: 0...999)
             optionalStepper("使用临期理智药（天数）", value: $plan.fight.medicineExpireDays, defaultValue: 2, range: 1...365)
@@ -438,6 +470,19 @@ struct PlanEditorView: View {
         model.configuration.clients.filter(\.enabled).flatMap { $0.accounts.filter(plan.includes) }
     }
 
+    private var fightStageMemoryRows: [FightStageMemoryRow] {
+        model.configuration.clients.filter(\.enabled).flatMap { client in
+            client.accounts.filter(plan.includes).map { account in
+                FightStageMemoryRow(
+                    clientID: client.id,
+                    accountID: account.id,
+                    label: "\(client.displayName) / \(account.displayName)",
+                    stage: model.fightStageMemory.stage(clientID: client.id, accountID: account.id)
+                )
+            }
+        }
+    }
+
     private var scheduleInstalled: Bool {
         model.installedPlanIDs.contains(plan.id)
     }
@@ -559,8 +604,20 @@ struct PlanEditorView: View {
         Binding {
             useCustomFightStage || FightStagePreset(rawValue: plan.fight.stage) == nil
         } set: { enabled in
-            if !enabled { plan.fight.stage = FightStagePreset.currentOrLast.rawValue }
+            if !enabled { plan.fight.stage = FightStagePreset.oneSeven.rawValue }
             useCustomFightStage = enabled
+        }
+    }
+
+    private var fightStageStrategy: Binding<FightStageStrategy> {
+        Binding {
+            plan.fight.stageStrategy
+        } set: { strategy in
+            plan.fight.stageStrategy = strategy
+            if strategy == .fixed,
+               plan.fight.stage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                plan.fight.stage = FightStagePreset.oneSeven.rawValue
+            }
         }
     }
 
@@ -591,6 +648,15 @@ struct PlanEditorView: View {
             }
         }
     }
+}
+
+private struct FightStageMemoryRow: Identifiable {
+    let clientID: UUID
+    let accountID: UUID
+    let label: String
+    let stage: String?
+
+    var id: String { "\(clientID.uuidString)-\(accountID.uuidString)" }
 }
 
 private struct PlanTaskCard<Content: View>: View {

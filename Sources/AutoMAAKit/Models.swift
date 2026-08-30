@@ -143,6 +143,33 @@ public enum FightStagePreset: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+public enum FightStageStrategy: String, Codable, CaseIterable, Identifiable, Sendable {
+    case gameCurrentOrLast
+    case rememberedRegular
+    case fixed
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .gameCurrentOrLast: "游戏当前/上次"
+        case .rememberedRegular: "上次成功的常规关卡"
+        case .fixed: "固定关卡"
+        }
+    }
+
+    public var detail: String {
+        switch self {
+        case .gameCurrentOrLast:
+            "沿用 MAA 的当前/上次关卡；其他方案执行剿灭后，这里也可能继续进入剿灭。"
+        case .rememberedRegular:
+            "按账号使用 AutoMAA 记住的最近一次成功常规作战；剿灭和零次作战不会覆盖。"
+        case .fixed:
+            "始终使用下面指定的关卡。"
+        }
+    }
+}
+
 public enum DroneUsage: String, Codable, CaseIterable, Identifiable, Sendable {
     case notUse = "_NotUse"
     case money = "Money"
@@ -245,6 +272,7 @@ public enum TaskSettingsMode: String, Codable, CaseIterable, Identifiable, Senda
 public struct FightConfiguration: Codable, Equatable, Sendable {
     public var enabled = true
     public var settingsMode = TaskSettingsMode.custom
+    public var stageStrategy = FightStageStrategy.gameCurrentOrLast
     public var stage = ""
     public var medicine: Int?
     public var medicineExpireDays: Int?
@@ -258,6 +286,26 @@ public struct FightConfiguration: Codable, Equatable, Sendable {
     public var usesCustomSettings: Bool {
         get { settingsMode == .custom }
         set { settingsMode = newValue ? .custom : .maaDefault }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled, settingsMode, stageStrategy, stage, medicine, medicineExpireDays
+        case stone, times, series, drGrandet
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try container.decode(Bool.self, forKey: .enabled)
+        settingsMode = try container.decode(TaskSettingsMode.self, forKey: .settingsMode)
+        stage = try container.decode(String.self, forKey: .stage)
+        stageStrategy = try container.decodeIfPresent(FightStageStrategy.self, forKey: .stageStrategy)
+            ?? (stage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .gameCurrentOrLast : .fixed)
+        medicine = try container.decodeIfPresent(Int.self, forKey: .medicine)
+        medicineExpireDays = try container.decodeIfPresent(Int.self, forKey: .medicineExpireDays)
+        stone = try container.decodeIfPresent(Int.self, forKey: .stone)
+        times = try container.decodeIfPresent(Int.self, forKey: .times)
+        series = try container.decodeIfPresent(Int.self, forKey: .series)
+        drGrandet = try container.decode(Bool.self, forKey: .drGrandet)
     }
 }
 
@@ -824,5 +872,85 @@ public struct ExecutionState: Codable, Sendable {
         self.dateKey = dateKey
         self.completedSteps = completedSteps
         self.updatedAt = updatedAt
+    }
+}
+
+public struct FightStageMemoryEntry: Codable, Equatable, Sendable {
+    public var clientID: UUID
+    public var accountID: UUID
+    public var stage: String
+    public var updatedAt: Date
+
+    public init(clientID: UUID, accountID: UUID, stage: String, updatedAt: Date = Date()) {
+        self.clientID = clientID
+        self.accountID = accountID
+        self.stage = stage
+        self.updatedAt = updatedAt
+    }
+}
+
+public struct FightStageMemory: Codable, Equatable, Sendable {
+    public static let currentSchemaVersion = 1
+
+    public var schemaVersion: Int
+    public private(set) var entries: [FightStageMemoryEntry]
+
+    public init(
+        schemaVersion: Int = Self.currentSchemaVersion,
+        entries: [FightStageMemoryEntry] = []
+    ) {
+        self.schemaVersion = schemaVersion
+        self.entries = entries
+    }
+
+    public func stage(clientID: UUID, accountID: UUID) -> String? {
+        entries.first {
+            $0.clientID == clientID && $0.accountID == accountID
+        }?.stage
+    }
+
+    public mutating func remember(
+        _ stage: String,
+        clientID: UUID,
+        accountID: UUID,
+        at date: Date = Date()
+    ) {
+        let entry = FightStageMemoryEntry(
+            clientID: clientID,
+            accountID: accountID,
+            stage: stage,
+            updatedAt: date
+        )
+        if let index = entries.firstIndex(where: {
+            $0.clientID == clientID && $0.accountID == accountID
+        }) {
+            entries[index] = entry
+        } else {
+            entries.append(entry)
+        }
+        entries.sort {
+            if $0.clientID != $1.clientID {
+                return $0.clientID.uuidString < $1.clientID.uuidString
+            }
+            return $0.accountID.uuidString < $1.accountID.uuidString
+        }
+    }
+}
+
+public enum FightStagePolicy {
+    public static func regularStage(from stage: String, times: Int) -> String? {
+        let value = stage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard times > 0,
+              !value.isEmpty,
+              value.count <= 128,
+              !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains),
+              !isAnnihilation(value)
+        else { return nil }
+        return value
+    }
+
+    public static func isAnnihilation(_ stage: String) -> Bool {
+        let value = stage.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return value == "annihilation" || value.hasSuffix("@annihilation")
     }
 }

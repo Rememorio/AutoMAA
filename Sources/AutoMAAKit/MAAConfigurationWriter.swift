@@ -17,7 +17,10 @@ public struct MAAConfigurationWriter: Sendable {
         self.directories = directories
     }
 
-    public func prepare(_ configuration: AppConfiguration) throws {
+    public func prepare(
+        _ configuration: AppConfiguration,
+        fightStageMemory: FightStageMemory = .init()
+    ) throws {
         try directories.prepare()
         try validate(configuration)
         var generated: Set<String> = []
@@ -27,8 +30,21 @@ public struct MAAConfigurationWriter: Sendable {
             for plan in configuration.plans {
                 for account in client.accounts {
                     for task in TaskKind.allCases {
+                        guard shouldWriteTask(
+                            task,
+                            plan: plan,
+                            account: account,
+                            client: client,
+                            fightStageMemory: fightStageMemory
+                        ) else { continue }
                         generated.insert("tasks/\(taskName(planID: plan.id, clientID: client.id, accountID: account.id, task: task)).json")
-                        try writeTask(task, plan: plan, account: account, client: client)
+                        try writeTask(
+                            task,
+                            plan: plan,
+                            account: account,
+                            client: client,
+                            fightStageMemory: fightStageMemory
+                        )
                     }
                 }
             }
@@ -68,7 +84,8 @@ public struct MAAConfigurationWriter: Sendable {
         _ task: TaskKind,
         plan: AutomationPlan,
         account: AccountConfiguration,
-        client: ClientConfiguration
+        client: ClientConfiguration,
+        fightStageMemory: FightStageMemory
     ) throws {
         let parameters: [String: Any]
         switch task {
@@ -78,7 +95,12 @@ public struct MAAConfigurationWriter: Sendable {
                 "client_type": client.kind.maaTaskClientType,
             ]
             if plan.fight.usesCustomSettings {
-                value["stage"] = plan.fight.stage.trimmingCharacters(in: .whitespacesAndNewlines)
+                value["stage"] = try resolvedFightStage(
+                    for: plan,
+                    account: account,
+                    client: client,
+                    fightStageMemory: fightStageMemory
+                )
                 if let medicine = plan.fight.medicine { value["medicine"] = medicine }
                 if let medicineExpireDays = plan.fight.medicineExpireDays {
                     value["medicine_expire_days"] = medicineExpireDays
@@ -233,6 +255,41 @@ public struct MAAConfigurationWriter: Sendable {
             .appending(path: "tasks")
             .appending(path: "\(taskName(planID: plan.id, clientID: client.id, accountID: account.id, task: task)).json")
         try data.write(to: url, options: .atomic)
+    }
+
+    private func shouldWriteTask(
+        _ task: TaskKind,
+        plan: AutomationPlan,
+        account: AccountConfiguration,
+        client: ClientConfiguration,
+        fightStageMemory: FightStageMemory
+    ) -> Bool {
+        guard task == .fight,
+              plan.fight.usesCustomSettings,
+              plan.fight.stageStrategy == .rememberedRegular
+        else { return true }
+        return fightStageMemory.stage(clientID: client.id, accountID: account.id) != nil
+    }
+
+    private func resolvedFightStage(
+        for plan: AutomationPlan,
+        account: AccountConfiguration,
+        client: ClientConfiguration,
+        fightStageMemory: FightStageMemory
+    ) throws -> String {
+        switch plan.fight.stageStrategy {
+        case .gameCurrentOrLast:
+            return ""
+        case .rememberedRegular:
+            guard let stage = fightStageMemory.stage(clientID: client.id, accountID: account.id) else {
+                throw MAAConfigurationWriterError.invalidConfiguration(
+                    "「\(plan.displayName)」缺少\(client.displayName) / \(account.displayName)的常规关卡记录"
+                )
+            }
+            return stage
+        case .fixed:
+            return plan.fight.stage.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
     }
 
     private func maaTaskType(_ task: TaskKind) -> String {

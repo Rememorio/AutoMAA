@@ -18,6 +18,7 @@ private struct TaskRunOutcome {
     let succeeded: Bool
     let recoveredAfterRetry: Bool
     let notices: [WorkflowNotice]
+    let fightSummary: MAAFightSummary?
     let completionSummary: TaskCompletionSummary?
     let failureDetails: String?
 }
@@ -114,6 +115,7 @@ public final class WorkflowRunner {
     private let historyStore: HistoryStore
     private let diagnosticLogStore: DiagnosticLogStore
     private let stateStore: ExecutionStateStore
+    private let fightStageMemoryStore: FightStageMemoryStore
     private let noticeSink: NoticeSink?
     private let eventSink: EventSink
     private var currentPlanID: UUID?
@@ -178,6 +180,7 @@ public final class WorkflowRunner {
         historyStore = HistoryStore(directories: directories)
         diagnosticLogStore = DiagnosticLogStore(directories: directories)
         stateStore = ExecutionStateStore(directories: directories)
+        fightStageMemoryStore = FightStageMemoryStore(directories: directories)
         self.noticeSink = noticeSink
         self.eventSink = eventSink
     }
@@ -200,9 +203,18 @@ public final class WorkflowRunner {
         }
         currentPlanID = plan.id
         defer { currentPlanID = nil }
+        var fightStageMemory: FightStageMemory
+        do {
+            fightStageMemory = try fightStageMemoryStore.load()
+        } catch {
+            report.fatalError = "无法读取常规关卡记录：\(error.localizedDescription)"
+            emit(.failed, report.fatalError ?? "常规关卡记录无法读取", 0, .error)
+            return report
+        }
         if let problem = ConfigurationValidator.readinessProblems(
             in: configuration,
-            planID: plan.id
+            planID: plan.id,
+            fightStageMemory: fightStageMemory
         ).first(where: { $0.severity == .error }) {
             report.fatalError = problem.message
             emit(.failed, problem.message, 0, .error)
@@ -227,7 +239,10 @@ public final class WorkflowRunner {
             }
             lock = try ProcessLock(url: directories.lock)
             lease = CaffeinateLease()
-            try MAAConfigurationWriter(directories: directories).prepare(configuration)
+            try MAAConfigurationWriter(directories: directories).prepare(
+                configuration,
+                fightStageMemory: fightStageMemory
+            )
         } catch {
             report.fatalError = error.localizedDescription
             emit(.failed, error.localizedDescription, 0, .error)
@@ -504,6 +519,33 @@ public final class WorkflowRunner {
                     visitedSteps += 1
                     if outcome.succeeded {
                         report.succeededSteps += 1
+                        if let summary = outcome.fightSummary,
+                           let stage = FightStagePolicy.regularStage(
+                               from: summary.stage,
+                               times: summary.times
+                           ) {
+                            var updatedMemory = fightStageMemory
+                            updatedMemory.remember(
+                                stage,
+                                clientID: client.id,
+                                accountID: account.id
+                            )
+                            do {
+                                try fightStageMemoryStore.save(updatedMemory)
+                                fightStageMemory = updatedMemory
+                            } catch {
+                                emit(
+                                    .runningTask,
+                                    "\(accountText(account))：常规关卡记录保存失败",
+                                    Double(visitedSteps) / Double(totalSteps),
+                                    .warning,
+                                    client: client,
+                                    account: account,
+                                    task: task,
+                                    details: error.localizedDescription
+                                )
+                            }
+                        }
                         state.completedSteps.insert(key)
                         state.updatedAt = Date()
                         try? stateStore.save(state)
@@ -1316,11 +1358,15 @@ public final class WorkflowRunner {
                 )
             }
             if result.exitCode == 0, !result.timedOut {
+                let fightSummary = task == .fight
+                    ? MAAOutputSummaryParser.fightSummary(in: result.combinedOutput)
+                    : nil
                 return TaskRunOutcome(
                     succeeded: true,
                     recoveredAfterRetry: attempt > 1,
                     notices: notices,
-                    completionSummary: completionSummary(for: task, output: result.combinedOutput),
+                    fightSummary: fightSummary,
+                    completionSummary: completionSummary(for: fightSummary),
                     failureDetails: nil
                 )
             }
@@ -1378,6 +1424,7 @@ public final class WorkflowRunner {
             succeeded: false,
             recoveredAfterRetry: false,
             notices: notices,
+            fightSummary: nil,
             completionSummary: nil,
             failureDetails: failureDetails
         )
@@ -1410,10 +1457,8 @@ public final class WorkflowRunner {
         return "超时上限：\(limit)\n\(output)"
     }
 
-    private func completionSummary(for task: TaskKind, output: String) -> TaskCompletionSummary? {
-        guard task == .fight,
-              let summary = MAAOutputSummaryParser.fightSummary(in: output)
-        else { return nil }
+    private func completionSummary(for summary: MAAFightSummary?) -> TaskCompletionSummary? {
+        guard let summary else { return nil }
         return TaskCompletionSummary(
             messageSuffix: "（\(summary.stage) × \(summary.times)）",
             details: summary.totalDrops.map { "总掉落：\($0)" }

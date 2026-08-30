@@ -96,6 +96,7 @@ final class AppModel: ObservableObject {
     @Published private var externalRunState: ExternalRunState?
     @Published var bannerMessage: String?
     @Published var installedPlanIDs: Set<UUID>
+    @Published private(set) var fightStageMemory: FightStageMemory
     @Published var lastReport: WorkflowReport?
     @Published private(set) var isSynchronizingSchedules = false
     @Published private(set) var maaVersionSummary = "尚未检测"
@@ -112,6 +113,7 @@ final class AppModel: ObservableObject {
     private let configurationStore: ConfigurationStore
     private let historyStore: HistoryStore
     private let executionStateStore: ExecutionStateStore
+    private let fightStageMemoryStore: FightStageMemoryStore
     private let launchAgentManager: LaunchAgentManager
     private let softwareUpdateService: any SoftwareUpdateServing
     private let softwareUpdateResultStore: SoftwareUpdateResultStore
@@ -154,6 +156,7 @@ final class AppModel: ObservableObject {
         configurationStore = ConfigurationStore(directories: directories)
         historyStore = HistoryStore(directories: directories)
         executionStateStore = ExecutionStateStore(directories: directories)
+        fightStageMemoryStore = FightStageMemoryStore(directories: directories)
         let applicationVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
             ?? "开发构建"
         let applicationBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
@@ -175,31 +178,41 @@ final class AppModel: ObservableObject {
         softwareUpdateResultStore = SoftwareUpdateResultStore(directories: directories)
         maaMaintenanceStore = MAAMaintenanceStore(directories: directories)
         importantNotificationCenter = ImportantNotificationCenter()
+        var startupMessages: [String] = []
         do {
             configuration = try configurationStore.load()
-            startupNotice = nil
         } catch ConfigurationStoreError.unsupportedSchema {
             if let recovery = try? configurationStore.backupAndReset() {
                 configuration = recovery.configuration
-                startupNotice = "配置协议不兼容；旧配置已备份为 \(recovery.backupURL.lastPathComponent)，并恢复为空配置"
+                startupMessages.append("配置协议不兼容；旧配置已备份为 \(recovery.backupURL.lastPathComponent)，并恢复为空配置")
             } else {
                 configuration = .defaults
-                startupNotice = "旧配置与当前版本不兼容，且无法创建备份；当前使用空配置"
+                startupMessages.append("旧配置与当前版本不兼容，且无法创建备份；当前使用空配置")
             }
         } catch {
             if let recovery = try? configurationStore.backupAndReset() {
                 configuration = recovery.configuration
-                startupNotice = "配置文件无法读取，已备份为 \(recovery.backupURL.lastPathComponent) 并恢复空配置"
+                startupMessages.append("配置文件无法读取，已备份为 \(recovery.backupURL.lastPathComponent) 并恢复空配置")
             } else {
                 configuration = .defaults
-                startupNotice = "读取配置失败：\(error.localizedDescription)"
+                startupMessages.append("读取配置失败：\(error.localizedDescription)")
             }
         }
+        do {
+            fightStageMemory = try fightStageMemoryStore.load()
+        } catch {
+            fightStageMemory = .init()
+            startupMessages.append("读取常规关卡记录失败：\(error.localizedDescription)")
+        }
+        startupNotice = startupMessages.isEmpty ? nil : startupMessages.joined(separator: "；")
         activityEntries = historyStore.load()
         installedPlanIDs = launchAgentManager.installedPlanIDs
         currentPlanID = configuration.plans.first?.id
         if !ProcessLock.isHeld(at: directories.lock) {
-            try? MAAConfigurationWriter(directories: directories).prepare(configuration)
+            try? MAAConfigurationWriter(directories: directories).prepare(
+                configuration,
+                fightStageMemory: fightStageMemory
+            )
         }
     }
 
@@ -301,7 +314,11 @@ final class AppModel: ObservableObject {
     }
 
     func readinessIssues(for planID: UUID?) -> [ReadinessIssue] {
-        ConfigurationValidator.readinessProblems(in: configuration, planID: planID)
+        ConfigurationValidator.readinessProblems(
+            in: configuration,
+            planID: planID,
+            fightStageMemory: fightStageMemory
+        )
     }
 
     func planReadiness(for planID: UUID) -> PlanReadiness {
@@ -406,7 +423,10 @@ final class AppModel: ObservableObject {
         do {
             refreshExternalRunState()
             if !isWorkflowRunning {
-                try MAAConfigurationWriter(directories: directories).prepare(configuration)
+                try MAAConfigurationWriter(directories: directories).prepare(
+                    configuration,
+                    fightStageMemory: fightStageMemory
+                )
             }
             try configurationStore.save(configuration)
             if showConfirmation { showBanner("配置已保存") }
@@ -454,6 +474,7 @@ final class AppModel: ObservableObject {
             self.isRunning = false
             self.runningPlanID = nil
             self.workflowTask = nil
+            self.reloadFightStageMemory()
             _ = self.saveNow(showConfirmation: false)
             await self.postImportantNotification(for: report, planID: planID)
             if let fatalError = report.fatalError {
@@ -1012,7 +1033,13 @@ final class AppModel: ObservableObject {
         if entries != activityEntries {
             activityEntries = entries
         }
+        reloadFightStageMemory()
         refreshExternalRunState()
+    }
+
+    private func reloadFightStageMemory() {
+        guard let memory = try? fightStageMemoryStore.load(), memory != fightStageMemory else { return }
+        fightStageMemory = memory
     }
 
     func monitorExternalActivity() async {
