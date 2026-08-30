@@ -52,10 +52,28 @@ struct MAAMaintenanceTests {
         #expect(!fixture.model.isWorkflowRunning)
     }
 
+    @Test("isolated application mode never starts automatic MAA maintenance")
+    @MainActor
+    func isolatedApplicationDisablesAutomaticMaintenance() async throws {
+        let fixture = try makeFixture(
+            lastAttempt: nil,
+            allowsAutomaticMAAMaintenance: false
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        fixture.model.prepareApplication()
+        try await Task.sleep(for: .milliseconds(150))
+
+        #expect(!FileManager.default.fileExists(atPath: fixture.arguments.path))
+        #expect(MAAMaintenanceStore(directories: fixture.model.directories).load().lastCoreUpdateAttempt == nil)
+        #expect(!fixture.model.isWorkflowRunning)
+    }
+
     @MainActor
     private func makeFixture(
         lastAttempt: Date?,
-        scheduledRunAfter interval: TimeInterval? = nil
+        scheduledRunAfter interval: TimeInterval? = nil,
+        allowsAutomaticMAAMaintenance: Bool = true
     ) throws -> (root: URL, model: AppModel, arguments: URL) {
         let root = FileManager.default.temporaryDirectory
             .appending(path: "automaa-maa-maintenance-\(UUID().uuidString)", directoryHint: .isDirectory)
@@ -119,6 +137,7 @@ struct MAAMaintenanceTests {
             launchAgentsDirectory: root.appending(path: "LaunchAgents", directoryHint: .isDirectory),
             managesSystemLaunchAgents: false,
             checksForUpdatesAutomatically: false,
+            allowsAutomaticMAAMaintenance: allowsAutomaticMAAMaintenance,
             resourceProbeExecutable: probe
         )
         return (root, model, arguments)

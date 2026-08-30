@@ -41,6 +41,13 @@ public enum MAAProfileName {
 public enum ConfigurationValidator {
     public static func structuralProblems(in configuration: AppConfiguration) -> [ConfigurationProblem] {
         var result: [ConfigurationProblem] = []
+        if configuration.schemaVersion != AppConfiguration.currentSchemaVersion {
+            result.append(.init(
+                id: "schema-version",
+                severity: .error,
+                message: "配置协议 schema v\(configuration.schemaVersion) 与当前版本不兼容"
+            ))
+        }
         appendDuplicateProblems(
             configuration.clients.map(\.id),
             id: "duplicate-client-id",

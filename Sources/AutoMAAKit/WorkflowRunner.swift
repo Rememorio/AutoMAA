@@ -519,31 +519,29 @@ public final class WorkflowRunner {
                     visitedSteps += 1
                     if outcome.succeeded {
                         report.succeededSteps += 1
-                        if let summary = outcome.fightSummary,
-                           let stage = FightStagePolicy.regularStage(
-                               from: summary.stage,
-                               times: summary.times
-                           ) {
+                        if let summary = outcome.fightSummary {
                             var updatedMemory = fightStageMemory
-                            updatedMemory.remember(
-                                stage,
+                            if updatedMemory.rememberSuccessful(
+                                stage: summary.stage,
+                                times: summary.times,
                                 clientID: client.id,
                                 accountID: account.id
-                            )
-                            do {
-                                try fightStageMemoryStore.save(updatedMemory)
-                                fightStageMemory = updatedMemory
-                            } catch {
-                                emit(
-                                    .runningTask,
-                                    "\(accountText(account))：常规关卡记录保存失败",
-                                    Double(visitedSteps) / Double(totalSteps),
-                                    .warning,
-                                    client: client,
-                                    account: account,
-                                    task: task,
-                                    details: error.localizedDescription
-                                )
+                            ) {
+                                do {
+                                    try fightStageMemoryStore.save(updatedMemory)
+                                    fightStageMemory = updatedMemory
+                                } catch {
+                                    emit(
+                                        .runningTask,
+                                        "\(accountText(account))：常规关卡记录保存失败",
+                                        Double(visitedSteps) / Double(totalSteps),
+                                        .warning,
+                                        client: client,
+                                        account: account,
+                                        task: task,
+                                        details: error.localizedDescription
+                                    )
+                                }
                             }
                         }
                         state.completedSteps.insert(key)

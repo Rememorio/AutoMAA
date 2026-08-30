@@ -40,7 +40,7 @@ AutoMAA 的用户数据保存在：
 
 每个方案的 `schedule.rules` 保存周计划。每条规则包含一组语义化星期值（例如 `monday`、`sunday`）以及 `hour`、`minute`；同一方案不能在同一个星期出现两条规则。LaunchAgent 安装时才会把这些值转换为系统使用的 `Weekday` 数字，配置文件不依赖 Foundation 或 launchd 的星期编号。
 
-理智作战的 `stageStrategy` 保存关卡来源。已有 schema v5 配置没有该字段时，空 `stage` 继续解释为“游戏当前/上次”，非空 `stage` 继续解释为“固定关卡”，不需要迁移或重置。常规关卡记录使用独立的 `fight-stage-memory.json`，不会把账号相关运行状态复制进每个自动化方案。
+理智作战的 `stageStrategy` 保存关卡来源，是 schema v6 的必要字段：`gameCurrentOrLast` 沿用 MAA 当前/上次关卡，`rememberedRegular` 使用 AutoMAA 按账号记住的最近成功常规关卡，`fixed` 使用方案内的 `stage`。常规关卡记录使用独立的 `fight-stage-memory.json`，不会把账号相关运行状态复制进每个自动化方案。
 
 ## 哪些文件可以编辑
 
@@ -52,7 +52,7 @@ AutoMAA 的用户数据保存在：
 
 备份前先停止正在运行的工作流，然后复制整个 AutoMAA 数据目录。恢复时确保 App 和配置协议版本兼容。
 
-当前配置协议以 v0.6.0 生成的完整 schema v5 为唯一基线。schema v4 及更早版本、缺少必要字段、仍使用旧版每日时间结构或无法解码的配置都不自动迁移。图形界面会先在同一目录创建 `config-schema-v*.backup.json`，再恢复通用空配置；无界面 Runner 只报告无法处理的配置并退出。备份仍可能含账号片段和本机路径，分享前同样需要脱敏。
+当前配置协议以 v0.10.0 生成的完整 schema v6 为唯一基线。schema v5 及更早版本、缺少必要字段、仍使用旧版每日时间结构或无法解码的配置都不自动迁移。图形界面会先在同一目录创建 `config-schema-v*.backup.json`，再恢复通用空配置；无界面 Runner 只报告无法处理的配置并退出。备份仍可能含账号片段和本机路径，分享前同样需要脱敏。
 
 ## 配置中不包含什么
 

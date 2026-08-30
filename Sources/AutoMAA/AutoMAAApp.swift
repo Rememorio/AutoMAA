@@ -12,7 +12,8 @@ struct AutoMAAApp: App {
                 directories: AppDirectories(root: root),
                 launchAgentsDirectory: root.appending(path: "LaunchAgents", directoryHint: .isDirectory),
                 managesSystemLaunchAgents: false,
-                checksForUpdatesAutomatically: false
+                checksForUpdatesAutomatically: false,
+                allowsAutomaticMAAMaintenance: false
             ))
             return
         }

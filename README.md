@@ -138,6 +138,7 @@ AutoMAA 的用户数据保存在：
 ~/Library/Application Support/AutoMAA
 ├── config.json             # 用户配置
 ├── execution-state.json    # 当日断点
+├── fight-stage-memory.json # 按客户端与账号记住的最近常规关卡
 ├── history.json            # 界面中的活动记录
 ├── Logs/                   # 经过脱敏的诊断日志与定时运行输出
 ├── Updates/                # 已下载、待安装的 AutoMAA 更新
@@ -146,7 +147,7 @@ AutoMAA 的用户数据保存在：
 
 `MAA/` 下的文件由 AutoMAA 管理，不建议手动编辑。删除方案、客户端或账号时，AutoMAA 只会清理由自身清单或严格命名规则确认归属的生成文件。
 
-当前配置协议以 v0.6.0 生成的完整 schema v5 为唯一基线。schema v4 及更早配置、缺少必要字段或损坏的配置不再迁移：图形界面会先备份原文件再恢复通用空配置，后台 Runner 只报告无法处理的配置并退出。
+当前配置协议以 v0.10.0 生成的完整 schema v6 为唯一基线。schema v5 及更早配置、缺少必要字段或损坏的配置不再迁移：图形界面会先备份原文件再恢复通用空配置，后台 Runner 只报告无法处理的配置并退出。
 
 ## 开发
 

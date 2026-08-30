@@ -189,18 +189,15 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertThrowsError(try JSONDecoder().decode(AppConfiguration.self, from: invalidData))
     }
 
-    func testCurrentConfigurationDefaultsMissingMAAUpdateSettingsToDisabled() throws {
+    func testCurrentConfigurationRequiresMAAUpdateSettings() throws {
         var config = populatedConfiguration()
         config.maaUpdates.automaticallyUpdatesCoreAndResources = true
         let data = try JSONEncoder().encode(config)
         var payload = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         payload.removeValue(forKey: "maaUpdates")
 
-        let compatibleData = try JSONSerialization.data(withJSONObject: payload)
-        let decoded = try JSONDecoder().decode(AppConfiguration.self, from: compatibleData)
-
-        XCTAssertEqual(decoded.schemaVersion, AppConfiguration.currentSchemaVersion)
-        XCTAssertFalse(decoded.maaUpdates.automaticallyUpdatesCoreAndResources)
+        let invalidData = try JSONSerialization.data(withJSONObject: payload)
+        XCTAssertThrowsError(try JSONDecoder().decode(AppConfiguration.self, from: invalidData))
     }
 
     func testAutomaticMAAUpdatePolicyThrottlesAndProtectsUpcomingSchedules() {
@@ -531,19 +528,11 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertThrowsError(try JSONDecoder().decode(FightConfiguration.self, from: incomplete))
     }
 
-    func testFightStageStrategyDecodesExistingSchemaWithoutMigration() throws {
-        let legacyCurrent = Data(#"{"enabled":true,"settingsMode":"custom","stage":"","drGrandet":false}"#.utf8)
-        let legacyFixed = Data(#"{"enabled":true,"settingsMode":"custom","stage":"Annihilation","drGrandet":false}"#.utf8)
+    func testCurrentFightConfigurationRequiresStageStrategy() {
+        let incomplete = Data(#"{"enabled":true,"settingsMode":"custom","stage":"","drGrandet":false}"#.utf8)
 
-        XCTAssertEqual(
-            try JSONDecoder().decode(FightConfiguration.self, from: legacyCurrent).stageStrategy,
-            .gameCurrentOrLast
-        )
-        XCTAssertEqual(
-            try JSONDecoder().decode(FightConfiguration.self, from: legacyFixed).stageStrategy,
-            .fixed
-        )
-        XCTAssertEqual(AppConfiguration.currentSchemaVersion, 5)
+        XCTAssertThrowsError(try JSONDecoder().decode(FightConfiguration.self, from: incomplete))
+        XCTAssertEqual(AppConfiguration.currentSchemaVersion, 6)
     }
 
     func testPlanScopesAccountsDynamically() {
@@ -614,7 +603,11 @@ final class AutoMAAKitTests: XCTestCase {
             "EA-3"
         )
 
-        let missingMemory = FightStageMemory(entries: [memory.entries[0]])
+        let missingMemory = FightStageMemory(entries: [FightStageMemoryEntry(
+            clientID: firstClient.id,
+            accountID: firstAccount.id,
+            stage: "AT-4"
+        )])
         try writer.prepare(config, fightStageMemory: missingMemory)
         let missingName = writer.taskName(
             planID: plan.id,
@@ -656,6 +649,36 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertNil(FightStagePolicy.regularStage(from: "AT-4", times: 0))
         XCTAssertNil(FightStagePolicy.regularStage(from: "Annihilation", times: 1))
         XCTAssertNil(FightStagePolicy.regularStage(from: "Chernobog@Annihilation", times: 1))
+    }
+
+    func testFightStageResolutionHasOneSourceOfTruth() {
+        let clientID = UUID()
+        let accountID = UUID()
+        var configuration = FightConfiguration()
+        var memory = FightStageMemory()
+
+        XCTAssertEqual(
+            FightStagePolicy.resolve(configuration, memory: memory, clientID: clientID, accountID: accountID),
+            .value("")
+        )
+
+        configuration.stageStrategy = .rememberedRegular
+        XCTAssertEqual(
+            FightStagePolicy.resolve(configuration, memory: memory, clientID: clientID, accountID: accountID),
+            .unavailable
+        )
+
+        memory.remember("AT-4", clientID: clientID, accountID: accountID)
+        XCTAssertEqual(
+            FightStagePolicy.resolve(configuration, memory: memory, clientID: clientID, accountID: accountID),
+            .value("AT-4")
+        )
+
+        configuration.usesCustomSettings = false
+        XCTAssertEqual(
+            FightStagePolicy.resolve(configuration, memory: memory, clientID: clientID, accountID: accountID),
+            .omitted
+        )
     }
 
     func testFightStageMemoryStoreRoundTripsAndRejectsInvalidEntries() throws {
@@ -1210,7 +1233,7 @@ final class AutoMAAKitTests: XCTestCase {
         var payload = try XCTUnwrap(
             JSONSerialization.jsonObject(with: JSONEncoder().encode(populatedConfiguration())) as? [String: Any]
         )
-        payload["schemaVersion"] = 4
+        payload["schemaVersion"] = 5
         var plans = try XCTUnwrap(payload["plans"] as? [[String: Any]])
         plans[0]["schedule"] = ["enabled": true, "hour": 7, "minute": 45]
         plans[1]["schedule"] = ["enabled": false, "hour": 21, "minute": 10]
@@ -1219,7 +1242,7 @@ final class AutoMAAKitTests: XCTestCase {
 
         let store = ConfigurationStore(directories: directories)
         XCTAssertThrowsError(try store.load()) { error in
-            XCTAssertEqual(error as? ConfigurationStoreError, .unsupportedSchema(4))
+            XCTAssertEqual(error as? ConfigurationStoreError, .unsupportedSchema(5))
         }
         let recovery = try store.backupAndReset()
 
@@ -1230,8 +1253,34 @@ final class AutoMAAKitTests: XCTestCase {
         let backup = try XCTUnwrap(
             JSONSerialization.jsonObject(with: Data(contentsOf: recovery.backupURL)) as? [String: Any]
         )
-        XCTAssertEqual(backup["schemaVersion"] as? Int, 4)
+        XCTAssertEqual(backup["schemaVersion"] as? Int, 5)
         XCTAssertEqual(try store.load(), recovery.configuration)
+    }
+
+    func testApplicationConfigurationLoadOwnsBackupAndResetRecovery() throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        try directories.prepare()
+        var payload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(populatedConfiguration())) as? [String: Any]
+        )
+        payload["schemaVersion"] = 5
+        try JSONSerialization.data(withJSONObject: payload).write(to: directories.configuration)
+
+        let result = ConfigurationStore(directories: directories).loadForApplication()
+
+        XCTAssertEqual(result.configuration.schemaVersion, AppConfiguration.currentSchemaVersion)
+        XCTAssertTrue(result.configuration.clients.isEmpty)
+        XCTAssertEqual(result.configuration.plans.map(\.name), ["轻量日常", "完整日常"])
+        XCTAssertTrue(result.startupNotice?.contains("配置协议不兼容") == true)
+        XCTAssertEqual(
+            try ConfigurationStore(directories: directories).load(),
+            result.configuration
+        )
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: root.path).contains {
+            $0.hasPrefix("config-schema-v5.backup")
+        })
     }
 
     func testCurrentSchemaRejectsLegacyDailyScheduleShape() throws {
@@ -1758,6 +1807,16 @@ final class AutoMAAKitTests: XCTestCase {
 
         XCTAssertTrue(messages.contains { $0.contains("步骤顺序已损坏") })
         XCTAssertTrue(messages.contains { $0.contains("连战次数") })
+    }
+
+    func testStructuralValidationRejectsWrongSchemaForEveryEntryPoint() {
+        var config = populatedConfiguration()
+        config.schemaVersion = AppConfiguration.currentSchemaVersion - 1
+
+        let problems = ConfigurationValidator.structuralProblems(in: config)
+
+        XCTAssertEqual(problems.first { $0.id == "schema-version" }?.severity, .error)
+        XCTAssertTrue(problems.first { $0.id == "schema-version" }?.message.contains("不兼容") == true)
     }
 
     func testDormantCustomValuesDoNotBlockRecommendedOrDisabledTasks() {

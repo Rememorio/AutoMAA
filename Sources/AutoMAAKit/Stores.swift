@@ -20,6 +20,11 @@ public struct ConfigurationRecovery: Sendable {
     public let backupURL: URL
 }
 
+public struct ApplicationConfigurationLoad: Sendable {
+    public let configuration: AppConfiguration
+    public let startupNotice: String?
+}
+
 public struct AppDirectories: Sendable {
     public let root: URL
     public let maaConfig: URL
@@ -83,6 +88,25 @@ public struct ConfigurationStore: Sendable {
         return try Self.decoder.decode(AppConfiguration.self, from: data)
     }
 
+    public func loadForApplication() -> ApplicationConfigurationLoad {
+        do {
+            return ApplicationConfigurationLoad(
+                configuration: try load(),
+                startupNotice: nil
+            )
+        } catch ConfigurationStoreError.unsupportedSchema {
+            return recoverForApplication(
+                successNotice: { "配置协议不兼容；旧配置已备份为 \($0.lastPathComponent)，并恢复为空配置" },
+                failureNotice: "旧配置与当前版本不兼容，且无法创建备份；当前使用空配置"
+            )
+        } catch {
+            return recoverForApplication(
+                successNotice: { "配置文件无法读取，已备份为 \($0.lastPathComponent) 并恢复空配置" },
+                failureNotice: "读取配置失败：\(error.localizedDescription)"
+            )
+        }
+    }
+
     public func backupAndReset() throws -> ConfigurationRecovery {
         try directories.prepare()
         let data = try Data(contentsOf: directories.configuration)
@@ -102,6 +126,22 @@ public struct ConfigurationStore: Sendable {
         try directories.prepare()
         let data = try Self.encoder.encode(configuration)
         try data.write(to: directories.configuration, options: .atomic)
+    }
+
+    private func recoverForApplication(
+        successNotice: (URL) -> String,
+        failureNotice: String
+    ) -> ApplicationConfigurationLoad {
+        guard let recovery = try? backupAndReset() else {
+            return ApplicationConfigurationLoad(
+                configuration: .defaults,
+                startupNotice: failureNotice
+            )
+        }
+        return ApplicationConfigurationLoad(
+            configuration: recovery.configuration,
+            startupNotice: successNotice(recovery.backupURL)
+        )
     }
 
     private static let encoder: JSONEncoder = {
@@ -270,73 +310,6 @@ public struct ExecutionStateStore: Sendable {
         formatter.timeZone = .current
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter.string(from: Date())
-    }
-
-    private static let encoder: JSONEncoder = {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        return encoder
-    }()
-
-    private static let decoder: JSONDecoder = {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return decoder
-    }()
-}
-
-public enum FightStageMemoryStoreError: LocalizedError, Equatable {
-    case unsupportedSchema(Int)
-    case invalidEntry
-
-    public var errorDescription: String? {
-        switch self {
-        case let .unsupportedSchema(version):
-            "常规关卡记录 schema v\(version) 与当前版本不兼容"
-        case .invalidEntry:
-            "常规关卡记录包含无效或重复的账号数据"
-        }
-    }
-}
-
-public struct FightStageMemoryStore: Sendable {
-    public let directories: AppDirectories
-
-    public init(directories: AppDirectories = .init()) {
-        self.directories = directories
-    }
-
-    public func load() throws -> FightStageMemory {
-        guard FileManager.default.fileExists(atPath: directories.fightStageMemory.path) else {
-            return FightStageMemory()
-        }
-        let data = try Data(contentsOf: directories.fightStageMemory)
-        let memory = try Self.decoder.decode(FightStageMemory.self, from: data)
-        try validate(memory)
-        return memory
-    }
-
-    public func save(_ memory: FightStageMemory) throws {
-        try validate(memory)
-        try directories.prepare()
-        let data = try Self.encoder.encode(memory)
-        try data.write(to: directories.fightStageMemory, options: .atomic)
-    }
-
-    private func validate(_ memory: FightStageMemory) throws {
-        guard memory.schemaVersion == FightStageMemory.currentSchemaVersion else {
-            throw FightStageMemoryStoreError.unsupportedSchema(memory.schemaVersion)
-        }
-        var keys: Set<String> = []
-        for entry in memory.entries {
-            let key = "\(entry.clientID.uuidString.lowercased())-\(entry.accountID.uuidString.lowercased())"
-            guard keys.insert(key).inserted,
-                  FightStagePolicy.regularStage(from: entry.stage, times: 1) == entry.stage
-            else {
-                throw FightStageMemoryStoreError.invalidEntry
-            }
-        }
     }
 
     private static let encoder: JSONEncoder = {

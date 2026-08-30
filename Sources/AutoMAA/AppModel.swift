@@ -136,6 +136,7 @@ final class AppModel: ObservableObject {
     private var didPrepareApplication = false
     private let startupNotice: String?
     private let checksForUpdatesAutomatically: Bool
+    private let allowsAutomaticMAAMaintenance: Bool
     private let applicationUpdateAvailabilityValidator: (@MainActor () throws -> Void)?
 
     init(
@@ -143,6 +144,7 @@ final class AppModel: ObservableObject {
         launchAgentsDirectory: URL? = nil,
         managesSystemLaunchAgents: Bool = true,
         checksForUpdatesAutomatically: Bool = true,
+        allowsAutomaticMAAMaintenance: Bool = true,
         runnerExecutableURL: URL? = nil,
         resourceProbeExecutable: URL? = nil,
         softwareUpdateService: (any SoftwareUpdateServing)? = nil,
@@ -150,6 +152,7 @@ final class AppModel: ObservableObject {
     ) {
         self.directories = directories
         self.checksForUpdatesAutomatically = checksForUpdatesAutomatically
+        self.allowsAutomaticMAAMaintenance = allowsAutomaticMAAMaintenance
         self.applicationUpdateAvailabilityValidator = applicationUpdateAvailabilityValidator
         configuredRunnerExecutableURL = runnerExecutableURL
         self.resourceProbeExecutable = resourceProbeExecutable
@@ -179,24 +182,10 @@ final class AppModel: ObservableObject {
         maaMaintenanceStore = MAAMaintenanceStore(directories: directories)
         importantNotificationCenter = ImportantNotificationCenter()
         var startupMessages: [String] = []
-        do {
-            configuration = try configurationStore.load()
-        } catch ConfigurationStoreError.unsupportedSchema {
-            if let recovery = try? configurationStore.backupAndReset() {
-                configuration = recovery.configuration
-                startupMessages.append("配置协议不兼容；旧配置已备份为 \(recovery.backupURL.lastPathComponent)，并恢复为空配置")
-            } else {
-                configuration = .defaults
-                startupMessages.append("旧配置与当前版本不兼容，且无法创建备份；当前使用空配置")
-            }
-        } catch {
-            if let recovery = try? configurationStore.backupAndReset() {
-                configuration = recovery.configuration
-                startupMessages.append("配置文件无法读取，已备份为 \(recovery.backupURL.lastPathComponent) 并恢复空配置")
-            } else {
-                configuration = .defaults
-                startupMessages.append("读取配置失败：\(error.localizedDescription)")
-            }
+        let configurationLoad = configurationStore.loadForApplication()
+        configuration = configurationLoad.configuration
+        if let notice = configurationLoad.startupNotice {
+            startupMessages.append(notice)
         }
         do {
             fightStageMemory = try fightStageMemoryStore.load()
@@ -809,7 +798,8 @@ final class AppModel: ObservableObject {
     private func resumeAutomaticMAAUpdateIfNeeded(now: Date = Date()) {
         automaticMAAUpdateWakeTask?.cancel()
         automaticMAAUpdateWakeTask = nil
-        guard configuration.maaUpdates.automaticallyUpdatesCoreAndResources,
+        guard allowsAutomaticMAAMaintenance,
+              configuration.maaUpdates.automaticallyUpdatesCoreAndResources,
               automaticMAAUpdateTask == nil,
               workflowTask == nil,
               applicationUpdateTask == nil,
