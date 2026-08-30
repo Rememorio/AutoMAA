@@ -66,6 +66,58 @@ private final class StubClientRuntime: PortProbing, GameProcessControlling {
     }
 }
 
+private actor StubCommandRunner: CommandRunning {
+    struct Call: Sendable {
+        let arguments: [String]
+        let timeout: TimeInterval
+    }
+
+    private var startupResults: [CommandResult]
+    private var taskResults: [CommandResult]
+    private var recordedCalls: [Call] = []
+
+    init(startupResults: [CommandResult] = [], taskResults: [CommandResult] = []) {
+        self.startupResults = startupResults
+        self.taskResults = taskResults
+    }
+
+    func run(
+        executable: String,
+        arguments: [String],
+        environment: [String: String],
+        timeout: TimeInterval,
+        observeCancellation: Bool
+    ) async throws -> CommandResult {
+        recordedCalls.append(Call(arguments: arguments, timeout: timeout))
+        switch arguments.first {
+        case "dir":
+            return CommandResult(
+                exitCode: 1,
+                standardOutput: "",
+                standardError: "fixture has no MAA installation",
+                timedOut: false
+            )
+        case "startup":
+            return startupResults.isEmpty ? Self.success : startupResults.removeFirst()
+        case "run":
+            return taskResults.isEmpty ? Self.success : taskResults.removeFirst()
+        default:
+            return Self.success
+        }
+    }
+
+    func calls(for command: String) -> [Call] {
+        recordedCalls.filter { $0.arguments.first == command }
+    }
+
+    private static let success = CommandResult(
+        exitCode: 0,
+        standardOutput: "",
+        standardError: "",
+        timedOut: false
+    )
+}
+
 final class AutoMAAKitTests: XCTestCase {
     func testFirstLaunchUsesBlankIdentitiesAndTwoEditableRoutineTemplates() {
         let config = AppConfiguration.defaults
@@ -2046,6 +2098,140 @@ final class AutoMAAKitTests: XCTestCase {
         )
     }
 
+    func testWorkflowTimeoutPolicyMatchesTaskWorkload() {
+        let policy = MAACommandTimeoutPolicy.standard
+        var plan = AutomationPlan.lightRoutine
+
+        plan.recruit.times = 2
+        XCTAssertEqual(policy.taskTimeout(for: .recruit, plan: plan), 300)
+        plan.recruit.times = 12
+        XCTAssertEqual(policy.taskTimeout(for: .recruit, plan: plan), 900)
+        plan.infrast.mode = .collectOnly
+        XCTAssertEqual(policy.taskTimeout(for: .infrast, plan: plan), 900)
+        plan.infrast.mode = .fullShift
+        XCTAssertEqual(policy.taskTimeout(for: .infrast, plan: plan), 1_800)
+        plan.infrast.mode = .customSchedule
+        XCTAssertEqual(policy.taskTimeout(for: .infrast, plan: plan), 3_600)
+        XCTAssertEqual(policy.taskTimeout(for: .fight, plan: plan), 7_200)
+        XCTAssertEqual(policy.taskTimeout(for: .mall, plan: plan), 600)
+        XCTAssertEqual(policy.taskTimeout(for: .award, plan: plan), 300)
+    }
+
+    @MainActor
+    func testTaskTimeoutRestartsClientOnceAndRetriesTheSameTask() async throws {
+        let commandRunner = StubCommandRunner(taskResults: [
+            CommandResult(exitCode: 9, standardOutput: "", standardError: "", timedOut: true),
+            CommandResult(exitCode: 0, standardOutput: "", standardError: "", timedOut: false),
+        ])
+        let (report, runtime) = try await runTaskTimeoutScenario(
+            tasks: [.mall],
+            commandRunner: commandRunner
+        )
+        let taskCalls = await commandRunner.calls(for: "run")
+
+        XCTAssertTrue(report.isSuccess)
+        XCTAssertEqual(taskCalls.count, 2)
+        XCTAssertEqual(taskCalls.map(\.timeout), [600, 600])
+        XCTAssertEqual(runtime.events.count {
+            $0.log.level == .info
+                && $0.log.task == .mall
+                && $0.message.contains("信用与购物执行超时，正在重启客户端")
+        }, 1)
+        XCTAssertTrue(runtime.events.contains {
+            $0.log.level == .success
+                && $0.message == "账号「测试账号」：信用与购物重试后已完成"
+        })
+    }
+
+    @MainActor
+    func testRepeatedTaskTimeoutSkipsTheRestOfTheClient() async throws {
+        let timeout = CommandResult(
+            exitCode: 9,
+            standardOutput: "",
+            standardError: "stalled on an unknown page",
+            timedOut: true
+        )
+        let commandRunner = StubCommandRunner(taskResults: [timeout, timeout])
+        let (report, runtime) = try await runTaskTimeoutScenario(
+            tasks: [.recruit, .infrast, .award],
+            commandRunner: commandRunner
+        )
+        let taskCalls = await commandRunner.calls(for: "run")
+
+        XCTAssertFalse(report.isSuccess)
+        XCTAssertEqual(report.failedSteps, 1)
+        XCTAssertEqual(report.skippedSteps, 2)
+        XCTAssertEqual(report.unexecutedSteps, 2)
+        XCTAssertEqual(taskCalls.count, 2)
+        XCTAssertEqual(runtime.events.count {
+            $0.log.level == .info && $0.message.contains("执行超时，正在重启客户端")
+        }, 1)
+        XCTAssertFalse(runtime.events.contains { $0.log.task == .infrast || $0.log.task == .award })
+        XCTAssertEqual(report.attentionMessages.count, 1)
+        XCTAssertTrue(report.attentionMessages[0].contains("公开招募执行超时"))
+        XCTAssertTrue(report.attentionMessages[0].contains("客户端自动重启后仍未恢复"))
+        XCTAssertTrue(runtime.events.contains {
+            $0.phase == .attention
+                && $0.log.details?.contains("超时上限：7 分钟") == true
+                && $0.log.details?.contains("stalled on an unknown page") == true
+        })
+    }
+
+    @MainActor
+    func testStartupTimeoutRestartsClientOnceBeforeRunningTasks() async throws {
+        let commandRunner = StubCommandRunner(startupResults: [
+            CommandResult(exitCode: 9, standardOutput: "", standardError: "", timedOut: true),
+            CommandResult(exitCode: 0, standardOutput: "", standardError: "", timedOut: false),
+        ])
+        let (report, runtime) = try await runTaskTimeoutScenario(
+            tasks: [.award],
+            commandRunner: commandRunner
+        )
+        let startupCalls = await commandRunner.calls(for: "startup")
+
+        XCTAssertTrue(report.isSuccess)
+        XCTAssertEqual(startupCalls.count, 2)
+        XCTAssertEqual(startupCalls.map(\.timeout), [120, 120])
+        XCTAssertEqual(runtime.events.count {
+            $0.log.level == .info && $0.message.contains("准备超时，正在重启客户端")
+        }, 1)
+        XCTAssertTrue(runtime.events.contains {
+            $0.log.level == .success && $0.message == "账号「测试账号」恢复后已就绪"
+        })
+    }
+
+    @MainActor
+    func testStartupAndTaskTimeoutsShareOneClientRecoveryBudget() async throws {
+        let commandRunner = StubCommandRunner(
+            startupResults: [
+                CommandResult(
+                    exitCode: 9,
+                    standardOutput: "",
+                    standardError: "GameOffline: Auto reconnect disabled, stopping",
+                    timedOut: false
+                ),
+                CommandResult(exitCode: 0, standardOutput: "", standardError: "", timedOut: false),
+            ],
+            taskResults: [
+                CommandResult(exitCode: 9, standardOutput: "", standardError: "", timedOut: true),
+                CommandResult(exitCode: 0, standardOutput: "", standardError: "", timedOut: false),
+            ]
+        )
+        let (report, runtime) = try await runTaskTimeoutScenario(
+            tasks: [.award],
+            commandRunner: commandRunner
+        )
+        let taskCalls = await commandRunner.calls(for: "run")
+
+        XCTAssertFalse(report.isSuccess)
+        XCTAssertEqual(taskCalls.count, 1)
+        XCTAssertEqual(runtime.events.count {
+            $0.log.level == .info && $0.message.contains("正在重启客户端")
+        }, 1)
+        XCTAssertTrue(report.attentionMessages.first?.contains("领取奖励执行超时") == true)
+        XCTAssertTrue(report.attentionMessages.first?.contains("客户端自动重启后仍未恢复") == true)
+    }
+
     @MainActor
     func testRecoveredRetriesRemainVisibleWithoutCreatingWarnings() async throws {
         let (report, runtime) = try await runRetryScenario(startupFailures: 1, taskFailures: 1)
@@ -2200,6 +2386,49 @@ final class AutoMAAKitTests: XCTestCase {
             portProbe: runtime,
             gameController: runtime,
             shutdownPolicy: .immediate,
+            eventSink: runtime.record
+        )
+
+        let report = await runner.run(configuration, planID: plan.id, resumeToday: false)
+        return (report, runtime)
+    }
+
+    @MainActor
+    private func runTaskTimeoutScenario(
+        tasks: [TaskKind],
+        commandRunner: StubCommandRunner
+    ) async throws -> (WorkflowReport, StubClientRuntime) {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = root.appending(path: "Applications/Test Game.app", directoryHint: .isDirectory)
+        try createTestApplication(at: app)
+        let account = AccountConfiguration(name: "测试账号", accountSelector: "fixture-selector")
+        let client = ClientConfiguration(
+            name: "测试客户端",
+            kind: .official,
+            appPath: app.path,
+            address: "127.0.0.1:65490",
+            profileName: "task-timeout",
+            bundleIdentifier: "dev.automaa.tests.task-timeout",
+            accounts: [account]
+        )
+        var plan = AutomationPlan.lightRoutine
+        plan.stepOrder = TaskKind.allCases
+        plan.fight.enabled = tasks.contains(.fight)
+        plan.recruit.enabled = tasks.contains(.recruit)
+        plan.infrast.enabled = tasks.contains(.infrast)
+        plan.mall.enabled = tasks.contains(.mall)
+        plan.award.enabled = tasks.contains(.award)
+        plan.policy.hotUpdateBeforeRun = false
+        plan.policy.maxRetries = 1
+        let configuration = AppConfiguration(cliPath: "/usr/bin/true", clients: [client], plans: [plan])
+        let runtime = StubClientRuntime(closesOnForce: true, opensOnWait: true)
+        let runner = WorkflowRunner(
+            directories: AppDirectories(root: root),
+            portProbe: runtime,
+            gameController: runtime,
+            shutdownPolicy: .immediate,
+            commandRunner: commandRunner,
             eventSink: runtime.record
         )
 

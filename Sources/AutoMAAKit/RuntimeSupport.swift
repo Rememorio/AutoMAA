@@ -118,7 +118,7 @@ enum StartupFailureClassifier {
         if containsAny(value, [
             "network", "timeout", "timed out", "connection", "lookup address", "dns",
             "screencapfailed", "screencap failed",
-            "网络", "连接超时", "无法连接",
+            "网络", "执行超时", "连接超时", "无法连接",
         ]) {
             return .init(
                 scope: .client,

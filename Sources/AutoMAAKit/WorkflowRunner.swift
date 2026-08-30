@@ -51,17 +51,65 @@ struct ClientShutdownPolicy: Sendable, Equatable {
     )
 }
 
+struct MAACommandTimeoutPolicy: Sendable, Equatable {
+    let startup: TimeInterval
+    let shutdown: TimeInterval
+    let fight: TimeInterval
+    let recruitBase: TimeInterval
+    let recruitPerSlot: TimeInterval
+    let recruitMaximum: TimeInterval
+    let infrastCollectOnly: TimeInterval
+    let infrastFullShift: TimeInterval
+    let infrastCustomSchedule: TimeInterval
+    let mall: TimeInterval
+    let award: TimeInterval
+
+    static let standard = MAACommandTimeoutPolicy(
+        startup: 120,
+        shutdown: 60,
+        fight: 7_200,
+        recruitBase: 180,
+        recruitPerSlot: 60,
+        recruitMaximum: 900,
+        infrastCollectOnly: 900,
+        infrastFullShift: 1_800,
+        infrastCustomSchedule: 3_600,
+        mall: 600,
+        award: 300
+    )
+
+    func taskTimeout(for task: TaskKind, plan: AutomationPlan) -> TimeInterval {
+        switch task {
+        case .fight:
+            fight
+        case .recruit:
+            min(recruitMaximum, recruitBase + recruitPerSlot * Double(max(0, plan.recruit.times)))
+        case .infrast:
+            switch plan.infrast.mode {
+            case .collectOnly: infrastCollectOnly
+            case .fullShift: infrastFullShift
+            case .customSchedule: infrastCustomSchedule
+            }
+        case .mall:
+            mall
+        case .award:
+            award
+        }
+    }
+}
+
 @MainActor
 public final class WorkflowRunner {
     public typealias EventSink = @MainActor @Sendable (RunnerEvent) -> Void
     public typealias NoticeSink = @MainActor @Sendable ([WorkflowNotice], UUID) async -> NotificationDeliveryResult
 
     private let directories: AppDirectories
-    private let commandRunner = CommandRunner()
+    private let commandRunner: any CommandRunning
     private let resourceProbeExecutable: URL
     private let portProbe: any PortProbing
     private let gameController: any GameProcessControlling
     private let shutdownPolicy: ClientShutdownPolicy
+    private let timeoutPolicy: MAACommandTimeoutPolicy
     private let maintenanceRetryDelay: Duration
     private let historyStore: HistoryStore
     private let diagnosticLogStore: DiagnosticLogStore
@@ -72,7 +120,7 @@ public final class WorkflowRunner {
     private var currentRunID: UUID?
     private var currentSensitiveValues: [String] = []
     private var runProgress = MonotonicProgress()
-    private var restartedClientsForGameOffline: Set<UUID> = []
+    private var restartedClientsForRecovery: Set<UUID> = []
 
     public convenience init(
         directories: AppDirectories = .init(),
@@ -112,6 +160,8 @@ public final class WorkflowRunner {
         portProbe: any PortProbing,
         gameController: any GameProcessControlling,
         shutdownPolicy: ClientShutdownPolicy,
+        commandRunner: any CommandRunning = CommandRunner(),
+        timeoutPolicy: MAACommandTimeoutPolicy = .standard,
         maintenanceRetryDelay: Duration = .seconds(5),
         resourceProbeExecutable: URL? = nil,
         noticeSink: NoticeSink? = nil,
@@ -121,6 +171,8 @@ public final class WorkflowRunner {
         self.portProbe = portProbe
         self.gameController = gameController
         self.shutdownPolicy = shutdownPolicy
+        self.commandRunner = commandRunner
+        self.timeoutPolicy = timeoutPolicy
         self.maintenanceRetryDelay = maintenanceRetryDelay
         self.resourceProbeExecutable = resourceProbeExecutable ?? Self.defaultResourceProbeExecutable()
         historyStore = HistoryStore(directories: directories)
@@ -1002,17 +1054,21 @@ public final class WorkflowRunner {
         }
         arguments += commonArguments(client)
         var remainingRetries = max(0, policy.maxRetries)
-        var didRestartForGameOffline = false
+        var didRestartClient = false
         var didRetry = false
         var lastResult = CommandResult(exitCode: -1, standardOutput: "", standardError: "", timedOut: false)
         while true {
             guard !Task.isCancelled else { throw RuntimeError.cancelled }
-            lastResult = await runCommand(executable: configuration.cliPath, arguments: arguments, timeout: 120)
+            lastResult = await runCommand(
+                executable: configuration.cliPath,
+                arguments: arguments,
+                timeout: timeoutPolicy.startup
+            )
             guard !lastResult.cancelled, !Task.isCancelled else { throw RuntimeError.cancelled }
             if lastResult.exitCode == 0, !lastResult.timedOut {
                 emit(
                     .switchingAccount,
-                    "\(accountText(account))\(didRestartForGameOffline ? "恢复后" : (didRetry ? "重试后" : ""))已就绪",
+                    "\(accountText(account))\(didRestartClient ? "恢复后" : (didRetry ? "重试后" : ""))已就绪",
                     0,
                     .success,
                     client: client,
@@ -1024,22 +1080,23 @@ public final class WorkflowRunner {
             if StartupFailureClassifier.isMAACoreInitializationFailure(detail) {
                 break
             }
-            if StartupFailureClassifier.isGameOffline(detail),
-               !restartedClientsForGameOffline.contains(client.id) {
-                restartedClientsForGameOffline.insert(client.id)
-                didRestartForGameOffline = true
-                emit(
-                    .switchingAccount,
-                    "检测到游戏连接离线，正在重启\(clientText(client))后恢复\(accountText(account))",
-                    0,
-                    .info,
-                    client: client,
+            if lastResult.timedOut || StartupFailureClassifier.isGameOffline(detail) {
+                let message = lastResult.timedOut
+                    ? "\(accountText(account))准备超时，正在重启\(clientText(client))后恢复"
+                    : "检测到游戏连接离线，正在重启\(clientText(client))后恢复\(accountText(account))"
+                if try await restartClientForRecovery(
+                    client,
+                    configuration: configuration,
+                    message: message,
                     account: account,
-                    details: detail
-                )
-                try await close(client, configuration: configuration)
-                try await launch(client, configuredClients: configuration.clients)
-                continue
+                    details: lastResult.timedOut
+                        ? timeoutDetails(timeout: timeoutPolicy.startup, output: detail)
+                        : detail
+                ) {
+                    didRestartClient = true
+                    continue
+                }
+                break
             }
             guard remainingRetries > 0 else { break }
             let retry = policy.maxRetries - remainingRetries + 1
@@ -1067,6 +1124,30 @@ public final class WorkflowRunner {
             guidance: diagnosis.guidance,
             details: detail
         )
+    }
+
+    private func restartClientForRecovery(
+        _ client: ClientConfiguration,
+        configuration: AppConfiguration,
+        message: String,
+        account: AccountConfiguration?,
+        task: TaskKind? = nil,
+        details: String? = nil
+    ) async throws -> Bool {
+        guard restartedClientsForRecovery.insert(client.id).inserted else { return false }
+        emit(
+            task == nil ? .switchingAccount : .runningTask,
+            message,
+            0,
+            .info,
+            client: client,
+            account: account,
+            task: task,
+            details: details
+        )
+        try await close(client, configuration: configuration)
+        try await launch(client, configuredClients: configuration.clients)
+        return true
     }
 
     private func maaResourceCompatibilityIssue(cliPath: String) async -> MAAResourceCompatibilityIssue? {
@@ -1195,6 +1276,7 @@ public final class WorkflowRunner {
             task: task
         )
         let attempts = max(1, plan.policy.maxRetries + 1)
+        let timeout = timeoutPolicy.taskTimeout(for: task, plan: plan)
         var notices: [WorkflowNotice] = []
         var failureDetails: String?
         for attempt in 1...attempts {
@@ -1211,7 +1293,7 @@ public final class WorkflowRunner {
             let result = await runCommand(
                 executable: configuration.cliPath,
                 arguments: ["run", taskName] + commonArguments(client),
-                timeout: task == .fight ? 7_200 : 900
+                timeout: timeout
             )
             guard !result.cancelled, !Task.isCancelled else { throw RuntimeError.cancelled }
             let outputNotices = workflowNotices(
@@ -1243,6 +1325,33 @@ public final class WorkflowRunner {
                 )
             }
             failureDetails = shortOutput(result, sensitiveValues: client.accounts.map(\.accountSelector))
+            if result.timedOut {
+                guard attempt < attempts,
+                      try await restartClientForRecovery(
+                          client,
+                          configuration: configuration,
+                          message: "\(accountText(account))：\(task.title)执行超时，正在重启\(clientText(client))后重试（\(attempt)/\(attempts - 1)）",
+                          account: account,
+                          task: task,
+                          details: timeoutDetails(timeout: timeout, output: failureDetails)
+                      )
+                else {
+                    throw taskTimeoutIntervention(
+                        task: task,
+                        account: account,
+                        timeout: timeout,
+                        details: failureDetails,
+                        recoveredBeforeFailure: restartedClientsForRecovery.contains(client.id)
+                    )
+                }
+                try await switchAccount(
+                    account,
+                    client: client,
+                    configuration: configuration,
+                    policy: plan.policy
+                )
+                continue
+            }
             if attempt < attempts {
                 emit(
                     .runningTask,
@@ -1272,6 +1381,33 @@ public final class WorkflowRunner {
             completionSummary: nil,
             failureDetails: failureDetails
         )
+    }
+
+    private func taskTimeoutIntervention(
+        task: TaskKind,
+        account: AccountConfiguration,
+        timeout: TimeInterval,
+        details: String?,
+        recoveredBeforeFailure: Bool
+    ) -> ManualInterventionError {
+        ManualInterventionError(
+            scope: .client,
+            reason: "\(accountText(account))：\(task.title)执行超时",
+            guidance: recoveredBeforeFailure
+                ? "客户端自动重启后仍未恢复，可能停在网络、登录、更新或异常弹窗页面；请手动进入一次主界面，本次将跳过该客户端"
+                : "客户端状态已不可靠；请手动检查网络、登录、更新或异常弹窗，本次将跳过该客户端",
+            details: timeoutDetails(timeout: timeout, output: details)
+        )
+    }
+
+    private func timeoutDetails(timeout: TimeInterval, output: String?) -> String {
+        let limit = if timeout.truncatingRemainder(dividingBy: 60) == 0 {
+            "\(Int(timeout / 60)) 分钟"
+        } else {
+            "\(Int(timeout)) 秒"
+        }
+        guard let output, !output.isEmpty else { return "超时上限：\(limit)" }
+        return "超时上限：\(limit)\n\(output)"
     }
 
     private func completionSummary(for task: TaskKind, output: String) -> TaskCompletionSummary? {
@@ -1322,7 +1458,7 @@ public final class WorkflowRunner {
             _ = await runCommand(
                 executable: configuration.cliPath,
                 arguments: ["closedown", client.kind.maaClientType] + commonArguments(client),
-                timeout: 60,
+                timeout: timeoutPolicy.shutdown,
                 ignoreCancellation: true
             )
             if await waitUntilClosed(client, timeout: shutdownPolicy.maaGracePeriod) {
@@ -1553,7 +1689,7 @@ public final class WorkflowRunner {
         currentRunID = runID
         currentSensitiveValues = sensitiveValues
         runProgress.reset()
-        restartedClientsForGameOffline = []
+        restartedClientsForRecovery = []
         diagnosticLogStore.begin(runID: runID)
     }
 

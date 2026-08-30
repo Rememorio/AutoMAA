@@ -41,7 +41,17 @@ public enum CommandRunnerError: LocalizedError {
     }
 }
 
-public struct CommandRunner: Sendable {
+protocol CommandRunning: Sendable {
+    func run(
+        executable: String,
+        arguments: [String],
+        environment: [String: String],
+        timeout: TimeInterval,
+        observeCancellation: Bool
+    ) async throws -> CommandResult
+}
+
+public struct CommandRunner: CommandRunning, Sendable {
     public init() {}
 
     public func run(
