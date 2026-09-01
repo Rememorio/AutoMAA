@@ -1105,7 +1105,12 @@ public final class WorkflowRunner {
                 timeout: timeoutPolicy.startup
             )
             guard !lastResult.cancelled, !Task.isCancelled else { throw RuntimeError.cancelled }
-            if lastResult.exitCode == 0, !lastResult.timedOut {
+            let detail = shortOutput(lastResult, sensitiveValues: [selector].compactMap { $0 })
+            let outcome = StartupFailureClassifier.commandOutcome(
+                result: lastResult,
+                output: detail
+            )
+            if outcome == .ready {
                 emit(
                     .switchingAccount,
                     "\(accountText(account))\(didRestartClient ? "恢复后" : (didRetry ? "重试后" : ""))已就绪",
@@ -1116,11 +1121,10 @@ public final class WorkflowRunner {
                 )
                 return
             }
-            let detail = shortOutput(lastResult, sensitiveValues: [selector].compactMap { $0 })
-            if StartupFailureClassifier.isMAACoreInitializationFailure(detail) {
+            if outcome == .coreInitializationFailed {
                 break
             }
-            if lastResult.timedOut || StartupFailureClassifier.isGameOffline(detail) {
+            if outcome == .connectionLost {
                 let message = lastResult.timedOut
                     ? "\(accountText(account))准备超时，正在重启\(clientText(client))后恢复"
                     : "检测到游戏连接离线，正在重启\(clientText(client))后恢复\(accountText(account))"

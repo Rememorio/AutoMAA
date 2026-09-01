@@ -48,6 +48,13 @@ struct StartupFailureDiagnosis: Equatable {
     let guidance: String
 }
 
+enum StartupCommandOutcome: Equatable {
+    case ready
+    case coreInitializationFailed
+    case connectionLost
+    case failed
+}
+
 enum StartupFailureClassifier {
     static func isMAACoreInitializationFailure(_ output: String) -> Bool {
         containsAny(output.lowercased(), [
@@ -60,6 +67,19 @@ enum StartupFailureClassifier {
         containsAny(output.lowercased(), [
             "gameoffline", "game offline", "auto reconnect disabled", "游戏连接已离线",
         ])
+    }
+
+    static func commandOutcome(result: CommandResult, output: String) -> StartupCommandOutcome {
+        if isMAACoreInitializationFailure(output) {
+            return .coreInitializationFailed
+        }
+        if result.timedOut || isGameOffline(output) {
+            return .connectionLost
+        }
+        if result.exitCode == 0 {
+            return .ready
+        }
+        return .failed
     }
 
     static func diagnose(output: String, hasAccountSelector: Bool) -> StartupFailureDiagnosis {

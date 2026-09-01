@@ -1888,6 +1888,44 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertTrue(result.guidance.contains("重启客户端后仍未恢复"))
     }
 
+    func testStartupCommandOutcomeRejectsGameOfflineDespiteZeroExitCode() {
+        let result = CommandResult(
+            exitCode: 0,
+            standardOutput: "",
+            standardError: "GameOffline: Auto reconnect disabled, stopping",
+            timedOut: false
+        )
+
+        XCTAssertEqual(
+            StartupFailureClassifier.commandOutcome(result: result, output: result.combinedOutput),
+            .connectionLost
+        )
+    }
+
+    func testStartupCommandOutcomeRequiresCleanSuccessfulResult() {
+        XCTAssertEqual(
+            StartupFailureClassifier.commandOutcome(
+                result: .init(exitCode: 0, standardOutput: "startup complete", standardError: "", timedOut: false),
+                output: "startup complete"
+            ),
+            .ready
+        )
+        XCTAssertEqual(
+            StartupFailureClassifier.commandOutcome(
+                result: .init(exitCode: 0, standardOutput: "", standardError: "MaaCore returned an error", timedOut: false),
+                output: "MaaCore returned an error"
+            ),
+            .coreInitializationFailed
+        )
+        XCTAssertEqual(
+            StartupFailureClassifier.commandOutcome(
+                result: .init(exitCode: 1, standardOutput: "", standardError: "unknown failure", timedOut: false),
+                output: "unknown failure"
+            ),
+            .failed
+        )
+    }
+
     func testStartupFailureClassifierRecognizesMAACoreInitializationFailure() {
         let output = "Error: MaaCore returned an error, check its log for details"
         let result = StartupFailureClassifier.diagnose(output: output, hasAccountSelector: false)
@@ -2479,6 +2517,37 @@ final class AutoMAAKitTests: XCTestCase {
             $0.log.level == .info && $0.message.contains("检测到游戏连接离线，正在重启客户端")
         }, 1)
         XCTAssertGreaterThanOrEqual(runtime.terminationRequests.filter { $0 }.count, 2)
+    }
+
+    @MainActor
+    func testGameOfflineWithZeroExitCodeRestartsBeforeRunningTasks() async throws {
+        let commandRunner = StubCommandRunner(
+            startupResults: [
+                CommandResult(
+                    exitCode: 0,
+                    standardOutput: "",
+                    standardError: "GameOffline: Auto reconnect disabled, stopping",
+                    timedOut: false
+                ),
+                CommandResult(exitCode: 0, standardOutput: "startup complete", standardError: "", timedOut: false),
+            ]
+        )
+        let (report, runtime) = try await runTaskTimeoutScenario(
+            tasks: [.award],
+            commandRunner: commandRunner
+        )
+        let startupCalls = await commandRunner.calls(for: "startup")
+        let taskCalls = await commandRunner.calls(for: "run")
+
+        XCTAssertTrue(report.isSuccess)
+        XCTAssertEqual(startupCalls.count, 2)
+        XCTAssertEqual(taskCalls.count, 1)
+        XCTAssertEqual(runtime.events.count {
+            $0.log.level == .info && $0.message.contains("检测到游戏连接离线，正在重启客户端")
+        }, 1)
+        XCTAssertTrue(runtime.events.contains {
+            $0.log.level == .success && $0.message == "账号「测试账号」恢复后已就绪"
+        })
     }
 
     @MainActor
