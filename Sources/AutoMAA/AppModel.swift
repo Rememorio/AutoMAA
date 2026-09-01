@@ -1032,6 +1032,45 @@ final class AppModel: ObservableObject {
         fightStageMemory = memory
     }
 
+    @discardableResult
+    func setFightRecoveryStage(_ stage: String, clientID: UUID, accountID: UUID) -> Bool {
+        guard let stage = FightStagePolicy.regularStage(from: stage, times: 1) else {
+            showBanner("恢复关卡必须是 1 到 128 个字符的非剿灭关卡名")
+            return false
+        }
+        return updateFightStageMemory(successMessage: "备用常规关卡已更新为 \(stage)") { memory in
+            memory.remember(stage, clientID: clientID, accountID: accountID)
+        }
+    }
+
+    @discardableResult
+    func continueFollowingGameStage(clientID: UUID, accountID: UUID) -> Bool {
+        updateFightStageMemory(successMessage: "已确认游戏切回常规关卡；下次将继续跟随游戏当前/上次") { memory in
+            memory.clearRecovery(clientID: clientID, accountID: accountID)
+        }
+    }
+
+    private func updateFightStageMemory(
+        successMessage: String,
+        update: (inout FightStageMemory) -> Bool
+    ) -> Bool {
+        guard !isWorkflowRunning else {
+            showBanner("工作流运行期间不能修改关卡恢复状态")
+            return false
+        }
+        do {
+            var memory = try fightStageMemoryStore.load()
+            guard update(&memory) else { return false }
+            try fightStageMemoryStore.save(memory)
+            fightStageMemory = memory
+            showBanner(successMessage)
+            return true
+        } catch {
+            showBanner("更新关卡恢复状态失败：\(error.localizedDescription)")
+            return false
+        }
+    }
+
     func monitorExternalActivity() async {
         while !Task.isCancelled {
             reloadActivityHistory()

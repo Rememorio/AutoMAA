@@ -10,7 +10,7 @@ public enum FightStageStrategy: String, Codable, CaseIterable, Identifiable, Sen
     public var title: String {
         switch self {
         case .gameCurrentOrLast: "游戏当前/上次"
-        case .rememberedRegular: "上次成功的常规关卡"
+        case .rememberedRegular: "跟随游戏，剿灭后恢复"
         case .fixed: "固定关卡"
         }
     }
@@ -20,7 +20,7 @@ public enum FightStageStrategy: String, Codable, CaseIterable, Identifiable, Sen
         case .gameCurrentOrLast:
             "沿用 MAA 的当前/上次关卡；其他方案执行剿灭后，这里也可能继续进入剿灭。"
         case .rememberedRegular:
-            "按账号使用 AutoMAA 记住的最近一次成功常规作战；剿灭和零次作战不会覆盖。"
+            "平时沿用游戏当前/上次关卡；AutoMAA 执行剿灭后，下次仅恢复一次最近成功的常规关卡。"
         case .fixed:
             "始终使用下面指定的关卡。"
         }
@@ -34,21 +34,29 @@ public enum FightStageResolution: Equatable, Sendable {
 }
 
 public struct FightStageMemoryEntry: Codable, Equatable, Sendable {
-    public var clientID: UUID
-    public var accountID: UUID
-    public var stage: String
-    public var updatedAt: Date
+    public let clientID: UUID
+    public let accountID: UUID
+    public fileprivate(set) var stage: String?
+    public fileprivate(set) var updatedAt: Date?
+    public fileprivate(set) var recoveryRequiredAt: Date?
 
-    public init(clientID: UUID, accountID: UUID, stage: String, updatedAt: Date = Date()) {
+    public init(
+        clientID: UUID,
+        accountID: UUID,
+        stage: String? = nil,
+        updatedAt: Date? = nil,
+        recoveryRequiredAt: Date? = nil
+    ) {
         self.clientID = clientID
         self.accountID = accountID
         self.stage = stage
-        self.updatedAt = updatedAt
+        self.updatedAt = stage == nil ? nil : (updatedAt ?? Date())
+        self.recoveryRequiredAt = recoveryRequiredAt
     }
 }
 
 public struct FightStageMemory: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = 1
+    public static let currentSchemaVersion = 2
 
     public var schemaVersion: Int
     public private(set) var entries: [FightStageMemoryEntry]
@@ -62,36 +70,34 @@ public struct FightStageMemory: Codable, Equatable, Sendable {
     }
 
     public func stage(clientID: UUID, accountID: UUID) -> String? {
-        entries.first {
-            $0.clientID == clientID && $0.accountID == accountID
-        }?.stage
+        entry(clientID: clientID, accountID: accountID)?.stage
     }
 
+    public func entry(clientID: UUID, accountID: UUID) -> FightStageMemoryEntry? {
+        entries.first {
+            $0.clientID == clientID && $0.accountID == accountID
+        }
+    }
+
+    public func requiresRecovery(clientID: UUID, accountID: UUID) -> Bool {
+        entry(clientID: clientID, accountID: accountID)?.recoveryRequiredAt != nil
+    }
+
+    @discardableResult
     public mutating func remember(
         _ stage: String,
         clientID: UUID,
         accountID: UUID,
         at date: Date = Date()
-    ) {
-        let entry = FightStageMemoryEntry(
-            clientID: clientID,
-            accountID: accountID,
-            stage: stage,
-            updatedAt: date
-        )
-        if let index = entries.firstIndex(where: {
-            $0.clientID == clientID && $0.accountID == accountID
-        }) {
-            entries[index] = entry
-        } else {
-            entries.append(entry)
+    ) -> Bool {
+        guard let stage = FightStagePolicy.regularStage(from: stage, times: 1) else {
+            return false
         }
-        entries.sort {
-            if $0.clientID != $1.clientID {
-                return $0.clientID.uuidString < $1.clientID.uuidString
-            }
-            return $0.accountID.uuidString < $1.accountID.uuidString
+        updateEntry(clientID: clientID, accountID: accountID) { entry in
+            entry.stage = stage
+            entry.updatedAt = date
         }
+        return true
     }
 
     @discardableResult
@@ -105,8 +111,90 @@ public struct FightStageMemory: Codable, Equatable, Sendable {
         guard let stage = FightStagePolicy.regularStage(from: stage, times: times) else {
             return false
         }
-        remember(stage, clientID: clientID, accountID: accountID, at: date)
+        updateEntry(clientID: clientID, accountID: accountID) { entry in
+            entry.stage = stage
+            entry.updatedAt = date
+            entry.recoveryRequiredAt = nil
+        }
         return true
+    }
+
+    @discardableResult
+    public mutating func markRecoveryRequired(
+        clientID: UUID,
+        accountID: UUID,
+        at date: Date = Date()
+    ) -> Bool {
+        updateEntry(clientID: clientID, accountID: accountID) { entry in
+            entry.recoveryRequiredAt = date
+        }
+        return true
+    }
+
+    @discardableResult
+    public mutating func clearRecovery(clientID: UUID, accountID: UUID) -> Bool {
+        guard let index = entries.firstIndex(where: {
+            $0.clientID == clientID && $0.accountID == accountID
+        }), entries[index].recoveryRequiredAt != nil else {
+            return false
+        }
+        entries[index].recoveryRequiredAt = nil
+        if entries[index].stage == nil {
+            entries.remove(at: index)
+        }
+        return true
+    }
+
+    @discardableResult
+    public mutating func recordSuccessfulFight(
+        configuration: FightConfiguration,
+        reportedStage: String?,
+        completedTimes: Int?,
+        clientID: UUID,
+        accountID: UUID,
+        at date: Date = Date()
+    ) -> Bool {
+        let configuredAnnihilation = configuration.usesCustomSettings
+            && configuration.stageStrategy == .fixed
+            && FightStagePolicy.isAnnihilation(configuration.stage)
+        if configuredAnnihilation
+            || reportedStage.map(FightStagePolicy.isAnnihilation) == true {
+            return markRecoveryRequired(clientID: clientID, accountID: accountID, at: date)
+        }
+        if let reportedStage,
+           let completedTimes,
+           rememberSuccessful(
+               stage: reportedStage,
+               times: completedTimes,
+               clientID: clientID,
+               accountID: accountID,
+               at: date
+           ) {
+            return true
+        }
+        return false
+    }
+
+    private mutating func updateEntry(
+        clientID: UUID,
+        accountID: UUID,
+        update: (inout FightStageMemoryEntry) -> Void
+    ) {
+        if let index = entries.firstIndex(where: {
+            $0.clientID == clientID && $0.accountID == accountID
+        }) {
+            update(&entries[index])
+        } else {
+            var entry = FightStageMemoryEntry(clientID: clientID, accountID: accountID)
+            update(&entry)
+            entries.append(entry)
+        }
+        entries.sort {
+            if $0.clientID != $1.clientID {
+                return $0.clientID.uuidString < $1.clientID.uuidString
+            }
+            return $0.accountID.uuidString < $1.accountID.uuidString
+        }
     }
 }
 
@@ -122,6 +210,9 @@ public enum FightStagePolicy {
         case .gameCurrentOrLast:
             return .value("")
         case .rememberedRegular:
+            guard memory.requiresRecovery(clientID: clientID, accountID: accountID) else {
+                return .value("")
+            }
             guard let stage = memory.stage(clientID: clientID, accountID: accountID) else {
                 return .unavailable
             }
@@ -174,7 +265,15 @@ public struct FightStageMemoryStore: Sendable {
             return FightStageMemory()
         }
         let data = try Data(contentsOf: directories.fightStageMemory)
-        let memory = try Self.decoder.decode(FightStageMemory.self, from: data)
+        var memory = try Self.decoder.decode(FightStageMemory.self, from: data)
+        switch memory.schemaVersion {
+        case FightStageMemory.currentSchemaVersion:
+            break
+        case 1:
+            memory.schemaVersion = FightStageMemory.currentSchemaVersion
+        default:
+            throw FightStageMemoryStoreError.unsupportedSchema(memory.schemaVersion)
+        }
         try validate(memory)
         return memory
     }
@@ -193,9 +292,13 @@ public struct FightStageMemoryStore: Sendable {
         var keys: Set<String> = []
         for entry in memory.entries {
             let key = "\(entry.clientID.uuidString.lowercased())-\(entry.accountID.uuidString.lowercased())"
+            let validStage = entry.stage.map {
+                FightStagePolicy.regularStage(from: $0, times: 1) == $0
+            } ?? true
             guard keys.insert(key).inserted,
-                  FightStagePolicy.regularStage(from: entry.stage, times: 1) == entry.stage
-            else {
+                  validStage,
+                  (entry.stage == nil) == (entry.updatedAt == nil),
+                  entry.stage != nil || entry.recoveryRequiredAt != nil else {
                 throw FightStageMemoryStoreError.invalidEntry
             }
         }

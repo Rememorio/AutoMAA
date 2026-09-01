@@ -6,7 +6,7 @@ AutoMAA 的用户数据保存在：
 ~/Library/Application Support/AutoMAA
 ├── config.json
 ├── execution-state.json
-├── fight-stage-memory.json  # 每个账号最近成功的常规关卡
+├── fight-stage-memory.json  # 每个账号的备用常规关卡与剿灭恢复状态
 ├── history.json
 ├── maa-maintenance.json     # 最近一次 MAA 核心更新尝试时间
 ├── update-result.json       # 仅在更新后短暂存在
@@ -23,7 +23,7 @@ AutoMAA 的用户数据保存在：
 | --- | --- |
 | `config.json` | 客户端、账号、自动化方案和全局设置 |
 | `execution-state.json` | 按方案隔离的当天成功任务断点 |
-| `fight-stage-memory.json` | 按客户端和账号记录最近一次成功且实际执行过的非剿灭关卡；供“上次成功的常规关卡”策略使用 |
+| `fight-stage-memory.json` | 按客户端和账号记录备用常规关卡与剿灭后的单次恢复状态；供“跟随游戏，剿灭后恢复”策略使用 |
 | `history.json` | 图形界面中的结构化活动记录；新记录按每次运行分组 |
 | `maa-maintenance.json` | 最近一次 MAA 核心与基础资源更新尝试时间，用于限制自动更新频率 |
 | `Logs/` | 最近 30 次 maa-cli 诊断输出，以及 LaunchAgent 与 Runner 输出 |
@@ -40,7 +40,7 @@ AutoMAA 的用户数据保存在：
 
 每个方案的 `schedule.rules` 保存周计划。每条规则包含一组语义化星期值（例如 `monday`、`sunday`）以及 `hour`、`minute`；同一方案不能在同一个星期出现两条规则。LaunchAgent 安装时才会把这些值转换为系统使用的 `Weekday` 数字，配置文件不依赖 Foundation 或 launchd 的星期编号。
 
-理智作战的 `stageStrategy` 保存关卡来源，是 schema v6 的必要字段：`gameCurrentOrLast` 沿用 MAA 当前/上次关卡，`rememberedRegular` 使用 AutoMAA 按账号记住的最近成功常规关卡，`fixed` 使用方案内的 `stage`。常规关卡记录使用独立的 `fight-stage-memory.json`，不会把账号相关运行状态复制进每个自动化方案。
+理智作战的 `stageStrategy` 保存关卡来源，是 schema v6 的必要字段：`gameCurrentOrLast` 沿用 MAA 当前/上次关卡；`rememberedRegular` 平时同样跟随当前/上次，只在 AutoMAA 执行剿灭后按账号显式恢复一次备用常规关卡；`fixed` 使用方案内的 `stage`。备用关卡与待恢复状态使用独立的 `fight-stage-memory.json`，不会把账号相关运行状态复制进每个自动化方案；旧版记录会在读取时兼容升级。
 
 ## 哪些文件可以编辑
 

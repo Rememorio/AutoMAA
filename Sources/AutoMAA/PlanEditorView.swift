@@ -8,6 +8,7 @@ struct PlanEditorView: View {
     @Binding var plan: AutomationPlan
     @State private var confirmDelete = false
     @State private var useCustomFightStage = false
+    @State private var fightStageEditor: FightStageEditorContext?
 
     private let columns = [GridItem(.adaptive(minimum: 340), spacing: 14)]
 
@@ -37,6 +38,15 @@ struct PlanEditorView: View {
             Button("删除方案", role: .destructive) { model.deletePlan(plan.id) }
         } message: {
             Text("账号和客户端不会被删除，对应的系统定时任务会一并移除。")
+        }
+        .sheet(item: $fightStageEditor) { context in
+            FightStageEditorSheet(context: context) { stage in
+                model.setFightRecoveryStage(
+                    stage,
+                    clientID: context.clientID,
+                    accountID: context.accountID
+                )
+            }
         }
     }
 
@@ -273,21 +283,11 @@ struct PlanEditorView: View {
                 Toggle("手动输入关卡名", isOn: customFightStage)
             } else if plan.fight.stageStrategy == .rememberedRegular {
                 VStack(alignment: .leading, spacing: 7) {
-                    Text("账号记录")
+                    Text("账号恢复状态")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                     ForEach(fightStageMemoryRows) { row in
-                        HStack(spacing: 8) {
-                            Image(systemName: row.stage == nil ? "exclamationmark.circle.fill" : "bookmark.fill")
-                                .foregroundStyle(row.stage == nil ? Color.orange : Color.maaAccent)
-                            Text(row.label)
-                                .lineLimit(1)
-                            Spacer(minLength: 8)
-                            Text(row.stage ?? "未记录")
-                                .font(.caption.monospaced())
-                                .foregroundStyle(row.stage == nil ? Color.orange : Color.secondary)
-                                .lineLimit(1)
-                        }
+                        fightStageMemoryRow(row)
                     }
                 }
                 .padding(10)
@@ -473,14 +473,61 @@ struct PlanEditorView: View {
     private var fightStageMemoryRows: [FightStageMemoryRow] {
         model.configuration.clients.filter(\.enabled).flatMap { client in
             client.accounts.filter(plan.includes).map { account in
-                FightStageMemoryRow(
+                let entry = model.fightStageMemory.entry(clientID: client.id, accountID: account.id)
+                return FightStageMemoryRow(
                     clientID: client.id,
                     accountID: account.id,
                     label: "\(client.displayName) / \(account.displayName)",
-                    stage: model.fightStageMemory.stage(clientID: client.id, accountID: account.id)
+                    stage: entry?.stage,
+                    recoveryRequired: entry?.recoveryRequiredAt != nil
                 )
             }
         }
+    }
+
+    private func fightStageMemoryRow(_ row: FightStageMemoryRow) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                Image(systemName: row.recoveryRequired ? "arrow.uturn.backward.circle.fill" : "location.fill")
+                    .foregroundStyle(row.recoveryRequired ? Color.orange : Color.maaAccent)
+                Text(row.label)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Text(row.recoveryRequired ? "待恢复" : "跟随游戏")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(row.recoveryRequired ? Color.orange : Color.secondary)
+            }
+            HStack(spacing: 8) {
+                Text(fightStageStatusText(row))
+                    .font(.caption)
+                    .foregroundStyle(row.recoveryRequired && row.stage == nil ? Color.orange : Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                Button(row.stage == nil ? "设置备用关卡" : "修改") {
+                    fightStageEditor = FightStageEditorContext(row: row)
+                }
+                .controlSize(.small)
+                .disabled(model.isWorkflowRunning)
+            }
+            if row.recoveryRequired {
+                Button("游戏已手动切回，继续跟随") {
+                    model.continueFollowingGameStage(clientID: row.clientID, accountID: row.accountID)
+                }
+                .controlSize(.small)
+                .disabled(model.isWorkflowRunning)
+                .help("确认游戏当前/上次已是常规关卡，并取消这次自动恢复")
+            }
+        }
+        .padding(.vertical, 3)
+    }
+
+    private func fightStageStatusText(_ row: FightStageMemoryRow) -> String {
+        if row.recoveryRequired {
+            return row.stage.map { "下次理智作战将先恢复到 \($0)" }
+                ?? "缺少恢复关卡，运行前检查会阻止理智作战"
+        }
+        return row.stage.map { "备用常规关卡：\($0)；成功作战后自动更新" }
+            ?? "首次成功完成常规作战后会自动记住备用关卡"
     }
 
     private var scheduleInstalled: Bool {
@@ -655,8 +702,90 @@ private struct FightStageMemoryRow: Identifiable {
     let accountID: UUID
     let label: String
     let stage: String?
+    let recoveryRequired: Bool
 
     var id: String { "\(clientID.uuidString)-\(accountID.uuidString)" }
+}
+
+private struct FightStageEditorContext: Identifiable {
+    let clientID: UUID
+    let accountID: UUID
+    let label: String
+    let stage: String?
+    let recoveryRequired: Bool
+
+    init(row: FightStageMemoryRow) {
+        clientID = row.clientID
+        accountID = row.accountID
+        label = row.label
+        stage = row.stage
+        recoveryRequired = row.recoveryRequired
+    }
+
+    var id: String { "\(clientID.uuidString)-\(accountID.uuidString)" }
+}
+
+private struct FightStageEditorSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @FocusState private var fieldFocused: Bool
+    @State private var stage: String
+
+    let context: FightStageEditorContext
+    let onSave: (String) -> Bool
+
+    init(context: FightStageEditorContext, onSave: @escaping (String) -> Bool) {
+        self.context = context
+        self.onSave = onSave
+        _stage = State(initialValue: context.stage ?? "")
+    }
+
+    private var normalizedStage: String? {
+        FightStagePolicy.regularStage(from: stage, times: 1)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(context.recoveryRequired ? "设置剿灭恢复关卡" : "设置备用常规关卡")
+                    .font(.title3.weight(.semibold))
+                Text(context.label)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            Text(context.recoveryRequired
+                 ? "下次理智作战会先明确返回这个关卡；成功后恢复状态自动清除。"
+                 : "平时仍跟随游戏当前/上次；只有 AutoMAA 执行剿灭后才会使用这个关卡恢复。")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            LabeledContent("关卡") {
+                TextField("关卡", text: $stage, prompt: Text("如 1-7 或活动关卡"))
+                    .labelsHidden()
+                    .textFieldStyle(.roundedBorder)
+                    .focused($fieldFocused)
+                    .frame(minWidth: 220)
+            }
+            if !stage.isEmpty, normalizedStage == nil {
+                Label("请输入 1 到 128 个字符的非剿灭关卡名", systemImage: "exclamationmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(Color.orange)
+            }
+            HStack {
+                Spacer()
+                Button("取消") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button(context.recoveryRequired ? "保存恢复关卡" : "保存备用关卡") {
+                    guard let normalizedStage, onSave(normalizedStage) else { return }
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(normalizedStage == nil)
+            }
+        }
+        .padding(20)
+        .frame(width: 430)
+        .onAppear { fieldFocused = true }
+    }
 }
 
 private struct PlanTaskCard<Content: View>: View {

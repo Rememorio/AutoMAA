@@ -529,11 +529,12 @@ public final class WorkflowRunner {
                     visitedSteps += 1
                     if outcome.succeeded {
                         report.succeededSteps += 1
-                        if let summary = outcome.fightSummary {
+                        if task == .fight {
                             var updatedMemory = fightStageMemory
-                            if updatedMemory.rememberSuccessful(
-                                stage: summary.stage,
-                                times: summary.times,
+                            if updatedMemory.recordSuccessfulFight(
+                                configuration: plan.fight,
+                                reportedStage: outcome.fightSummary?.stage,
+                                completedTimes: outcome.fightSummary?.times,
                                 clientID: client.id,
                                 accountID: account.id
                             ) {

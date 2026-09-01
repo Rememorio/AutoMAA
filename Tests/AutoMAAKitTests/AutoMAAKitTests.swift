@@ -576,7 +576,7 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertNil(params["series"])
     }
 
-    func testRememberedRegularStageResolvesPerAccountAndMissingTaskIsRemoved() throws {
+    func testRememberedRegularStageFollowsGameUntilRecoveryIsRequired() throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let directories = AppDirectories(root: root)
@@ -596,6 +596,18 @@ final class AutoMAAKitTests: XCTestCase {
 
         XCTAssertEqual(
             try generatedParams(.fight, plan: plan, client: firstClient, account: firstAccount, writer: writer, root: root)["stage"] as? String,
+            ""
+        )
+        XCTAssertEqual(
+            try generatedParams(.fight, plan: plan, client: secondClient, account: secondAccount, writer: writer, root: root)["stage"] as? String,
+            ""
+        )
+
+        memory.markRecoveryRequired(clientID: firstClient.id, accountID: firstAccount.id)
+        memory.markRecoveryRequired(clientID: secondClient.id, accountID: secondAccount.id)
+        try writer.prepare(config, fightStageMemory: memory)
+        XCTAssertEqual(
+            try generatedParams(.fight, plan: plan, client: firstClient, account: firstAccount, writer: writer, root: root)["stage"] as? String,
             "AT-4"
         )
         XCTAssertEqual(
@@ -606,21 +618,25 @@ final class AutoMAAKitTests: XCTestCase {
         let missingMemory = FightStageMemory(entries: [FightStageMemoryEntry(
             clientID: firstClient.id,
             accountID: firstAccount.id,
-            stage: "AT-4"
+            recoveryRequiredAt: Date()
         )])
         try writer.prepare(config, fightStageMemory: missingMemory)
-        let missingName = writer.taskName(
+        let missingFirstName = writer.taskName(
             planID: plan.id,
-            clientID: secondClient.id,
-            accountID: secondAccount.id,
+            clientID: firstClient.id,
+            accountID: firstAccount.id,
             task: .fight
         )
         XCTAssertFalse(FileManager.default.fileExists(
-            atPath: root.appending(path: "MAA/tasks/\(missingName).json").path
+            atPath: root.appending(path: "MAA/tasks/\(missingFirstName).json").path
         ))
+        XCTAssertEqual(
+            try generatedParams(.fight, plan: plan, client: secondClient, account: secondAccount, writer: writer, root: root)["stage"] as? String,
+            ""
+        )
     }
 
-    func testRememberedRegularStageMustExistForEveryTargetAccount() {
+    func testRememberedRegularStageOnlyRequiresFallbackWhileRecoveringFromAnnihilation() {
         var config = populatedConfiguration()
         config.cliPath = "/usr/bin/true"
         config.plans[0].fight.stageStrategy = .rememberedRegular
@@ -636,11 +652,24 @@ final class AutoMAAKitTests: XCTestCase {
             fightStageMemory: memory
         )
 
-        XCTAssertFalse(problems.contains { $0.id.contains(firstAccount.id.uuidString) })
-        XCTAssertTrue(problems.contains {
+        XCTAssertFalse(problems.contains { $0.id.contains("fight-memory") })
+
+        memory.markRecoveryRequired(clientID: firstClient.id, accountID: firstAccount.id)
+        memory.markRecoveryRequired(
+            clientID: config.clients[1].id,
+            accountID: config.clients[1].accounts[0].id
+        )
+        let recoveryProblems = ConfigurationValidator.readinessProblems(
+            in: config,
+            planID: plan.id,
+            fightStageMemory: memory
+        )
+
+        XCTAssertFalse(recoveryProblems.contains { $0.id.contains(firstAccount.id.uuidString) })
+        XCTAssertTrue(recoveryProblems.contains {
             $0.severity == .error
                 && $0.id.contains(config.clients[1].accounts[0].id.uuidString)
-                && $0.message.contains("尚未记住")
+                && $0.message.contains("从剿灭恢复")
         })
     }
 
@@ -649,6 +678,58 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertNil(FightStagePolicy.regularStage(from: "AT-4", times: 0))
         XCTAssertNil(FightStagePolicy.regularStage(from: "Annihilation", times: 1))
         XCTAssertNil(FightStagePolicy.regularStage(from: "Chernobog@Annihilation", times: 1))
+    }
+
+    func testFightStageMemoryTracksAnnihilationRecoveryAsAStateTransition() {
+        let clientID = UUID()
+        let accountID = UUID()
+        var memory = FightStageMemory()
+        var fixedAnnihilation = FightConfiguration()
+        fixedAnnihilation.stageStrategy = .fixed
+        fixedAnnihilation.stage = FightStagePreset.annihilation.rawValue
+
+        memory.remember("AT-4", clientID: clientID, accountID: accountID)
+        XCTAssertTrue(memory.recordSuccessfulFight(
+            configuration: fixedAnnihilation,
+            reportedStage: nil,
+            completedTimes: nil,
+            clientID: clientID,
+            accountID: accountID
+        ))
+        XCTAssertTrue(memory.requiresRecovery(clientID: clientID, accountID: accountID))
+        XCTAssertEqual(memory.stage(clientID: clientID, accountID: accountID), "AT-4")
+
+        XCTAssertTrue(memory.recordSuccessfulFight(
+            configuration: fixedAnnihilation,
+            reportedStage: "Unexpected map label",
+            completedTimes: 1,
+            clientID: clientID,
+            accountID: accountID
+        ))
+        XCTAssertTrue(memory.requiresRecovery(clientID: clientID, accountID: accountID))
+        XCTAssertEqual(memory.stage(clientID: clientID, accountID: accountID), "AT-4")
+
+        var followsGame = FightConfiguration()
+        followsGame.stageStrategy = .rememberedRegular
+        XCTAssertTrue(memory.recordSuccessfulFight(
+            configuration: followsGame,
+            reportedStage: "1-7",
+            completedTimes: 1,
+            clientID: clientID,
+            accountID: accountID
+        ))
+        XCTAssertFalse(memory.requiresRecovery(clientID: clientID, accountID: accountID))
+        XCTAssertEqual(memory.stage(clientID: clientID, accountID: accountID), "1-7")
+
+        XCTAssertTrue(memory.recordSuccessfulFight(
+            configuration: followsGame,
+            reportedStage: "Annihilation",
+            completedTimes: 0,
+            clientID: clientID,
+            accountID: accountID
+        ))
+        XCTAssertTrue(memory.requiresRecovery(clientID: clientID, accountID: accountID))
+        XCTAssertEqual(memory.stage(clientID: clientID, accountID: accountID), "1-7")
     }
 
     func testFightStageResolutionHasOneSourceOfTruth() {
@@ -665,10 +746,16 @@ final class AutoMAAKitTests: XCTestCase {
         configuration.stageStrategy = .rememberedRegular
         XCTAssertEqual(
             FightStagePolicy.resolve(configuration, memory: memory, clientID: clientID, accountID: accountID),
-            .unavailable
+            .value("")
         )
 
         memory.remember("AT-4", clientID: clientID, accountID: accountID)
+        XCTAssertEqual(
+            FightStagePolicy.resolve(configuration, memory: memory, clientID: clientID, accountID: accountID),
+            .value("")
+        )
+
+        memory.markRecoveryRequired(clientID: clientID, accountID: accountID)
         XCTAssertEqual(
             FightStagePolicy.resolve(configuration, memory: memory, clientID: clientID, accountID: accountID),
             .value("AT-4")
@@ -701,6 +788,33 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertThrowsError(try store.save(FightStageMemory(entries: [
             FightStageMemoryEntry(clientID: clientID, accountID: accountID, stage: "Annihilation"),
         ])))
+    }
+
+    func testFightStageMemoryStoreMigratesSchemaOneEntries() throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        try directories.prepare()
+        let clientID = UUID()
+        let accountID = UUID()
+        let legacy = """
+        {
+          "entries": [{
+            "accountID": "\(accountID.uuidString)",
+            "clientID": "\(clientID.uuidString)",
+            "stage": "AT-4",
+            "updatedAt": "2023-11-14T22:13:20Z"
+          }],
+          "schemaVersion": 1
+        }
+        """
+        try Data(legacy.utf8).write(to: directories.fightStageMemory)
+
+        let memory = try FightStageMemoryStore(directories: directories).load()
+
+        XCTAssertEqual(memory.schemaVersion, FightStageMemory.currentSchemaVersion)
+        XCTAssertEqual(memory.stage(clientID: clientID, accountID: accountID), "AT-4")
+        XCTAssertFalse(memory.requiresRecovery(clientID: clientID, accountID: accountID))
     }
 
     func testDisablingCustomSettingsUsesMAADefaultsWithoutErasingPlanValues() throws {
@@ -2455,6 +2569,97 @@ final class AutoMAAKitTests: XCTestCase {
                 .stage(clientID: client.id, accountID: account.id),
             "TO-5"
         )
+    }
+
+    @MainActor
+    func testWorkflowRestoresRegularStageOnceAfterSuccessfulAnnihilation() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        let app = root.appending(path: "Applications/Test Game.app", directoryHint: .isDirectory)
+        try createTestApplication(at: app)
+        let account = AccountConfiguration(name: "测试账号")
+        let client = ClientConfiguration(
+            name: "测试客户端",
+            kind: .official,
+            appPath: app.path,
+            address: "127.0.0.1:65493",
+            profileName: "fight-recovery",
+            bundleIdentifier: "dev.automaa.tests.retry-game",
+            accounts: [account]
+        )
+        var plan = AutomationPlan.lightRoutine
+        plan.fight.stageStrategy = .fixed
+        plan.fight.stage = FightStagePreset.annihilation.rawValue
+        plan.recruit.enabled = false
+        plan.infrast.enabled = false
+        plan.mall.enabled = false
+        plan.award.enabled = false
+        plan.policy.hotUpdateBeforeRun = false
+        plan.policy.maxRetries = 0
+        var memory = FightStageMemory()
+        memory.remember("AT-4", clientID: client.id, accountID: account.id)
+        try FightStageMemoryStore(directories: directories).save(memory)
+        let runtime = StubClientRuntime(closesOnForce: true)
+        let annihilationRunner = WorkflowRunner(
+            directories: directories,
+            portProbe: runtime,
+            gameController: runtime,
+            shutdownPolicy: .immediate,
+            commandRunner: StubCommandRunner(taskResults: [
+                CommandResult(exitCode: 0, standardOutput: "", standardError: "", timedOut: false),
+            ]),
+            eventSink: runtime.record
+        )
+        var configuration = AppConfiguration(
+            cliPath: "/usr/bin/true",
+            clients: [client],
+            plans: [plan]
+        )
+
+        let annihilationReport = await annihilationRunner.run(
+            configuration,
+            planID: plan.id,
+            resumeToday: false
+        )
+        let pendingMemory = try FightStageMemoryStore(directories: directories).load()
+
+        XCTAssertTrue(
+            annihilationReport.isSuccess,
+            annihilationReport.fatalError ?? annihilationReport.attentionMessages.joined(separator: " | ")
+        )
+        XCTAssertTrue(pendingMemory.requiresRecovery(clientID: client.id, accountID: account.id))
+        XCTAssertEqual(pendingMemory.stage(clientID: client.id, accountID: account.id), "AT-4")
+
+        plan.fight.stageStrategy = .rememberedRegular
+        configuration.plans = [plan]
+        runtime.isClientRunning = true
+        runtime.isPortOpen = true
+        let regularRunner = WorkflowRunner(
+            directories: directories,
+            portProbe: runtime,
+            gameController: runtime,
+            shutdownPolicy: .immediate,
+            commandRunner: StubCommandRunner(taskResults: [
+                CommandResult(
+                    exitCode: 0,
+                    standardOutput: "Fight AT-4 1 times",
+                    standardError: "",
+                    timedOut: false
+                ),
+            ]),
+            eventSink: runtime.record
+        )
+
+        let regularReport = await regularRunner.run(configuration, planID: plan.id, resumeToday: false)
+        let restoredMemory = try FightStageMemoryStore(directories: directories).load()
+
+        XCTAssertTrue(
+            regularReport.isSuccess,
+            regularReport.fatalError ?? regularReport.attentionMessages.joined(separator: " | ")
+        )
+        XCTAssertFalse(restoredMemory.requiresRecovery(clientID: client.id, accountID: account.id))
+        XCTAssertEqual(restoredMemory.stage(clientID: client.id, accountID: account.id), "AT-4")
     }
 
     func testWorkflowTimeoutPolicyMatchesTaskWorkload() {

@@ -226,14 +226,14 @@ public enum ConfigurationValidator {
             if plan.fight.enabled,
                plan.fight.usesCustomSettings,
                plan.fight.stageStrategy == .rememberedRegular {
-                for account in targetAccounts where fightStageMemory.stage(
+                for account in targetAccounts where fightStageMemory.requiresRecovery(
                     clientID: client.id,
                     accountID: account.id
-                ) == nil {
+                ) && fightStageMemory.stage(clientID: client.id, accountID: account.id) == nil {
                     result.append(.init(
                         id: "plan-\(plan.id)-fight-memory-\(client.id)-\(account.id)",
                         severity: .error,
-                        message: "「\(planName)」尚未记住\(clientName) / \(account.displayName)的常规关卡；请先用“游戏当前/上次”或固定关卡成功作战一次",
+                        message: "「\(planName)」需要为\(clientName) / \(account.displayName)从剿灭恢复，但尚无备用常规关卡；请设置恢复关卡，或确认游戏已手动切回后继续跟随",
                         scope: .plan(plan.id)
                     ))
                 }
