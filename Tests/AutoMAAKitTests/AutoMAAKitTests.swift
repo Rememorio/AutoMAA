@@ -1521,6 +1521,150 @@ final class AutoMAAKitTests: XCTestCase {
     }
 
     @MainActor
+    func testStableCoreUpdateDefersWhenInstalledPrereleaseIsNewer() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        try directories.prepare()
+        let installation = try makeFakeMAAInstallation(at: root)
+        let cli = root.appending(path: "maa-cli")
+        try writeFakeMAACLI(
+            at: cli,
+            installation: installation,
+            coreVersion: "v6.17.0-beta.6",
+            body: """
+            if [ "$1" = "update" ]; then
+              /usr/bin/touch "$MAA_CONFIG_DIR/unexpected-update"
+            fi
+            """
+        )
+        let fetcher = StubMAACoreReleaseManifestFetcher(
+            version: "v6.16.8",
+            transientFailures: 1
+        )
+        let runtime = StubClientRuntime(closesOnForce: true)
+
+        let succeeded = await WorkflowRunner(
+            directories: directories,
+            portProbe: runtime,
+            gameController: runtime,
+            shutdownPolicy: .immediate,
+            maintenanceRetryDelay: .zero,
+            coreReleaseManifestFetcher: fetcher
+        ).updateCore(cliPath: cli.path)
+        let entries = HistoryStore(directories: directories).load()
+
+        XCTAssertTrue(succeeded)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: directories.maaConfig.appending(path: "unexpected-update").path
+        ))
+        XCTAssertEqual(entries.map(\.phase), [.updating, .updating, .completed])
+        XCTAssertTrue(entries[1].message.contains("临时网络问题"))
+        XCTAssertEqual(entries.last?.level, .success)
+        XCTAssertTrue(entries.last?.message.contains("重试后确认") == true)
+        XCTAssertTrue(entries.last?.message.contains("v6.16.8") == true)
+        XCTAssertTrue(entries.last?.message.contains("v6.17.0-beta.6") == true)
+        let requestedURLs = await fetcher.requestedURLs()
+        XCTAssertEqual(requestedURLs, Array(
+            repeating: URL(string: "https://api.maa.plus/MaaAssistantArknights/api/version/stable.json")!,
+            count: 2
+        ))
+    }
+
+    @MainActor
+    func testStableCoreUpdateProceedsWhenStableHasPassedInstalledPrerelease() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        try directories.prepare()
+        let installation = try makeFakeMAAInstallation(at: root)
+        let cli = root.appending(path: "maa-cli")
+        try writeFakeMAACLI(
+            at: cli,
+            installation: installation,
+            coreVersion: "v6.17.0-beta.6",
+            body: """
+            if [ "$1" = "update" ]; then
+              printf '%s\\n' "$@" > "$MAA_CONFIG_DIR/update-arguments.txt"
+            fi
+            """
+        )
+        let fetcher = StubMAACoreReleaseManifestFetcher(version: "v6.17.0")
+        let runtime = StubClientRuntime(closesOnForce: true)
+
+        let succeeded = await WorkflowRunner(
+            directories: directories,
+            portProbe: runtime,
+            gameController: runtime,
+            shutdownPolicy: .immediate,
+            resourceProbeExecutable: installation.probe,
+            coreReleaseManifestFetcher: fetcher
+        ).updateCore(cliPath: cli.path)
+        let arguments = try String(
+            contentsOf: directories.maaConfig.appending(path: "update-arguments.txt"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(succeeded)
+        XCTAssertEqual(arguments, "update\nstable\n--test-time\n10\n--batch\n")
+        let requestedURLs = await fetcher.requestedURLs()
+        XCTAssertEqual(requestedURLs.count, 1)
+    }
+
+    @MainActor
+    func testStableCoreUpdatePreflightUsesTheConfiguredManifestAPI() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        try directories.prepare()
+        let installation = try makeFakeMAAInstallation(at: root)
+        try Data("[core]\napi_url = \"https://mirror.example/versions/\"\n".utf8).write(
+            to: directories.maaConfig.appending(path: "cli.toml")
+        )
+        let cli = root.appending(path: "maa-cli")
+        try writeFakeMAACLI(
+            at: cli,
+            installation: installation,
+            coreVersion: "v6.17.0-beta.6",
+            body: """
+            if [ "$1" = "convert" ]; then
+              printf '%s\\n' '{"core":{"api_url":"https://mirror.example/versions/"}}'
+              exit 0
+            fi
+            """
+        )
+        let fetcher = StubMAACoreReleaseManifestFetcher(version: "v6.16.8")
+        let runtime = StubClientRuntime(closesOnForce: true)
+
+        let succeeded = await WorkflowRunner(
+            directories: directories,
+            portProbe: runtime,
+            gameController: runtime,
+            shutdownPolicy: .immediate,
+            coreReleaseManifestFetcher: fetcher
+        ).updateCore(cliPath: cli.path)
+        let requestedURLs = await fetcher.requestedURLs()
+
+        XCTAssertTrue(succeeded)
+        XCTAssertEqual(requestedURLs, [
+            URL(string: "https://mirror.example/versions/stable.json")!,
+        ])
+    }
+
+    func testMAASemanticVersionOrdersPrereleasesBeforeTheMatchingStableVersion() throws {
+        let olderStable = try XCTUnwrap(MAASemanticVersion("v6.16.8"))
+        let beta = try XCTUnwrap(MAASemanticVersion("6.17.0-beta.6"))
+        let laterBeta = try XCTUnwrap(MAASemanticVersion("6.17.0-beta.10"))
+        let stable = try XCTUnwrap(MAASemanticVersion("6.17.0"))
+
+        XCTAssertLessThan(olderStable, beta)
+        XCTAssertLessThan(beta, laterBeta)
+        XCTAssertLessThan(laterBeta, stable)
+        XCTAssertTrue(beta.isPrerelease)
+        XCTAssertFalse(stable.isPrerelease)
+    }
+
+    @MainActor
     func testMaintenanceUpdateRetriesOneTransientNetworkFailure() async throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -2865,6 +3009,30 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertFalse(problems.contains { $0.id.contains("selector-duplicate") })
     }
 
+    private actor StubMAACoreReleaseManifestFetcher: MAACoreReleaseManifestFetching {
+        private let resolvedVersion: MAASemanticVersion
+        private var transientFailures: Int
+        private var urls: [URL] = []
+
+        init(version: String, transientFailures: Int = 0) {
+            resolvedVersion = MAASemanticVersion(version)!
+            self.transientFailures = transientFailures
+        }
+
+        func version(at url: URL) async throws -> MAASemanticVersion {
+            urls.append(url)
+            if transientFailures > 0 {
+                transientFailures -= 1
+                throw URLError(.timedOut)
+            }
+            return resolvedVersion
+        }
+
+        func requestedURLs() -> [URL] {
+            urls
+        }
+    }
+
     private struct FakeMAAInstallation {
         let data: URL
         let cache: URL
@@ -2919,6 +3087,7 @@ final class AutoMAAKitTests: XCTestCase {
     private func writeFakeMAACLI(
         at cli: URL,
         installation: FakeMAAInstallation,
+        coreVersion: String = "v6.16.8",
         body: String
     ) throws {
         try Data("""
@@ -2931,6 +3100,10 @@ final class AutoMAAKitTests: XCTestCase {
             resource) printf '%s\n' "\(installation.resource.path)" ;;
             hot-update) printf '%s\n' "\(installation.hotUpdate.path)" ;;
           esac
+          exit 0
+        fi
+        if [ "$1" = "version" ] && [ "$2" = "maa-core" ]; then
+          printf '%s\n' "MaaCore \(coreVersion)"
           exit 0
         fi
         \(body)

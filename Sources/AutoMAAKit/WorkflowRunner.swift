@@ -40,6 +40,13 @@ private enum StagedMAAUpdateResult {
     case cancelled
 }
 
+private enum StableCoreUpdatePreflight {
+    case proceed(recoveredAfterRetry: Bool)
+    case deferred(current: MAASemanticVersion, stable: MAASemanticVersion, recoveredAfterRetry: Bool)
+    case failed(String)
+    case cancelled
+}
+
 struct ClientShutdownPolicy: Sendable, Equatable {
     let maaGracePeriod: TimeInterval
     let systemGracePeriod: TimeInterval
@@ -107,6 +114,7 @@ public final class WorkflowRunner {
     private let directories: AppDirectories
     private let commandRunner: any CommandRunning
     private let resourceProbeExecutable: URL
+    private let coreReleaseManifestFetcher: any MAACoreReleaseManifestFetching
     private let portProbe: any PortProbing
     private let gameController: any GameProcessControlling
     private let shutdownPolicy: ClientShutdownPolicy
@@ -166,6 +174,7 @@ public final class WorkflowRunner {
         timeoutPolicy: MAACommandTimeoutPolicy = .standard,
         maintenanceRetryDelay: Duration = .seconds(5),
         resourceProbeExecutable: URL? = nil,
+        coreReleaseManifestFetcher: any MAACoreReleaseManifestFetching = MAACoreReleaseManifestClient(),
         noticeSink: NoticeSink? = nil,
         eventSink: @escaping EventSink = { _ in }
     ) {
@@ -177,6 +186,7 @@ public final class WorkflowRunner {
         self.timeoutPolicy = timeoutPolicy
         self.maintenanceRetryDelay = maintenanceRetryDelay
         self.resourceProbeExecutable = resourceProbeExecutable ?? Self.defaultResourceProbeExecutable()
+        self.coreReleaseManifestFetcher = coreReleaseManifestFetcher
         historyStore = HistoryStore(directories: directories)
         diagnosticLogStore = DiagnosticLogStore(directories: directories)
         stateStore = ExecutionStateStore(directories: directories)
@@ -728,6 +738,27 @@ public final class WorkflowRunner {
             ? "更新 MAA 核心与基础资源"
             : "更新 MAA Beta 核心与基础资源"
         emit(.updating, "正在\(operation)", 0, .info)
+        var preflightRecoveredAfterRetry = false
+        if channel == .stable {
+            switch await stableCoreUpdatePreflight(cliPath: cliPath) {
+            case let .proceed(recoveredAfterRetry):
+                preflightRecoveredAfterRetry = recoveredAfterRetry
+            case let .deferred(current, stable, recoveredAfterRetry):
+                emit(
+                    .completed,
+                    "\(recoveredAfterRetry ? "重试后确认：" : "")稳定版 v\(stable) 尚未追上当前预发布版 v\(current)，已保留当前 MAA",
+                    1,
+                    .success
+                )
+                return true
+            case let .failed(details):
+                emit(.failed, "无法检查 MAA 稳定版", 1, .error, details: details)
+                return false
+            case .cancelled:
+                emit(.cancelled, "MAA 更新已停止", 1, .warning)
+                return false
+            }
+        }
         let outcome = await performStagedMAAUpdate(
             cliPath: cliPath,
             component: .core(channel),
@@ -756,13 +787,98 @@ public final class WorkflowRunner {
                 .completed,
                 updateCoreSuccessMessage(
                     channel: channel,
-                    recoveredAfterRetry: recoveredAfterRetry
+                    recoveredAfterRetry: recoveredAfterRetry || preflightRecoveredAfterRetry
                 ),
                 1,
                 .success
             )
             return true
         }
+    }
+
+    private func stableCoreUpdatePreflight(cliPath: String) async -> StableCoreUpdatePreflight {
+        let versionResult = await runCommand(
+            executable: cliPath,
+            arguments: ["version", "maa-core", "--batch"],
+            timeout: 20
+        )
+        guard !versionResult.cancelled, !Task.isCancelled else { return .cancelled }
+        guard versionResult.exitCode == 0, !versionResult.timedOut else {
+            return .failed("无法读取当前 MaaCore 版本：\(shortOutput(versionResult))")
+        }
+        guard let current = MAACoreVersionParser.parseCLIOutput(versionResult.combinedOutput) else {
+            return .failed("maa-cli 返回了无法识别的 MaaCore 版本：\(shortOutput(versionResult))")
+        }
+        guard current.isPrerelease else { return .proceed(recoveredAfterRetry: false) }
+
+        let manifestURL: URL
+        do {
+            manifestURL = try await coreManifestURL(cliPath: cliPath, channel: .stable)
+        } catch {
+            return .failed("无法确定稳定版清单地址：\(error.localizedDescription)")
+        }
+        do {
+            let (stable, recoveredAfterRetry) = try await coreReleaseVersion(at: manifestURL)
+            if stable <= current {
+                return .deferred(
+                    current: current,
+                    stable: stable,
+                    recoveredAfterRetry: recoveredAfterRetry
+                )
+            }
+            return .proceed(recoveredAfterRetry: recoveredAfterRetry)
+        } catch is CancellationError {
+            return .cancelled
+        } catch {
+            return .failed("无法读取稳定版清单：\(error.localizedDescription)")
+        }
+    }
+
+    private func coreReleaseVersion(at url: URL) async throws -> (MAASemanticVersion, Bool) {
+        do {
+            return (try await coreReleaseManifestFetcher.version(at: url), false)
+        } catch {
+            guard MAAMaintenanceFailureClassifier.isTransientNetworkFailure(error),
+                  !Task.isCancelled
+            else { throw error }
+            emit(
+                .updating,
+                "检查稳定版时遇到临时网络问题，正在自动重试（1/1）",
+                0,
+                .info,
+                details: error.localizedDescription
+            )
+            try await Task.sleep(for: maintenanceRetryDelay)
+            guard !Task.isCancelled else { throw CancellationError() }
+            return (try await coreReleaseManifestFetcher.version(at: url), true)
+        }
+    }
+
+    private func coreManifestURL(
+        cliPath: String,
+        channel: MAAUpdateChannel
+    ) async throws -> URL {
+        let extensions = ["json", "yaml", "yml", "toml"]
+        let configURL = extensions
+            .map { directories.maaConfig.appending(path: "cli.\($0)") }
+            .first { FileManager.default.fileExists(atPath: $0.path) }
+        var configurationData: Data?
+        if let configURL {
+            let result = await runCommand(
+                executable: cliPath,
+                arguments: ["convert", configURL.path, "--format", "json", "--batch"],
+                timeout: 20
+            )
+            guard !result.cancelled, !Task.isCancelled else { throw RuntimeError.cancelled }
+            guard result.exitCode == 0, !result.timedOut else {
+                throw RuntimeError.taskFailed(shortOutput(result))
+            }
+            configurationData = Data(result.standardOutput.utf8)
+        }
+        return try MAACoreReleaseManifestEndpoint.url(
+            channel: channel,
+            configurationData: configurationData
+        )
     }
 
     private func performStagedMAAUpdate(

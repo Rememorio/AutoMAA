@@ -110,6 +110,8 @@ struct MAAMaintenanceTests {
             resource) printf '%s\\n' "\(resource.path)" ;;
             hot-update) printf '%s\\n' "\(hotUpdate.path)" ;;
           esac
+        elif [ "$1" = "version" ] && [ "$2" = "maa-core" ]; then
+          printf '%s\\n' "MaaCore v6.16.8"
         elif [ "$1" = "update" ]; then
           printf '%s\\n' "$@" > "$MAA_CONFIG_DIR/update-arguments.txt"
         fi
