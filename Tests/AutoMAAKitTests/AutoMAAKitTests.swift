@@ -1604,6 +1604,7 @@ final class AutoMAAKitTests: XCTestCase {
           printf '%s\\n' "$@" > "$MAA_CONFIG_DIR/update-arguments.txt"
           printf '%s\\n' "updated core" > "$MAA_DATA_DIR/lib/libMaaCore.dylib"
           printf '%s\\n' "updated base resource" > "$MAA_DATA_DIR/resource/version.json"
+          printf '%s\\n' "Already up to date."
         fi
         """)
 
@@ -1619,6 +1620,7 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertEqual(arguments, "update\nstable\n--test-time\n10\n--batch\n")
         XCTAssertEqual(entries.map(\.phase), [.updating, .completed])
         XCTAssertTrue(entries.allSatisfy { $0.runID == runID })
+        XCTAssertEqual(entries.last?.message, "MAA 核心与基础资源已更新")
         XCTAssertTrue(FileManager.default.fileExists(
             atPath: DiagnosticLogStore(directories: directories).url(for: runID).path
         ))
@@ -1798,6 +1800,7 @@ final class AutoMAAKitTests: XCTestCase {
           printf '%s\\n' "fatal: Failed to connect to github.com: Couldn't connect to server" >&2
           exit 1
         fi
+        printf '%s\\n' "updated core" > "$MAA_DATA_DIR/lib/libMaaCore.dylib"
         """)
         let runtime = StubClientRuntime(closesOnForce: true)
         let runner = WorkflowRunner(
@@ -1836,6 +1839,7 @@ final class AutoMAAKitTests: XCTestCase {
         try writeFakeMAACLI(at: cli, installation: installation, body: """
         if [ "$1" = "update" ]; then
           printf '%s\\n' "$@" > "$MAA_CONFIG_DIR/update-arguments.txt"
+          printf '%s\\n' "updated core" > "$MAA_DATA_DIR/lib/libMaaCore.dylib"
         fi
         """)
 
@@ -1855,6 +1859,38 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertTrue(succeeded)
         XCTAssertEqual(arguments, "update\nbeta\n--test-time\n10\n--batch\n")
         XCTAssertEqual(entries.last?.message, "MAA Beta 核心与基础资源已更新")
+    }
+
+    @MainActor
+    func testCoreUpdateReportsAlreadyCurrentWithoutClaimingItChanged() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        try directories.prepare()
+        let installation = try makeFakeMAAInstallation(at: root)
+        let cli = root.appending(path: "maa-cli")
+        try writeFakeMAACLI(at: cli, installation: installation, body: """
+        if [ "$1" = "update" ]; then
+          printf '%s\\n' "Already up to date."
+        fi
+        """)
+        let runner = WorkflowRunner(
+            directories: directories,
+            resourceProbeExecutable: installation.probe
+        )
+
+        let stableSucceeded = await runner.updateCore(cliPath: cli.path)
+        let betaSucceeded = await runner.updateCore(cliPath: cli.path, channel: .beta)
+
+        let messages = HistoryStore(directories: directories).load()
+            .filter { $0.phase == .completed }
+            .map(\.message)
+        XCTAssertTrue(stableSucceeded)
+        XCTAssertTrue(betaSucceeded)
+        XCTAssertEqual(messages, [
+            "MAA 核心与基础资源已经是最新",
+            "MAA Beta 核心与基础资源已经是最新",
+        ])
     }
 
     func testResourceProbeRejectsAnUnreadableCoreWithoutInspectingResourceJSON() {

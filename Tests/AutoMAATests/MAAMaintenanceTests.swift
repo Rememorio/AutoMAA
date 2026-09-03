@@ -114,6 +114,7 @@ struct MAAMaintenanceTests {
           printf '%s\\n' "MaaCore v6.16.8"
         elif [ "$1" = "update" ]; then
           printf '%s\\n' "$@" > "$MAA_CONFIG_DIR/update-arguments.txt"
+          printf '%s\\n' "updated core" > "$MAA_DATA_DIR/lib/libMaaCore.dylib"
         fi
         """.utf8).write(to: cli)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)

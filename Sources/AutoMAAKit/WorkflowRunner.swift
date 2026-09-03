@@ -34,7 +34,7 @@ private struct MaintenanceCommandOutcome {
 }
 
 private enum StagedMAAUpdateResult {
-    case success(recoveredAfterRetry: Bool)
+    case success(changed: Bool, recoveredAfterRetry: Bool)
     case incompatible(MAAResourceCompatibilityIssue)
     case failed(String)
     case cancelled
@@ -706,7 +706,7 @@ public final class WorkflowRunner {
         case let .failed(details):
             emit(.failed, "资源更新失败", 1, .error, details: details)
             return false
-        case let .success(recoveredAfterRetry):
+        case let .success(_, recoveredAfterRetry):
             emit(
                 .completed,
                 recoveredAfterRetry ? "MAA 资源重试后已经是最新" : "MAA 资源已经是最新",
@@ -783,11 +783,12 @@ public final class WorkflowRunner {
         case let .failed(details):
             emit(.failed, "MAA 更新失败", 1, .error, details: details)
             return false
-        case let .success(recoveredAfterRetry):
+        case let .success(changed, recoveredAfterRetry):
             emit(
                 .completed,
                 updateCoreSuccessMessage(
                     channel: channel,
+                    changed: changed,
                     recoveredAfterRetry: recoveredAfterRetry || preflightRecoveredAfterRetry
                 ),
                 1,
@@ -907,6 +908,9 @@ public final class WorkflowRunner {
             return .failed("无法准备隔离更新目录；当前安装没有更改：\(error.localizedDescription)")
         }
         defer { staging.remove() }
+        let installedCoreChecksum = component.includesCore
+            ? try? SoftwareUpdateVerifier.sha256(of: paths.library.appending(path: "libMaaCore.dylib"))
+            : nil
 
         let outcome = await runMaintenanceCommand(
             executable: cliPath,
@@ -944,6 +948,9 @@ public final class WorkflowRunner {
         ) {
             return .incompatible(issue)
         }
+        let componentChanged = component.includesCore && installedCoreChecksum != (try? SoftwareUpdateVerifier.sha256(
+            of: staging.library.appending(path: "libMaaCore.dylib")
+        ))
 
         do {
             try FileReplacementTransaction.commit(
@@ -956,7 +963,10 @@ public final class WorkflowRunner {
         } catch {
             return .failed("无法启用已验证的候选组件；当前安装已尝试恢复：\(error.localizedDescription)")
         }
-        return .success(recoveredAfterRetry: outcome.recoveredAfterRetry)
+        return .success(
+            changed: componentChanged,
+            recoveredAfterRetry: outcome.recoveredAfterRetry
+        )
     }
 
     private func maaInstallationPaths(cliPath: String) async -> MAAInstallationPaths? {
@@ -1409,8 +1419,15 @@ public final class WorkflowRunner {
 
     private func updateCoreSuccessMessage(
         channel: MAAUpdateChannel,
+        changed: Bool,
         recoveredAfterRetry: Bool
     ) -> String {
+        if !changed {
+            let message = channel == .beta
+                ? "MAA Beta 核心与基础资源已经是最新"
+                : "MAA 核心与基础资源已经是最新"
+            return recoveredAfterRetry ? "重试后确认：\(message)" : message
+        }
         if channel == .beta {
             return recoveredAfterRetry
                 ? "MAA Beta 核心与基础资源重试后已更新"
