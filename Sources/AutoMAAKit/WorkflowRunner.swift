@@ -33,6 +33,11 @@ private struct MaintenanceCommandOutcome {
     let recoveredAfterRetry: Bool
 }
 
+private struct InterventionImpact {
+    let accounts: Int
+    let skippedSteps: Int
+}
+
 private enum StagedMAAUpdateResult {
     case success(changed: Bool, recoveredAfterRetry: Bool)
     case incompatible(MAAResourceCompatibilityIssue)
@@ -317,8 +322,8 @@ public final class WorkflowRunner {
                 report.cancelled = true
                 break
             }
-            let clientStepCount = client.accounts.filter(plan.includes).count * plan.enabledTasks.count
-            let visitedAtClientStart = visitedSteps
+            let activeAccounts = client.accounts.filter(plan.includes)
+            let clientStepCount = activeAccounts.count * plan.enabledTasks.count
             if clientStepCount == 0 {
                 emit(.runningTask, "\(clientText(client))没有待执行任务，未启动", Double(visitedSteps) / Double(totalSteps), .info, client: client)
                 continue
@@ -365,7 +370,12 @@ public final class WorkflowRunner {
                 visitedSteps += completedBeforeLaunch
                 appendIntervention(
                     intervention,
-                    skippedSteps: max(0, clientStepCount - completedBeforeLaunch),
+                    impact: interventionImpact(
+                        accounts: activeAccounts[...],
+                        plan: plan,
+                        client: client,
+                        state: state
+                    ),
                     visitedSteps: &visitedSteps,
                     totalSteps: totalSteps,
                     report: &report,
@@ -385,14 +395,13 @@ public final class WorkflowRunner {
             }
 
             var stopAfterClosingClient = false
-            accountLoop: for account in client.accounts where plan.includes(account) {
+            accountLoop: for (accountIndex, account) in activeAccounts.enumerated() {
                 if Task.isCancelled {
                     report.cancelled = true
                     stopAfterClosingClient = true
                     break accountLoop
                 }
                 let enabledTasks = plan.enabledTasks
-                let visitedAtAccountStart = visitedSteps
                 if resumeToday, enabledTasks.allSatisfy({
                     state.completedSteps.contains(checkpointKey(plan: plan, client: client, account: account, task: $0))
                 }) {
@@ -427,12 +436,17 @@ public final class WorkflowRunner {
                         break clientLoop
                     }
                     let intervention = manualIntervention(for: error, client: client, account: account)
-                    let skipped = intervention.scope == .client
-                        ? max(0, clientStepCount - (visitedSteps - visitedAtClientStart))
-                        : enabledTasks.count
+                    let impactedAccounts = intervention.scope == .client
+                        ? activeAccounts[accountIndex...]
+                        : activeAccounts[accountIndex...accountIndex]
                     appendIntervention(
                         intervention,
-                        skippedSteps: skipped,
+                        impact: interventionImpact(
+                            accounts: impactedAccounts,
+                            plan: plan,
+                            client: client,
+                            state: state
+                        ),
                         visitedSteps: &visitedSteps,
                         totalSteps: totalSteps,
                         report: &report,
@@ -497,15 +511,18 @@ public final class WorkflowRunner {
                             task: task
                         )
                         let intervention = manualIntervention(for: error, client: client, account: account)
-                        let skipped: Int
-                        if intervention.scope == .client {
-                            skipped = max(0, clientStepCount - (visitedSteps - visitedAtClientStart))
-                        } else {
-                            skipped = max(0, enabledTasks.count - (visitedSteps - visitedAtAccountStart))
-                        }
+                        let impactedAccounts = intervention.scope == .client
+                            ? activeAccounts[accountIndex...]
+                            : activeAccounts[accountIndex...accountIndex]
                         appendIntervention(
                             intervention,
-                            skippedSteps: skipped,
+                            impact: interventionImpact(
+                                accounts: impactedAccounts,
+                                excludingSteps: 1,
+                                plan: plan,
+                                client: client,
+                                state: state
+                            ),
                             visitedSteps: &visitedSteps,
                             totalSteps: totalSteps,
                             report: &report,
@@ -600,15 +617,18 @@ public final class WorkflowRunner {
                                     break clientLoop
                                 }
                                 let intervention = manualIntervention(for: error, client: client, account: account)
-                                let skipped: Int
-                                if intervention.scope == .client {
-                                    skipped = max(0, clientStepCount - (visitedSteps - visitedAtClientStart))
-                                } else {
-                                    skipped = max(0, enabledTasks.count - (visitedSteps - visitedAtAccountStart))
-                                }
+                                let impactedAccounts = intervention.scope == .client
+                                    ? activeAccounts[accountIndex...]
+                                    : activeAccounts[accountIndex...accountIndex]
                                 appendIntervention(
                                     intervention,
-                                    skippedSteps: skipped,
+                                    impact: interventionImpact(
+                                        accounts: impactedAccounts,
+                                        excludingSteps: 1,
+                                        plan: plan,
+                                        client: client,
+                                        state: state
+                                    ),
                                     visitedSteps: &visitedSteps,
                                     totalSteps: totalSteps,
                                     report: &report,
@@ -1577,8 +1597,8 @@ public final class WorkflowRunner {
             scope: .client,
             reason: "\(accountText(account))：\(task.title)执行超时",
             guidance: recoveredBeforeFailure
-                ? "客户端自动重启后仍未恢复，可能停在网络、登录、更新或异常弹窗页面；请手动进入一次主界面，本次将跳过该客户端"
-                : "客户端状态已不可靠；请手动检查网络、登录、更新或异常弹窗，本次将跳过该客户端",
+                ? "客户端自动重启后仍未恢复，可能停在网络、登录、更新或异常弹窗页面；请手动进入一次主界面"
+                : "客户端状态已不可靠；请手动检查网络、登录、更新或异常弹窗",
             details: timeoutDetails(timeout: timeout, output: details)
         )
     }
@@ -1691,15 +1711,27 @@ public final class WorkflowRunner {
 
     private func appendIntervention(
         _ intervention: ManualInterventionError,
-        skippedSteps: Int,
+        impact: InterventionImpact,
         visitedSteps: inout Int,
         totalSteps: Int,
         report: inout WorkflowReport,
         client: ClientConfiguration,
         account: AccountConfiguration? = nil
     ) {
-        let skipped = max(0, skippedSteps)
-        let message = intervention.localizedDescription
+        let skipped = impact.skippedSteps
+        let message: String
+        if intervention.scope == .client {
+            let impactDescription = if skipped > 0, impact.accounts > 0 {
+                "，已跳过该客户端中 \(impact.accounts) 个账号的 \(skipped) 个待执行任务"
+            } else if skipped > 0 {
+                "，已跳过该客户端的 \(skipped) 个待执行任务"
+            } else {
+                ""
+            }
+            message = "\(clientText(client))不可用\(impactDescription)。触发原因：\(intervention.localizedDescription)"
+        } else {
+            message = intervention.localizedDescription
+        }
         report.skippedSteps += skipped
         report.attentionMessages.append(message)
         visitedSteps += skipped
@@ -1725,7 +1757,7 @@ public final class WorkflowRunner {
             return .init(
                 scope: .client,
                 reason: reason,
-                guidance: "请手动打开\(clientText(client))并确认已进入主界面；本次将跳过该客户端"
+                guidance: "请手动打开\(clientText(client))并确认已进入主界面"
             )
         }
         switch runtimeError {
@@ -1739,25 +1771,25 @@ public final class WorkflowRunner {
             return .init(
                 scope: .client,
                 reason: reason,
-                guidance: "请重新选择安装后的游戏应用；本次将跳过该客户端"
+                guidance: "请重新选择安装后的游戏应用"
             )
         case .bundleIdentifierMissing, .invalidAddress:
             return .init(
                 scope: .client,
                 reason: reason,
-                guidance: "请修正客户端连接配置；本次将跳过该客户端"
+                guidance: "请修正客户端连接配置"
             )
         case .connectionTimeout:
             return .init(
                 scope: .client,
                 reason: reason,
-                guidance: "游戏可能停在大版本更新、协议确认、登录或维护页面，请手动处理；本次将跳过该客户端"
+                guidance: "游戏可能停在大版本更新、协议确认、登录或维护页面，请手动处理"
             )
         case .launchFailed:
             return .init(
                 scope: .client,
                 reason: "\(clientText(client))启动失败",
-                guidance: "请手动确认所选游戏应用能够正常启动；本次将跳过该客户端"
+                guidance: "请手动确认所选游戏应用能够正常启动"
             )
         default:
             return .init(
@@ -1776,6 +1808,26 @@ public final class WorkflowRunner {
         default:
             return false
         }
+    }
+
+    private func interventionImpact(
+        accounts: ArraySlice<AccountConfiguration>,
+        excludingSteps: Int = 0,
+        plan: AutomationPlan,
+        client: ClientConfiguration,
+        state: ExecutionState
+    ) -> InterventionImpact {
+        let unfinishedSteps = accounts.map { account in
+            plan.enabledTasks.count { task in
+                !state.completedSteps.contains(
+                    checkpointKey(plan: plan, client: client, account: account, task: task)
+                )
+            }
+        }
+        return InterventionImpact(
+            accounts: unfinishedSteps.count { $0 > 0 },
+            skippedSteps: max(0, unfinishedSteps.reduce(0, +) - excludingSteps)
+        )
     }
 
     private func isCancellation(_ error: Error) -> Bool {

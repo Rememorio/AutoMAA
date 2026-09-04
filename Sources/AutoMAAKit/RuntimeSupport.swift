@@ -105,7 +105,7 @@ enum StartupFailureClassifier {
         ]) {
             return .init(
                 scope: .client,
-                guidance: "疑似游戏大版本更新或资源版本不匹配，请手动更新游戏包体并进入一次主界面；本次将跳过该客户端"
+                guidance: "疑似游戏大版本更新或资源版本不匹配，请手动更新游戏包体并进入一次主界面"
             )
         }
         if containsAny(value, [
@@ -114,25 +114,25 @@ enum StartupFailureClassifier {
         ]) {
             return .init(
                 scope: .client,
-                guidance: "游戏可能仍在下载或解压更新数据，请手动等待更新完成并进入一次主界面；本次将跳过该客户端"
+                guidance: "游戏可能仍在下载或解压更新数据，请手动等待更新完成并进入一次主界面"
             )
         }
         if containsAny(value, ["maintenance", "server is closed", "维护中", "服务器维护", "停服维护"]) {
             return .init(
                 scope: .client,
-                guidance: "游戏可能正在维护，请稍后手动确认；本次将跳过该客户端"
+                guidance: "游戏可能正在维护，请稍后手动确认"
             )
         }
         if containsAny(value, ["login", "sign in", "authentication", "登录", "重新认证", "用户协议"]) {
             return .init(
                 scope: .client,
-                guidance: "游戏可能停在登录、协议确认或身份验证页面，请手动处理后再运行；本次将跳过该客户端"
+                guidance: "游戏可能停在登录、协议确认或身份验证页面，请手动处理后再运行"
             )
         }
         if isGameOffline(value) {
             return .init(
                 scope: .client,
-                guidance: "游戏与 MaaTools 的连接已离线，重启客户端后仍未恢复；请手动进入一次主界面，本次将跳过该客户端"
+                guidance: "游戏与 MaaTools 的连接已离线，重启客户端后仍未恢复；可能正在维护，或停在登录、更新及异常弹窗页面，请稍后重试或手动进入一次主界面"
             )
         }
         if containsAny(value, [
@@ -142,12 +142,12 @@ enum StartupFailureClassifier {
         ]) {
             return .init(
                 scope: .client,
-                guidance: "网络或 MaaTools 连接异常，自动重试仍未恢复；请手动检查游戏和网络，本次将跳过该客户端"
+                guidance: "网络或 MaaTools 连接异常，自动重试仍未恢复；请手动检查游戏和网络"
             )
         }
         return .init(
             scope: .client,
-            guidance: "游戏可能停在强制更新、登录、公告或异常弹窗页面，请手动进入一次主界面；本次将跳过该客户端"
+            guidance: "游戏可能停在强制更新、登录、公告或异常弹窗页面，请手动进入一次主界面"
         )
     }
 

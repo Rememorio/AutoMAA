@@ -2163,7 +2163,7 @@ final class AutoMAAKitTests: XCTestCase {
         let result = StartupFailureClassifier.diagnose(output: "执行超时：游戏仍在下载资源", hasAccountSelector: false)
         XCTAssertEqual(result.scope, .client)
         XCTAssertTrue(result.guidance.contains("下载或解压更新数据"))
-        XCTAssertTrue(result.guidance.contains("跳过该客户端"))
+        XCTAssertFalse(result.guidance.contains("跳过"))
     }
 
     func testStartupFailureClassifierRecognizesScreenshotConnectionFailure() {
@@ -2878,7 +2878,29 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertTrue(warnings[0].details?.contains("ScreencapFailed") == true)
         XCTAssertFalse(entries.contains { $0.task != nil })
         XCTAssertEqual(entries.last?.runSummary, report.runSummary)
-        XCTAssertEqual(entries.last?.message, "流程部分完成：0/1 个步骤完成，1 个未执行；需要手动处理：账号「测试账号」准备失败。网络或 MaaTools 连接异常，自动重试仍未恢复；请手动检查游戏和网络，本次将跳过该客户端")
+        XCTAssertEqual(entries.last?.message, "流程部分完成：0/1 个步骤完成，1 个未执行；需要手动处理：客户端「测试客户端」不可用，已跳过该客户端中 1 个账号的 1 个待执行任务。触发原因：账号「测试账号」准备失败。网络或 MaaTools 连接异常，自动重试仍未恢复；请手动检查游戏和网络")
+    }
+
+    @MainActor
+    func testClientScopedStartupFailureReportsEverySkippedAccount() async throws {
+        let (report, runtime) = try await runRetryScenario(
+            startupFailures: 2,
+            taskFailures: 0,
+            startupFailureOutput: "GameOffline: Auto reconnect disabled, stopping",
+            maxRetries: 0,
+            opensOnWait: true,
+            accountCount: 2
+        )
+        let entries = runtime.events.map(\.log)
+        let warning = try XCTUnwrap(entries.first { $0.phase == .attention })
+
+        XCTAssertEqual(report.unexecutedSteps, 2)
+        XCTAssertEqual(report.failedSteps, 0)
+        XCTAssertEqual(
+            warning.message,
+            "客户端「测试客户端」不可用，已跳过该客户端中 2 个账号的 2 个待执行任务。触发原因：账号「测试账号 1」准备失败。游戏与 MaaTools 的连接已离线，重启客户端后仍未恢复；可能正在维护，或停在登录、更新及异常弹窗页面，请稍后重试或手动进入一次主界面"
+        )
+        XCTAssertFalse(entries.contains { $0.accountID != nil && $0.message.contains("测试账号 2") })
     }
 
     @MainActor
@@ -2959,7 +2981,8 @@ final class AutoMAAKitTests: XCTestCase {
         taskFailures: Int,
         startupFailureOutput: String = "ScreencapFailed",
         maxRetries: Int = 1,
-        opensOnWait: Bool = false
+        opensOnWait: Bool = false,
+        accountCount: Int = 1
     ) async throws -> (WorkflowReport, StubClientRuntime) {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -2993,7 +3016,11 @@ final class AutoMAAKitTests: XCTestCase {
         try Data(script.utf8).write(to: cli)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
 
-        let account = AccountConfiguration(name: "测试账号", accountSelector: "fixture-selector")
+        let accounts = accountCount == 1
+            ? [AccountConfiguration(name: "测试账号", accountSelector: "fixture-selector")]
+            : (1...accountCount).map {
+                AccountConfiguration(name: "测试账号 \($0)", accountSelector: "fixture-selector-\($0)")
+            }
         let client = ClientConfiguration(
             name: "测试客户端",
             kind: .official,
@@ -3001,7 +3028,7 @@ final class AutoMAAKitTests: XCTestCase {
             address: "127.0.0.1:65493",
             profileName: "retry-severity",
             bundleIdentifier: "dev.automaa.tests.retry-severity",
-            accounts: [account]
+            accounts: accounts
         )
         var plan = AutomationPlan.lightRoutine
         plan.recruit.enabled = false
