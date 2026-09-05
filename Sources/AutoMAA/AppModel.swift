@@ -39,24 +39,33 @@ enum PlanRunState: Equatable {
 
 enum ApplicationUpdateState {
     case idle
+    case restoring
     case checking
     case upToDate
     case available(SoftwareUpdateRelease)
     case downloading(SoftwareUpdateRelease)
+    case cancelling
     case ready(PreparedSoftwareUpdate)
     case installing(SoftwareUpdateRelease)
     case failed(String)
 
     var isBusy: Bool {
         switch self {
-        case .checking, .downloading, .installing: true
+        case .restoring, .checking, .downloading, .cancelling, .installing: true
         default: false
         }
     }
 
     var blocksWorkflow: Bool {
         switch self {
-        case .downloading, .installing: true
+        case .downloading, .cancelling, .installing: true
+        default: false
+        }
+    }
+
+    var canCancel: Bool {
+        switch self {
+        case .restoring, .checking, .downloading: true
         default: false
         }
     }
@@ -102,6 +111,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var maaVersionSummary = "尚未检测"
     @Published private(set) var isCheckingMAAEnvironment = false
     @Published private(set) var applicationUpdateState: ApplicationUpdateState = .idle
+    @Published private(set) var applicationUpdateStartedAt: Date?
+    @Published private(set) var maaUpdateActivity: MAAUpdateActivity?
+    @Published private(set) var isCancellingRun = false
     @Published private(set) var notificationAuthorizationState: NotificationAuthorizationState = .notDetermined
     @Published private(set) var isRequestingNotificationAuthorization = false
     @Published private(set) var isTestingImportantNotification = false
@@ -124,10 +136,10 @@ final class AppModel: ObservableObject {
     private let resourceProbeExecutable: URL?
     private var saveTask: Task<Void, Never>?
     private var workflowTask: Task<Void, Never>?
-    private var automaticMAAUpdateTask: Task<Void, Never>?
     private var automaticMAAUpdateWakeTask: Task<Void, Never>?
     private var lastMAACoreUpdateAttempt: Date?
     private var applicationUpdateTask: Task<Void, Never>?
+    private var automaticApplicationDownloadPaused = false
     private var notificationTask: Task<Void, Never>?
     private var notificationTestTask: Task<Void, Never>?
     private var scheduleSynchronizationTask: Task<Void, Never>?
@@ -208,7 +220,6 @@ final class AppModel: ObservableObject {
     deinit {
         saveTask?.cancel()
         workflowTask?.cancel()
-        automaticMAAUpdateTask?.cancel()
         automaticMAAUpdateWakeTask?.cancel()
         applicationUpdateTask?.cancel()
         notificationTask?.cancel()
@@ -243,7 +254,7 @@ final class AppModel: ObservableObject {
     }
 
     var canCancelRun: Bool {
-        isRunning && workflowTask != nil
+        isRunning && workflowTask != nil && !isCancellingRun
     }
 
     var activeRunID: UUID? {
@@ -436,6 +447,7 @@ final class AppModel: ObservableObject {
         }
         guard saveNow(showConfirmation: false) else { return }
         isRunning = true
+        isCancellingRun = false
         runningPlanID = planID
         lastReport = nil
         progress = 0
@@ -461,6 +473,7 @@ final class AppModel: ObservableObject {
             guard let self else { return }
             self.lastReport = report
             self.isRunning = false
+            self.isCancellingRun = false
             self.runningPlanID = nil
             self.workflowTask = nil
             self.reloadFightStageMemory()
@@ -499,24 +512,7 @@ final class AppModel: ObservableObject {
     }
 
     func hotUpdate() {
-        reloadActivityHistory()
-        guard !isWorkflowRunning, !applicationUpdateState.blocksWorkflow else { return }
-        isRunning = true
-        let runner = WorkflowRunner(
-            directories: directories,
-            resourceProbeExecutable: resourceProbeExecutable
-        ) { [weak self] event in
-            self?.consume(event)
-        }
-        workflowTask = Task { [weak self] in
-            _ = await runner.hotUpdate(cliPath: self?.configuration.cliPath ?? "/opt/homebrew/bin/maa")
-            guard let self else { return }
-            self.isRunning = false
-            self.workflowTask = nil
-            if Task.isCancelled { self.showBanner("资源更新已停止") }
-            self.resumeAutomaticApplicationUpdateIfNeeded()
-            self.resumeAutomaticMAAUpdateIfNeeded()
-        }
+        startMAAUpdate(.resources)
     }
 
     func prepareApplication() {
@@ -688,14 +684,25 @@ final class AppModel: ObservableObject {
     }
 
     func updateMAACore(channel: MAAUpdateChannel = .stable) {
+        startMAAUpdate(.core(channel))
+    }
+
+    private func startMAAUpdate(_ component: MAAComponentUpdate, automatic: Bool = false) {
         reloadActivityHistory()
         guard !isWorkflowRunning, !applicationUpdateState.blocksWorkflow else { return }
         guard FileManager.default.isExecutableFile(atPath: configuration.cliPath) else {
             showBanner("找不到可执行的 maa-cli")
             return
         }
-        recordMAACoreUpdateAttempt()
+        if case .core = component { recordMAACoreUpdateAttempt() }
         isRunning = true
+        isCancellingRun = false
+        runningPlanID = nil
+        progress = 0
+        phase = .preparing
+        maaUpdateActivity = .init(component: component, automatic: automatic)
+        statusMessage = "正在准备更新\(component.title)"
+        let cliPath = configuration.cliPath
         let runner = WorkflowRunner(
             directories: directories,
             resourceProbeExecutable: resourceProbeExecutable
@@ -703,11 +710,18 @@ final class AppModel: ObservableObject {
             self?.consume(event)
         }
         workflowTask = Task { [weak self] in
+            let succeeded: Bool
+            switch component {
+            case .resources:
+                succeeded = await runner.hotUpdate(cliPath: cliPath)
+            case let .core(channel):
+                succeeded = await runner.updateCore(cliPath: cliPath, channel: channel)
+            }
             guard let self else { return }
-            _ = await runner.updateCore(cliPath: self.configuration.cliPath, channel: channel)
             self.isRunning = false
+            self.isCancellingRun = false
             self.workflowTask = nil
-            self.showBanner(self.statusMessage)
+            if !automatic || !succeeded || Task.isCancelled { self.showBanner(self.statusMessage) }
             self.refreshMAAStatus()
             self.resumeAutomaticApplicationUpdateIfNeeded()
             self.resumeAutomaticMAAUpdateIfNeeded()
@@ -731,15 +745,30 @@ final class AppModel: ObservableObject {
 
     private func restorePreparedApplicationUpdateOrCheck() {
         guard !applicationUpdateState.isBusy else { return }
-        applicationUpdateState = .checking
+        applicationUpdateState = .restoring
+        applicationUpdateStartedAt = Date()
         applicationUpdateTask = Task { [weak self] in
             guard let self else { return }
-            if let prepared = await self.softwareUpdateService.restorePreparedUpdate(directories: self.directories) {
-                self.applicationUpdateState = .ready(prepared)
-            } else {
-                await self.performApplicationUpdateCheck(showResult: false)
+            do {
+                let prepared = try await self.softwareUpdateService.restorePreparedUpdate(directories: self.directories)
+                try Task.checkCancellation()
+                if let prepared {
+                    self.applicationUpdateState = .ready(prepared)
+                } else {
+                    self.applicationUpdateState = .checking
+                    self.applicationUpdateStartedAt = Date()
+                    await self.performApplicationUpdateCheck(showResult: false)
+                }
+            } catch {
+                if Task.isCancelled || error is CancellationError {
+                    self.applicationUpdateState = .idle
+                    self.showBanner("已取消检查更新")
+                } else {
+                    self.applicationUpdateState = .failed(error.localizedDescription)
+                }
             }
             self.applicationUpdateTask = nil
+            self.applicationUpdateStartedAt = nil
             self.resumeAutomaticApplicationUpdateIfNeeded()
             self.resumeAutomaticMAAUpdateIfNeeded()
         }
@@ -747,9 +776,11 @@ final class AppModel: ObservableObject {
 
     private func performApplicationUpdateCheck(showResult: Bool) async {
         do {
-            if let release = try await softwareUpdateService.check() {
+            let release = try await softwareUpdateService.check()
+            try Task.checkCancellation()
+            if let release {
                 applicationUpdateState = .available(release)
-                if configuration.applicationUpdates.automaticallyDownloadsUpdates {
+                if configuration.applicationUpdates.automaticallyDownloadsUpdates && !automaticApplicationDownloadPaused {
                     if isWorkflowRunning {
                         showBanner("发现 AutoMAA v\(release.version)，将在当前流程结束后自动下载")
                     } else {
@@ -765,8 +796,14 @@ final class AppModel: ObservableObject {
             }
         } catch is CancellationError {
             applicationUpdateState = .idle
+            showBanner("已取消检查更新")
         } catch {
-            applicationUpdateState = showResult ? .failed(error.localizedDescription) : .idle
+            if Task.isCancelled {
+                applicationUpdateState = .idle
+                showBanner("已取消检查更新")
+                return
+            }
+            applicationUpdateState = .failed(error.localizedDescription)
             if showResult { showBanner("检查更新失败：\(error.localizedDescription)") }
         }
     }
@@ -774,13 +811,22 @@ final class AppModel: ObservableObject {
     private func prepareApplicationUpdate(_ release: SoftwareUpdateRelease) async {
         do {
             try validateAutomaticUpdateAvailability()
+            try Task.checkCancellation()
             applicationUpdateState = .downloading(release)
+            applicationUpdateStartedAt = Date()
             let prepared = try await softwareUpdateService.prepare(release, directories: directories)
+            try Task.checkCancellation()
             applicationUpdateState = .ready(prepared)
             showBanner("v\(release.version) 已下载并通过校验，可以重启更新")
         } catch is CancellationError {
             applicationUpdateState = .available(release)
+            showBanner("更新已取消，可以稍后重新下载")
         } catch {
+            if Task.isCancelled {
+                applicationUpdateState = .available(release)
+                showBanner("更新已取消，可以稍后重新下载")
+                return
+            }
             applicationUpdateState = .failed(error.localizedDescription)
             showBanner("下载更新失败：\(error.localizedDescription)")
         }
@@ -788,6 +834,7 @@ final class AppModel: ObservableObject {
 
     private func resumeAutomaticApplicationUpdateIfNeeded() {
         guard configuration.applicationUpdates.automaticallyDownloadsUpdates,
+              !automaticApplicationDownloadPaused,
               !isWorkflowRunning,
               applicationUpdateTask == nil,
               case let .available(release) = applicationUpdateState
@@ -800,7 +847,6 @@ final class AppModel: ObservableObject {
         automaticMAAUpdateWakeTask = nil
         guard allowsAutomaticMAAMaintenance,
               configuration.maaUpdates.automaticallyUpdatesCoreAndResources,
-              automaticMAAUpdateTask == nil,
               workflowTask == nil,
               applicationUpdateTask == nil,
               !applicationUpdateState.isBusy,
@@ -846,28 +892,7 @@ final class AppModel: ObservableObject {
             return
         }
 
-        recordMAACoreUpdateAttempt(at: now)
-        isRunning = true
-        let cliPath = configuration.cliPath
-        let runner = WorkflowRunner(
-            directories: directories,
-            resourceProbeExecutable: resourceProbeExecutable
-        ) { [weak self] event in
-            self?.consume(event)
-        }
-        automaticMAAUpdateTask = Task { [weak self] in
-            let succeeded = await runner.updateCore(cliPath: cliPath)
-            guard let self else { return }
-            let cancelled = Task.isCancelled
-            self.isRunning = false
-            self.automaticMAAUpdateTask = nil
-            self.refreshMAAStatus()
-            if !succeeded, !cancelled {
-                self.showBanner("MAA 自动更新未完成；已记录到活动记录，稍后可以在全局设置中重试")
-            }
-            self.resumeAutomaticApplicationUpdateIfNeeded()
-            self.resumeAutomaticMAAUpdateIfNeeded()
-        }
+        startMAAUpdate(.core(.stable), automatic: true)
     }
 
     private func scheduleAutomaticMAAUpdateWake(at date: Date, now: Date) {
@@ -892,12 +917,15 @@ final class AppModel: ObservableObject {
 
     func checkForApplicationUpdate(showResult: Bool = true) {
         guard !applicationUpdateState.isBusy else { return }
+        automaticApplicationDownloadPaused = false
         applicationUpdateTask?.cancel()
         applicationUpdateState = .checking
+        applicationUpdateStartedAt = Date()
         applicationUpdateTask = Task { [weak self] in
             guard let self else { return }
             await self.performApplicationUpdateCheck(showResult: showResult)
             self.applicationUpdateTask = nil
+            self.applicationUpdateStartedAt = nil
             self.resumeAutomaticApplicationUpdateIfNeeded()
             self.resumeAutomaticMAAUpdateIfNeeded()
         }
@@ -906,7 +934,10 @@ final class AppModel: ObservableObject {
     func setAutomaticApplicationUpdatesEnabled(_ enabled: Bool) {
         configuration.applicationUpdates.automaticallyDownloadsUpdates = enabled
         scheduleSave()
-        if enabled { resumeAutomaticApplicationUpdateIfNeeded() }
+        if enabled {
+            automaticApplicationDownloadPaused = false
+            resumeAutomaticApplicationUpdateIfNeeded()
+        }
     }
 
     func copySupportDiagnostics() {
@@ -922,17 +953,22 @@ final class AppModel: ObservableObject {
     func downloadApplicationUpdate(_ release: SoftwareUpdateRelease) {
         reloadActivityHistory()
         guard !isWorkflowRunning, !applicationUpdateState.isBusy else { return }
-        applicationUpdateTask?.cancel()
+        automaticApplicationDownloadPaused = false
+        applicationUpdateState = .downloading(release)
+        applicationUpdateStartedAt = Date()
         applicationUpdateTask = Task { [weak self] in
             guard let self else { return }
             await self.prepareApplicationUpdate(release)
             self.applicationUpdateTask = nil
+            self.applicationUpdateStartedAt = nil
             self.resumeAutomaticMAAUpdateIfNeeded()
         }
     }
 
-    func cancelApplicationUpdateDownload() {
-        guard case .downloading = applicationUpdateState else { return }
+    func cancelApplicationUpdate() {
+        guard applicationUpdateState.canCancel else { return }
+        automaticApplicationDownloadPaused = true
+        applicationUpdateState = .cancelling
         applicationUpdateTask?.cancel()
     }
 
@@ -990,14 +1026,24 @@ final class AppModel: ObservableObject {
     }
 
     func cancelRun() {
-        guard isRunning, let workflowTask else { return }
+        guard canCancelRun, let workflowTask else { return }
+        isCancellingRun = true
         if runningPlanID == nil {
-            statusMessage = "正在停止当前更新操作"
+            statusMessage = "正在取消更新并清理临时文件"
+            maaUpdateActivity?.isCancelling = true
         } else {
             statusMessage = "正在安全停止并释放当前连接"
             phase = .closing
         }
         workflowTask.cancel()
+    }
+
+    func cancelCurrentOperation() {
+        if canCancelRun {
+            cancelRun()
+        } else {
+            cancelApplicationUpdate()
+        }
     }
 
     func resetToday() {
@@ -1379,6 +1425,11 @@ final class AppModel: ObservableObject {
         phase = event.phase
         statusMessage = event.message
         progress = event.progress
+        if runningPlanID == nil, maaUpdateActivity?.isFinished == false {
+            maaUpdateActivity?.phase = event.phase
+            maaUpdateActivity?.message = event.message
+            maaUpdateActivity?.details = event.log.details
+        }
         activityEntries.append(event.log)
         if activityEntries.count > 1_000 { activityEntries.removeFirst(activityEntries.count - 1_000) }
     }

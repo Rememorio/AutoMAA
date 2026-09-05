@@ -156,21 +156,24 @@ struct SidebarView: View {
             workflowStatus
 
             if model.isWorkflowRunning {
-                WorkflowProgressView(progress: model.activeProgress)
+                if model.activePlanID != nil {
+                    WorkflowProgressView(progress: model.activeProgress)
+                }
 
-                if model.canCancelRun {
+                if model.canCancelRun || model.isCancellingRun {
                     Button { model.cancelRun() } label: {
                         Label(
-                            model.runningPlanID == nil ? "停止更新" : "安全停止",
+                            model.isCancellingRun ? "正在取消…" : model.runningPlanID == nil ? "取消更新" : "安全停止",
                             systemImage: "stop.fill"
                         )
                         .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
+                    .disabled(model.isCancellingRun)
                     .controlSize(.large)
                     .tint(.red)
                     .help(model.runningPlanID == nil
-                          ? "停止当前 MAA 维护命令"
+                          ? "取消当前更新，清理下载进程与临时文件"
                           : "停止当前 MAA 命令，关闭客户端并释放连接")
                 } else {
                     Label("定时任务正在后台运行", systemImage: "clock.badge.checkmark")

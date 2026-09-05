@@ -177,7 +177,7 @@ public final class WorkflowRunner {
         shutdownPolicy: ClientShutdownPolicy,
         commandRunner: any CommandRunning = CommandRunner(),
         timeoutPolicy: MAACommandTimeoutPolicy = .standard,
-        maintenanceRetryDelay: Duration = .seconds(5),
+        maintenanceRetryDelay: Duration = UpdatePolicy.retryDelay,
         resourceProbeExecutable: URL? = nil,
         coreReleaseManifestFetcher: any MAACoreReleaseManifestFetching = MAACoreReleaseManifestClient(),
         noticeSink: NoticeSink? = nil,
@@ -280,17 +280,17 @@ public final class WorkflowRunner {
 
         emit(.preparing, "正在准备「\(plan.displayName)」", 0, .info)
         if plan.policy.hotUpdateBeforeRun {
-            emit(.updating, "正在热更新 MAA 资源", 0, .info)
+            emit(.updating, "正在更新识别数据", 0, .info)
             let update = await performStagedMAAUpdate(
                 cliPath: configuration.cliPath,
                 component: .resources,
-                operation: "热更新 MAA 资源"
+                operation: "更新识别数据"
             )
             switch update {
             case .cancelled:
                 report.cancelled = true
             case .success:
-                emit(.updating, "MAA 资源已更新", 0, .success)
+                emit(.updating, "识别数据已同步并通过校验", 0, .success)
             case let .incompatible(issue):
                 emit(
                     .updating,
@@ -302,7 +302,7 @@ public final class WorkflowRunner {
             case let .failed(details):
                 emit(
                     .updating,
-                    "资源更新失败，继续使用本地资源",
+                    "识别数据更新失败，将校验并使用本地数据",
                     0,
                     .warning,
                     details: details
@@ -310,7 +310,20 @@ public final class WorkflowRunner {
             }
         }
 
-        if let issue = await maaResourceCompatibilityIssue(cliPath: configuration.cliPath) {
+        if Task.isCancelled || report.cancelled {
+            report.cancelled = true
+            report.unexecutedSteps = totalSteps
+            emit(.cancelled, "流程已取消，未启动游戏", 1, .warning, runSummary: report.runSummary)
+            return report
+        }
+        let compatibilityIssue = await maaResourceCompatibilityIssue(cliPath: configuration.cliPath)
+        if Task.isCancelled {
+            report.cancelled = true
+            report.unexecutedSteps = totalSteps
+            emit(.cancelled, "流程已取消，未启动游戏", 1, .warning, runSummary: report.runSummary)
+            return report
+        }
+        if let issue = compatibilityIssue {
             report.fatalError = issue.guidance
             report.unexecutedSteps = totalSteps
             emit(.failed, issue.guidance, 0, .error)
@@ -699,20 +712,20 @@ public final class WorkflowRunner {
             lock = try ProcessLock(url: directories.lock)
             lease = CaffeinateLease()
         } catch {
-            emit(.failed, "暂时无法热更新 MAA 资源：\(error.localizedDescription)", 1, .error)
+            emit(.failed, "暂时无法更新识别数据：\(error.localizedDescription)", 1, .error)
             return false
         }
         _ = lock
         _ = lease
-        emit(.updating, "正在热更新 MAA 资源", 0, .info)
+        emit(.updating, "正在更新识别数据", 0, .info)
         let outcome = await performStagedMAAUpdate(
             cliPath: cliPath,
             component: .resources,
-            operation: "热更新 MAA 资源"
+            operation: "更新识别数据"
         )
         switch outcome {
         case .cancelled:
-            emit(.cancelled, "资源更新已停止", 1, .warning)
+            emit(.cancelled, "识别数据更新已取消，当前安装未更改", 1, .info)
             return false
         case let .incompatible(issue):
             emit(
@@ -724,12 +737,12 @@ public final class WorkflowRunner {
             )
             return false
         case let .failed(details):
-            emit(.failed, "资源更新失败", 1, .error, details: details)
+            emit(.failed, "识别数据更新未完成", 1, .error, details: details)
             return false
         case let .success(_, recoveredAfterRetry):
             emit(
                 .completed,
-                recoveredAfterRetry ? "MAA 资源重试后已经是最新" : "MAA 资源已经是最新",
+                recoveredAfterRetry ? "识别数据重试后已同步并通过校验" : "识别数据已同步并通过校验",
                 1,
                 .success
             )
@@ -755,9 +768,9 @@ public final class WorkflowRunner {
         }
         _ = lock
         _ = lease
-        let operation = channel == .stable
-            ? "更新 MAA 核心与基础资源"
-            : "更新 MAA Beta 核心与基础资源"
+        let component = MAAComponentUpdate.core(channel)
+        let deadline = UpdateDeadline(timeout: component.timeout)
+        let operation = "更新 \(component.title)"
         emit(.updating, "正在\(operation)", 0, .info)
         var preflightRecoveredAfterRetry = false
         if channel == .stable {
@@ -776,18 +789,19 @@ public final class WorkflowRunner {
                 emit(.failed, "无法检查 MAA 稳定版", 1, .error, details: details)
                 return false
             case .cancelled:
-                emit(.cancelled, "MAA 更新已停止", 1, .warning)
+                emit(.cancelled, "MAA 更新已取消，当前安装未更改", 1, .info)
                 return false
             }
         }
         let outcome = await performStagedMAAUpdate(
             cliPath: cliPath,
-            component: .core(channel),
-            operation: operation
+            component: component,
+            operation: operation,
+            deadline: deadline
         )
         switch outcome {
         case .cancelled:
-            emit(.cancelled, "MAA 更新已停止", 1, .warning)
+            emit(.cancelled, "MAA 更新已取消，当前安装未更改", 1, .info)
             return false
         case let .incompatible(issue):
             emit(
@@ -837,6 +851,7 @@ public final class WorkflowRunner {
         do {
             manifestURL = try await coreManifestURL(cliPath: cliPath, channel: .stable)
         } catch {
+            if Task.isCancelled { return .cancelled }
             return .failed("无法确定稳定版清单地址：\(error.localizedDescription)")
         }
         do {
@@ -852,13 +867,18 @@ public final class WorkflowRunner {
         } catch is CancellationError {
             return .cancelled
         } catch {
+            if Task.isCancelled { return .cancelled }
             return .failed("无法读取稳定版清单：\(error.localizedDescription)")
         }
     }
 
     private func coreReleaseVersion(at url: URL) async throws -> (MAASemanticVersion, Bool) {
+        let deadline = UpdateDeadline(timeout: UpdatePolicy.checkTimeout)
+        let fetcher = coreReleaseManifestFetcher
         do {
-            return (try await coreReleaseManifestFetcher.version(at: url), false)
+            return (try await deadline.perform(operation: "检查 MAA 稳定版") {
+                try await fetcher.version(at: url)
+            }, false)
         } catch {
             guard MAAMaintenanceFailureClassifier.isTransientNetworkFailure(error),
                   !Task.isCancelled
@@ -872,7 +892,9 @@ public final class WorkflowRunner {
             )
             try await Task.sleep(for: maintenanceRetryDelay)
             guard !Task.isCancelled else { throw CancellationError() }
-            return (try await coreReleaseManifestFetcher.version(at: url), true)
+            return (try await deadline.perform(operation: "检查 MAA 稳定版") {
+                try await fetcher.version(at: url)
+            }, true)
         }
     }
 
@@ -906,11 +928,20 @@ public final class WorkflowRunner {
     private func performStagedMAAUpdate(
         cliPath: String,
         component: MAAComponentUpdate,
-        operation: String
+        operation: String,
+        deadline: UpdateDeadline? = nil
     ) async -> StagedMAAUpdateResult {
+        let deadline = deadline ?? UpdateDeadline(timeout: component.timeout)
+        let timeoutMessage = UpdateTimeoutError(operation: operation, timeout: deadline.timeout).localizedDescription
+            + "；当前安装未更改"
+        guard !Task.isCancelled else { return .cancelled }
+        emit(.updating, "正在准备\(component.title)更新", 0, .info,
+             details: "本次更新上限：\(UpdatePolicy.durationDescription(component.timeout))，包括重试与校验")
         guard let paths = await maaInstallationPaths(cliPath: cliPath) else {
+            if Task.isCancelled { return .cancelled }
             return .failed("无法定位 MaaCore、基础资源或热更新目录；当前安装没有更改")
         }
+        guard !Task.isCancelled else { return .cancelled }
         let installationLock: ProcessLock
         do {
             installationLock = try ProcessLock(
@@ -922,20 +953,32 @@ public final class WorkflowRunner {
         _ = installationLock
 
         let staging: MAAUpdateStaging
+        let installedCoreChecksum: String?
         do {
-            staging = try prepareMAAUpdateStaging(paths: paths, includesCore: component.includesCore)
+            let preparation = Task.detached(priority: .utility) {
+                let staging = try self.prepareMAAUpdateStaging(paths: paths, includesCore: component.includesCore)
+                let checksum = component.includesCore
+                    ? try? SoftwareUpdateVerifier.sha256(of: paths.library.appending(path: "libMaaCore.dylib"))
+                    : nil
+                return (staging, checksum)
+            }
+            (staging, installedCoreChecksum) = try await withTaskCancellationHandler(
+                operation: { try await preparation.value },
+                onCancel: { preparation.cancel() }
+            )
         } catch {
+            if Task.isCancelled { return .cancelled }
             return .failed("无法准备隔离更新目录；当前安装没有更改：\(error.localizedDescription)")
         }
         defer { staging.remove() }
-        let installedCoreChecksum = component.includesCore
-            ? try? SoftwareUpdateVerifier.sha256(of: paths.library.appending(path: "libMaaCore.dylib"))
-            : nil
 
+        guard !Task.isCancelled else { return .cancelled }
+        guard deadline.remaining > 0 else { return .failed(timeoutMessage) }
+        emit(.updating, "正在下载\(component.title)", 0, .info)
         let outcome = await runMaintenanceCommand(
             executable: cliPath,
             arguments: component.arguments,
-            timeout: component.timeout,
+            deadline: deadline,
             operation: operation,
             environment: [
                 "MAA_DATA_DIR": staging.data.path,
@@ -945,11 +988,14 @@ public final class WorkflowRunner {
         )
         let result = outcome.result
         guard !result.cancelled, !Task.isCancelled else { return .cancelled }
+        if result.timedOut || deadline.remaining == 0 {
+            return .failed(timeoutMessage + "\n" + shortOutput(result))
+        }
         guard result.exitCode == 0, !result.timedOut else {
-            return .failed(shortOutput(result))
+            return .failed(shortOutput(result) + "；当前安装未更改")
         }
         if result.combinedOutput.localizedCaseInsensitiveContains("failed to update resource repository") {
-            return .failed(shortOutput(result))
+            return .failed("识别数据下载失败，请检查网络后重试；当前安装未更改\n" + shortOutput(result))
         }
         guard FileManager.default.fileExists(
             atPath: staging.hotUpdate.appending(path: "resource", directoryHint: .isDirectory).path
@@ -957,21 +1003,30 @@ public final class WorkflowRunner {
             return .failed("maa-cli 未生成可验证的热更新资源；当前安装没有更改")
         }
 
+        emit(.updating, "正在校验 MAA 引擎与识别数据的兼容性", 0, .info)
         let library = component.includesCore ? staging.library : paths.library
         let resource = component.includesCore ? staging.resource : paths.resource
-        if let issue = await maaResourceCompatibilityIssue(
+        let issue = await maaResourceCompatibilityIssue(
             libraryDirectory: library,
             resourceDirectory: resource,
             hotUpdateDirectory: staging.hotUpdate,
             cacheDirectory: staging.cache,
-            candidateWasNotActivated: true
-        ) {
+            candidateWasNotActivated: true,
+            deadline: deadline
+        )
+        guard !Task.isCancelled else { return .cancelled }
+        guard deadline.remaining > 0 else { return .failed(timeoutMessage) }
+        if let issue {
             return .incompatible(issue)
         }
         let componentChanged = component.includesCore && installedCoreChecksum != (try? SoftwareUpdateVerifier.sha256(
             of: staging.library.appending(path: "libMaaCore.dylib")
         ))
 
+        guard !Task.isCancelled else { return .cancelled }
+        guard deadline.remaining > 0 else { return .failed(timeoutMessage) }
+        emit(.updating, "正在启用已验证的\(component.title)", 0, .info)
+        // Activation is synchronous; preserve its result even if cancellation arrives while it commits.
         do {
             try FileReplacementTransaction.commit(
                 replacements(
@@ -1027,10 +1082,11 @@ public final class WorkflowRunner {
         return URL(filePath: path, directoryHint: .isDirectory)
     }
 
-    private func prepareMAAUpdateStaging(
+    nonisolated private func prepareMAAUpdateStaging(
         paths: MAAInstallationPaths,
         includesCore: Bool
     ) throws -> MAAUpdateStaging {
+        try Task.checkCancellation()
         try removeOwnedStagingItems(in: paths.data, prefix: ".automaa-update-")
         try removeOwnedStagingItems(in: paths.cache, prefix: ".automaa-update-")
         try removeOwnedStagingItems(in: directories.root, prefix: ".maa-update-state-")
@@ -1077,7 +1133,8 @@ public final class WorkflowRunner {
         }
     }
 
-    private func copyIfPresent(from source: URL, to target: URL) throws {
+    nonisolated private func copyIfPresent(from source: URL, to target: URL) throws {
+        try Task.checkCancellation()
         guard FileManager.default.fileExists(atPath: source.path) else { return }
         try FileManager.default.createDirectory(
             at: target.deletingLastPathComponent(),
@@ -1086,7 +1143,7 @@ public final class WorkflowRunner {
         try FileManager.default.copyItem(at: source, to: target)
     }
 
-    private func removeOwnedStagingItems(in directory: URL, prefix: String) throws {
+    nonisolated private func removeOwnedStagingItems(in directory: URL, prefix: String) throws {
         guard FileManager.default.fileExists(atPath: directory.path) else { return }
         let cutoff = Date().addingTimeInterval(-24 * 60 * 60)
         for item in try FileManager.default.contentsOfDirectory(
@@ -1137,17 +1194,18 @@ public final class WorkflowRunner {
     private func runMaintenanceCommand(
         executable: String,
         arguments: [String],
-        timeout: TimeInterval,
+        deadline: UpdateDeadline,
         operation: String,
         environment: [String: String] = [:]
     ) async -> MaintenanceCommandOutcome {
         let first = await runCommand(
             executable: executable,
             arguments: arguments,
-            timeout: timeout,
+            timeout: deadline.remaining,
             environment: environment
         )
-        guard MAAMaintenanceFailureClassifier.isTransientNetworkFailure(first), !Task.isCancelled else {
+        guard MAAMaintenanceFailureClassifier.isTransientNetworkFailure(first), !Task.isCancelled,
+              deadline.remaining > 0 else {
             return .init(result: first, recoveredAfterRetry: false)
         }
         emit(
@@ -1165,10 +1223,13 @@ public final class WorkflowRunner {
         guard !Task.isCancelled else {
             return .init(result: first, recoveredAfterRetry: false)
         }
+        guard deadline.remaining > 0 else {
+            return .init(result: first, recoveredAfterRetry: false)
+        }
         let retried = await runCommand(
             executable: executable,
             arguments: arguments,
-            timeout: timeout,
+            timeout: deadline.remaining,
             environment: environment
         )
         return .init(
@@ -1357,7 +1418,8 @@ public final class WorkflowRunner {
         resourceDirectory: URL,
         hotUpdateDirectory: URL,
         cacheDirectory: URL,
-        candidateWasNotActivated: Bool
+        candidateWasNotActivated: Bool,
+        deadline: UpdateDeadline? = nil
     ) async -> MAAResourceCompatibilityIssue? {
         let manager = FileManager.default
         let library = libraryDirectory.appending(path: "libMaaCore.dylib")
@@ -1384,6 +1446,7 @@ public final class WorkflowRunner {
 
         let globalResources: [String?] = [nil, "txwy", "YoStarEN", "YoStarJP", "YoStarKR"]
         for globalResource in globalResources {
+            guard !Task.isCancelled else { return nil }
             var roots = baseRoots
             if let globalResource {
                 roots += overlayRoots(
@@ -1395,7 +1458,7 @@ public final class WorkflowRunner {
                 in: baseRoots,
                 relativePath: "resource/platform_diff/iOS/resource"
             )
-            if let details = await resourceProbeFailure(library: library, resourceRoots: roots) {
+            if let details = await resourceProbeFailure(library: library, resourceRoots: roots, deadline: deadline) {
                 return .init(
                     details: details,
                     candidateWasNotActivated: candidateWasNotActivated
@@ -1413,7 +1476,8 @@ public final class WorkflowRunner {
         }
     }
 
-    private func resourceProbeFailure(library: URL, resourceRoots: [URL]) async -> String? {
+    private func resourceProbeFailure(library: URL, resourceRoots: [URL], deadline: UpdateDeadline? = nil) async -> String? {
+        if let deadline, deadline.remaining == 0 { return "更新校验超时" }
         let userDirectory = directories.root.appending(
             path: ".maa-resource-probe-\(UUID().uuidString)",
             directoryHint: .isDirectory
@@ -1428,7 +1492,7 @@ public final class WorkflowRunner {
         let result = await runCommand(
             executable: resourceProbeExecutable.path,
             arguments: [library.path, userDirectory.path] + resourceRoots.map(\.path),
-            timeout: 30,
+            timeout: min(30, deadline?.remaining ?? 30),
             environment: environment
         )
         guard result.exitCode == 0, !result.timedOut, !result.cancelled else {
@@ -1444,18 +1508,18 @@ public final class WorkflowRunner {
     ) -> String {
         if !changed {
             let message = channel == .beta
-                ? "MAA Beta 核心与基础资源已经是最新"
-                : "MAA 核心与基础资源已经是最新"
+                ? "MAA Beta 引擎未变，识别数据已同步并通过校验"
+                : "MAA 引擎未变，识别数据已同步并通过校验"
             return recoveredAfterRetry ? "重试后确认：\(message)" : message
         }
         if channel == .beta {
             return recoveredAfterRetry
-                ? "MAA Beta 核心与基础资源重试后已更新"
-                : "MAA Beta 核心与基础资源已更新"
+                ? "MAA Beta 引擎重试后已更新，识别数据已通过校验"
+                : "MAA Beta 引擎已更新，识别数据已通过校验"
         }
         return recoveredAfterRetry
-            ? "MAA 核心与基础资源重试后已更新"
-            : "MAA 核心与基础资源已更新"
+            ? "MAA 引擎重试后已更新，识别数据已通过校验"
+            : "MAA 引擎已更新，识别数据已通过校验"
     }
 
     private func runTask(

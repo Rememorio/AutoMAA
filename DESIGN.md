@@ -100,6 +100,12 @@ The macOS sidebar is the persistent navigation model. Panels organize dashboards
 
 Data entry uses native controls and keeps validation near the affected setting. A controlling strategy choice precedes its conditional fields. Confirmation dialogs are reserved for destructive or consequential actions. Banners summarize save and run results; details remain in readiness or activity views.
 
+### Update behavior
+
+`UpdateProgressRow` owns pending update feedback in Settings: native indeterminate progress, named stage, elapsed time, the shared limit from `UpdatePolicy`, and a consistently labeled “取消更新” action. Automatic and manual work use the same controls. Cancellation remains busy until cleanup finishes; errors remain beside the owning update action and in MAA activity history. `AppModel.startMAAUpdate` owns both automatic and manual MAA task lifecycle. `WorkflowRunner` owns staged validation and activation; the UI never infers compatibility.
+
+“更新 MAA” includes the engine and recognition data; “仅更新识别数据” synchronizes separately published data without replacing the engine. Beta remains an explicit native confirmation. SwiftUI/macOS own focus, menus, semantic colors and scrolling; these native variants also apply to update controls.
+
 ### Iconography
 
 Use SF Symbols. Filled task symbols are acceptable inside the 2rem task container; ordinary action symbols follow the native rendering mode. Symbols support text rather than replace it for consequential actions.

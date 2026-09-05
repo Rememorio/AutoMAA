@@ -118,6 +118,25 @@ private actor StubCommandRunner: CommandRunning {
     )
 }
 
+private actor MaintenanceDeadlineCommandRunner: CommandRunning {
+    private(set) var timeLimits: [TimeInterval] = []
+
+    func run(executable: String, arguments: [String], environment: [String: String], timeout: TimeInterval,
+             observeCancellation: Bool) async throws -> CommandResult {
+        guard arguments.first == "hot-update" else {
+            return try await CommandRunner().run(executable: executable, arguments: arguments,
+                                                 environment: environment, timeout: timeout,
+                                                 observeCancellation: observeCancellation)
+        }
+        timeLimits.append(timeout)
+        if timeLimits.count == 1 {
+            return .init(exitCode: 0, standardOutput: "",
+                         standardError: "Failed to update resource repository: Peer disconnected", timedOut: false)
+        }
+        return .init(exitCode: 15, standardOutput: "", standardError: "", timedOut: true)
+    }
+}
+
 final class AutoMAAKitTests: XCTestCase {
     func testFirstLaunchUsesBlankIdentitiesAndTwoEditableRoutineTemplates() {
         let config = AppConfiguration.defaults
@@ -1618,9 +1637,9 @@ final class AutoMAAKitTests: XCTestCase {
 
         XCTAssertTrue(succeeded)
         XCTAssertEqual(arguments, "update\nstable\n--test-time\n10\n--batch\n")
-        XCTAssertEqual(entries.map(\.phase), [.updating, .completed])
+        XCTAssertEqual(entries.map(\.phase), [.updating, .updating, .updating, .updating, .updating, .completed])
         XCTAssertTrue(entries.allSatisfy { $0.runID == runID })
-        XCTAssertEqual(entries.last?.message, "MAA 核心与基础资源已更新")
+        XCTAssertEqual(entries.last?.message, "MAA 引擎已更新，识别数据已通过校验")
         XCTAssertTrue(FileManager.default.fileExists(
             atPath: DiagnosticLogStore(directories: directories).url(for: runID).path
         ))
@@ -1675,7 +1694,7 @@ final class AutoMAAKitTests: XCTestCase {
             atPath: directories.maaConfig.appending(path: "unexpected-update").path
         ))
         XCTAssertEqual(entries.map(\.phase), [.updating, .updating, .completed])
-        XCTAssertTrue(entries[1].message.contains("临时网络问题"))
+        XCTAssertTrue(entries.contains { $0.message.contains("临时网络问题") })
         XCTAssertEqual(entries.last?.level, .success)
         XCTAssertTrue(entries.last?.message.contains("重试后确认") == true)
         XCTAssertTrue(entries.last?.message.contains("v6.16.8") == true)
@@ -1822,10 +1841,10 @@ final class AutoMAAKitTests: XCTestCase {
 
         XCTAssertTrue(succeeded)
         XCTAssertEqual(attempts, "2")
-        XCTAssertEqual(entries.map(\.phase), [.updating, .updating, .completed])
+        XCTAssertEqual(entries.map(\.phase), [.updating, .updating, .updating, .updating, .updating, .updating, .completed])
         XCTAssertEqual(entries[1].level, .info)
-        XCTAssertTrue(entries[1].message.contains("临时网络问题"))
-        XCTAssertEqual(entries.last?.message, "MAA 核心与基础资源重试后已更新")
+        XCTAssertTrue(entries.contains { $0.message.contains("临时网络问题") })
+        XCTAssertEqual(entries.last?.message, "MAA 引擎重试后已更新，识别数据已通过校验")
     }
 
     @MainActor
@@ -1858,7 +1877,7 @@ final class AutoMAAKitTests: XCTestCase {
 
         XCTAssertTrue(succeeded)
         XCTAssertEqual(arguments, "update\nbeta\n--test-time\n10\n--batch\n")
-        XCTAssertEqual(entries.last?.message, "MAA Beta 核心与基础资源已更新")
+        XCTAssertEqual(entries.last?.message, "MAA Beta 引擎已更新，识别数据已通过校验")
     }
 
     @MainActor
@@ -1888,8 +1907,8 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertTrue(stableSucceeded)
         XCTAssertTrue(betaSucceeded)
         XCTAssertEqual(messages, [
-            "MAA 核心与基础资源已经是最新",
-            "MAA Beta 核心与基础资源已经是最新",
+            "MAA 引擎未变，识别数据已同步并通过校验",
+            "MAA Beta 引擎未变，识别数据已同步并通过校验",
         ])
     }
 
@@ -1945,7 +1964,7 @@ final class AutoMAAKitTests: XCTestCase {
         let entries = HistoryStore(directories: directories).load()
 
         XCTAssertFalse(succeeded)
-        XCTAssertEqual(entries.map(\.phase), [.updating, .failed])
+        XCTAssertEqual(entries.map(\.phase), [.updating, .updating, .updating, .updating, .failed])
         XCTAssertTrue(entries.last?.message.contains("稳定通道") == true)
         XCTAssertTrue(entries.last?.details?.contains("更新 Beta") == true)
         XCTAssertFalse(FileManager.default.fileExists(
@@ -1975,7 +1994,7 @@ final class AutoMAAKitTests: XCTestCase {
         let entries = HistoryStore(directories: directories).load()
 
         XCTAssertFalse(succeeded)
-        XCTAssertEqual(entries.map(\.phase), [.updating, .failed])
+        XCTAssertEqual(entries.map(\.phase), [.updating, .updating, .updating, .updating, .failed])
         XCTAssertTrue(entries.last?.details?.contains("候选组件没有启用") == true)
         XCTAssertEqual(
             try Data(contentsOf: installation.hotUpdate.appending(path: "resource/version.json")),
@@ -2013,6 +2032,174 @@ final class AutoMAAKitTests: XCTestCase {
             ).trimmingCharacters(in: .whitespacesAndNewlines),
             "validated candidate"
         )
+    }
+
+    @MainActor
+    func testCancellationDuringResourceValidationDoesNotActivateOrReportIncompatibility() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        try directories.prepare()
+        let installation = try makeFakeMAAInstallation(at: root)
+        let marker = root.appending(path: "probe-started")
+        try Data("""
+        #!/bin/sh
+        /usr/bin/touch "\(marker.path)"
+        /bin/sleep 30
+        """.utf8).write(to: installation.probe)
+        let cli = root.appending(path: "maa-cli")
+        try writeFakeMAACLI(at: cli, installation: installation, body: """
+        printf '%s' 'candidate' > "$MAA_DATA_DIR/MaaResource/resource/version.json"
+        """)
+        let task = Task {
+            await WorkflowRunner(directories: directories, resourceProbeExecutable: installation.probe)
+                .hotUpdate(cliPath: cli.path)
+        }
+        for _ in 0..<400 {
+            if FileManager.default.fileExists(atPath: marker.path) { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path))
+        task.cancel()
+        let succeeded = await task.value
+        XCTAssertFalse(succeeded)
+        let entries = HistoryStore(directories: directories).load()
+        XCTAssertEqual(entries.last?.phase, .cancelled)
+        XCTAssertFalse(entries.contains { $0.phase == .failed || $0.message.contains("不兼容") })
+        XCTAssertEqual(try String(contentsOf: installation.hotUpdate.appending(path: "resource/version.json"), encoding: .utf8), "hot")
+        XCTAssertFalse(ProcessLock.isHeld(at: directories.lock))
+        XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: installation.data.path).contains {
+            $0.hasPrefix(".automaa-update-")
+        })
+    }
+
+    @MainActor
+    func testResourceRetrySharesOneDeadlineAndLeavesInstallationUnchanged() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        try directories.prepare()
+        let installation = try makeFakeMAAInstallation(at: root)
+        let cli = root.appending(path: "maa-cli")
+        try writeFakeMAACLI(at: cli, installation: installation, body: "exit 0")
+        let runtime = StubClientRuntime(closesOnForce: true)
+        let commands = MaintenanceDeadlineCommandRunner()
+        let runner = WorkflowRunner(
+            directories: directories,
+            portProbe: runtime,
+            gameController: runtime,
+            shutdownPolicy: .immediate,
+            commandRunner: commands,
+            maintenanceRetryDelay: .milliseconds(50),
+            resourceProbeExecutable: installation.probe
+        )
+        let succeeded = await runner.hotUpdate(cliPath: cli.path)
+        XCTAssertFalse(succeeded)
+        let limits = await commands.timeLimits
+        XCTAssertEqual(limits.count, 2)
+        XCTAssertLessThan(limits[0], UpdatePolicy.resourceTimeout)
+        XCTAssertLessThan(limits[1], limits[0] - 0.04)
+        let entries = HistoryStore(directories: directories).load()
+        XCTAssertEqual(entries.filter { $0.message.contains("自动重试") }.count, 1)
+        XCTAssertEqual(entries.last?.phase, .failed)
+        XCTAssertTrue(entries.last?.details?.contains("上限（含重试）") == true)
+        XCTAssertEqual(try String(contentsOf: installation.hotUpdate.appending(path: "resource/version.json"), encoding: .utf8), "hot")
+        XCTAssertFalse(ProcessLock.isHeld(at: directories.lock))
+        XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: installation.data.path).contains {
+            $0.hasPrefix(".automaa-update-")
+        })
+    }
+
+    func testUpdateDeadlineCancelsSlowWork() async throws {
+        do {
+            let _: Bool = try await UpdateDeadline(timeout: 0.05).perform(operation: "测试更新") {
+                try await Task.sleep(for: .seconds(30))
+                return true
+            }
+            XCTFail("更新应到期退出")
+        } catch let error as UpdateTimeoutError {
+            XCTAssertEqual(error.operation, "测试更新")
+        }
+    }
+
+    @MainActor
+    func testCancellingPreRunResourceUpdateNeverStartsAClientOrWritesCheckpoints() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        try directories.prepare()
+        let installation = try makeFakeMAAInstallation(at: root)
+        let marker = directories.maaConfig.appending(path: "download-started")
+        let cli = root.appending(path: "maa-cli")
+        try writeFakeMAACLI(at: cli, installation: installation, body: """
+        /usr/bin/touch "\(marker.path)"
+        /bin/sleep 30
+        """)
+        var plan = AutomationPlan.lightRoutine
+        plan.policy.hotUpdateBeforeRun = true
+        let client = missingClient(name: "测试客户端", path: root.appending(path: "Missing.app").path, port: 65526)
+        let configuration = AppConfiguration(cliPath: cli.path, clients: [client], plans: [plan])
+        let runtime = StubClientRuntime(closesOnForce: true)
+        let runner = WorkflowRunner(directories: directories, portProbe: runtime, gameController: runtime,
+                                    shutdownPolicy: .immediate, resourceProbeExecutable: installation.probe,
+                                    eventSink: runtime.record)
+        let task = Task { await runner.run(configuration, planID: plan.id, resumeToday: false) }
+        for _ in 0..<400 {
+            if FileManager.default.fileExists(atPath: marker.path) { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path))
+        task.cancel()
+        let report = await task.value
+        XCTAssertTrue(report.cancelled)
+        XCTAssertNil(report.fatalError)
+        XCTAssertEqual(report.runSummary?.completedSteps, 0)
+        XCTAssertEqual(report.unexecutedSteps, report.totalSteps)
+        XCTAssertFalse(runtime.events.contains { $0.phase == .launching || $0.phase == .failed })
+        XCTAssertEqual(runtime.events.last?.phase, .cancelled)
+        XCTAssertFalse(ProcessLock.isHeld(at: directories.lock))
+    }
+
+    func testCommandTimeoutIsDistinctFromCancellation() async throws {
+        let result = try await CommandRunner().run(executable: "/bin/sleep", arguments: ["30"], timeout: 0.05)
+        XCTAssertTrue(result.timedOut)
+        XCTAssertFalse(result.cancelled)
+        XCTAssertNotEqual(result.exitCode, 0)
+    }
+
+    func testCancelledCommandDoesNotLaunchAndStopsItsChildProcesses() async throws {
+        let root = temporaryRoot()
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let marker = root.appending(path: "child-pid")
+        let task = Task {
+            try await CommandRunner().run(
+                executable: "/bin/sh",
+                arguments: ["-c", "sleep 30 & echo $! > '\(marker.path)'; wait"],
+                timeout: 30
+            )
+        }
+        for _ in 0..<300 {
+            if FileManager.default.fileExists(atPath: marker.path) { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let child = try XCTUnwrap(Int32(String(contentsOf: marker, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)))
+        task.cancel()
+        let result = try await task.value
+        XCTAssertTrue(result.cancelled)
+        XCTAssertFalse(result.timedOut)
+        XCTAssertEqual(kill(child, 0), -1)
+
+        let neverLaunched = root.appending(path: "unexpected-launch")
+        let cancelled = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await CommandRunner().run(executable: "/usr/bin/touch", arguments: [neverLaunched.path])
+        }
+        do {
+            _ = try await cancelled.value
+            XCTFail("取消任务不应启动命令")
+        } catch is CancellationError { }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: neverLaunched.path))
     }
 
     @MainActor
@@ -2226,7 +2413,7 @@ final class AutoMAAKitTests: XCTestCase {
 
         XCTAssertTrue(StartupFailureClassifier.isMAACoreInitializationFailure(output))
         XCTAssertEqual(result.scope, .client)
-        XCTAssertTrue(result.guidance.contains("更新核心与基础资源"))
+        XCTAssertTrue(result.guidance.contains("更新 MAA"))
         XCTAssertTrue(result.guidance.contains("不应反复运行客户端"))
     }
 

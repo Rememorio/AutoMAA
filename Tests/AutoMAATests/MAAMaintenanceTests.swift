@@ -5,6 +5,36 @@ import Testing
 
 @Suite("MAA maintenance")
 struct MAAMaintenanceTests {
+    @Test("automatic and manual updates share cancellation and retain the installed files", arguments: [true, false])
+    @MainActor
+    func maintenanceCanBeCancelled(automatic: Bool) async throws {
+        let fixture = try makeFixture(lastAttempt: automatic ? nil : Date(), slowUpdate: true)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        if automatic {
+            fixture.model.prepareApplication()
+        } else {
+            fixture.model.updateMAACore()
+        }
+        try await waitUntil { FileManager.default.fileExists(atPath: fixture.arguments.path) }
+        #expect(fixture.model.canCancelRun)
+        #expect(fixture.model.maaUpdateActivity?.automatic == automatic)
+
+        fixture.model.cancelRun()
+        #expect(!fixture.model.canCancelRun)
+        #expect(fixture.model.isWorkflowRunning)
+        #expect(fixture.model.maaUpdateActivity?.isCancelling == true)
+        try await waitUntil { !fixture.model.isWorkflowRunning }
+
+        #expect(fixture.model.phase == .cancelled)
+        #expect(fixture.model.maaUpdateActivity?.phase == .cancelled)
+        #expect(!ProcessLock.isHeld(at: fixture.model.directories.lock))
+        let library = fixture.root.appending(path: "maa-data/lib/libMaaCore.dylib")
+        #expect(try String(contentsOf: library, encoding: .utf8) == "fake MaaCore")
+        #expect(!fixture.model.activityEntries.contains { $0.phase == .failed })
+        let staging = try FileManager.default.contentsOfDirectory(atPath: fixture.root.appending(path: "maa-data").path)
+        #expect(!staging.contains { $0.hasPrefix(".automaa-update-") })
+    }
+
     @Test("enabled automatic maintenance updates the stable channel while idle")
     @MainActor
     func enabledMaintenanceUpdatesWhileIdle() async throws {
@@ -22,7 +52,7 @@ struct MAAMaintenanceTests {
         #expect(arguments == "update\nstable\n--test-time\n10\n--batch\n")
         #expect(state.lastCoreUpdateAttempt != nil)
         #expect(fixture.model.activityEntries.contains {
-            $0.phase == .completed && $0.message == "MAA 核心与基础资源已更新"
+            $0.phase == .completed && $0.message == "MAA 引擎已更新，识别数据已通过校验"
         })
     }
 
@@ -73,7 +103,8 @@ struct MAAMaintenanceTests {
     private func makeFixture(
         lastAttempt: Date?,
         scheduledRunAfter interval: TimeInterval? = nil,
-        allowsAutomaticMAAMaintenance: Bool = true
+        allowsAutomaticMAAMaintenance: Bool = true,
+        slowUpdate: Bool = false
     ) throws -> (root: URL, model: AppModel, arguments: URL) {
         let root = FileManager.default.temporaryDirectory
             .appending(path: "automaa-maa-maintenance-\(UUID().uuidString)", directoryHint: .isDirectory)
@@ -114,6 +145,7 @@ struct MAAMaintenanceTests {
           printf '%s\\n' "MaaCore v6.16.8"
         elif [ "$1" = "update" ]; then
           printf '%s\\n' "$@" > "$MAA_CONFIG_DIR/update-arguments.txt"
+          \(slowUpdate ? "/bin/sleep 30" : "")
           printf '%s\\n' "updated core" > "$MAA_DATA_DIR/lib/libMaaCore.dylib"
         fi
         """.utf8).write(to: cli)
@@ -148,7 +180,7 @@ struct MAAMaintenanceTests {
 
     @MainActor
     private func waitUntil(_ condition: () -> Bool) async throws {
-        for _ in 0..<200 {
+        for _ in 0..<600 {
             if condition() { return }
             try await Task.sleep(for: .milliseconds(10))
         }

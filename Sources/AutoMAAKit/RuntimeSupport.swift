@@ -96,7 +96,7 @@ enum StartupFailureClassifier {
         if isMAACoreInitializationFailure(value) {
             return .init(
                 scope: .client,
-                guidance: "MaaCore 初始化或资源加载失败，请先在全局设置检测环境并更新核心与基础资源；若稳定版仍不兼容，可手动选择 Beta，处理前不应反复运行客户端"
+                guidance: "MaaCore 初始化或资源加载失败，请先在全局设置检测环境并选择“更新 MAA”；若稳定版仍不兼容，可手动选择 Beta，处理前不应反复运行客户端"
             )
         }
         if containsAny(value, [

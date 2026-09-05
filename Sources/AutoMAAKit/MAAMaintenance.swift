@@ -111,7 +111,7 @@ struct MAACoreReleaseManifestClient: MAACoreReleaseManifestFetching {
     }
 
     func version(at url: URL) async throws -> MAASemanticVersion {
-        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: UpdatePolicy.checkTimeout)
         request.setValue("AutoMAA", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await session.data(for: request)
         guard let response = response as? HTTPURLResponse else {
@@ -197,11 +197,11 @@ struct MAAResourceCompatibilityIssue: Equatable {
         let state = candidateWasNotActivated
             ? "下载的候选组件没有启用，当前安装保持不变"
             : "AutoMAA 未启动游戏"
-        return "MaaCore 无法完整加载 MAA 资源。请先在“全局设置 → MAA”更新稳定版核心与基础资源；若稳定通道尚未包含修复，可手动确认更新 Beta，或等待修复进入稳定通道。\(state)"
+        return "MaaCore 无法完整加载 MAA 资源。请先在“全局设置 → MAA 更新”选择“更新 MAA”；若稳定版尚未包含修复，可手动确认更新 Beta，或等待修复进入稳定通道。\(state)"
     }
 }
 
-enum MAAComponentUpdate {
+public enum MAAComponentUpdate: Equatable, Sendable {
     case resources
     case core(MAAUpdateChannel)
 
@@ -221,12 +221,20 @@ enum MAAComponentUpdate {
         }
     }
 
-    var timeout: TimeInterval {
-        includesCore ? 3_600 : 180
+    public var timeout: TimeInterval {
+        includesCore ? UpdatePolicy.packageTimeout : UpdatePolicy.resourceTimeout
+    }
+
+    public var title: String {
+        switch self {
+        case .resources: "识别数据"
+        case .core(.stable): "MAA 稳定版"
+        case .core(.beta): "MAA Beta"
+        }
     }
 }
 
-struct MAAInstallationPaths {
+struct MAAInstallationPaths: Sendable {
     let data: URL
     let cache: URL
     let library: URL
@@ -234,7 +242,7 @@ struct MAAInstallationPaths {
     let hotUpdate: URL
 }
 
-struct MAAUpdateStaging {
+struct MAAUpdateStaging: Sendable {
     let data: URL
     let cache: URL
     let state: URL
@@ -388,8 +396,9 @@ enum MAAMaintenanceFailureClassifier {
     }
 
     static func isTransientNetworkFailure(_ result: CommandResult) -> Bool {
-        guard result.exitCode != 0, !result.cancelled else { return false }
+        guard !result.cancelled, !result.timedOut else { return false }
         let output = result.combinedOutput.lowercased()
+        guard result.exitCode != 0 || output.contains("failed to update resource repository") else { return false }
         return [
             "couldn't connect",
             "could not connect",
@@ -407,6 +416,8 @@ enum MAAMaintenanceFailureClassifier {
             "tls handshake timeout",
             "unexpected disconnect",
             "early eof",
+            "peer disconnected",
+            "connection lost",
         ].contains { output.contains($0) }
     }
 }

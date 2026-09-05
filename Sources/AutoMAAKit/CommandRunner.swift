@@ -66,6 +66,7 @@ public struct CommandRunner: CommandRunning, Sendable {
         }
 
         let worker = Task.detached(priority: .utility) {
+            if observeCancellation { try Task.checkCancellation() }
             let temp = FileManager.default.temporaryDirectory
                 .appending(path: "automaa-command-\(UUID().uuidString)", directoryHint: .isDirectory)
             try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
@@ -86,36 +87,43 @@ public struct CommandRunner: CommandRunning, Sendable {
             process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
 
             do {
+                if observeCancellation { try Task.checkCancellation() }
                 try process.run()
             } catch {
                 try? stdoutHandle.close()
                 try? stderrHandle.close()
+                if error is CancellationError { throw CancellationError() }
                 throw CommandRunnerError.launchFailed(error.localizedDescription)
             }
 
-            let deadline = Date().addingTimeInterval(timeout)
+            let processID = process.processIdentifier
+            // Foundation creates a child process group on macOS. Never signal our own group.
+            let signalTarget = getpgid(processID) == processID && processID != getpgrp()
+                ? -processID : processID
+            let deadline = ContinuousClock.now.advanced(by: .seconds(timeout))
             var timedOut = false
             var cancelled = false
             while process.isRunning,
-                  Date() < deadline,
+                  ContinuousClock.now < deadline,
                   (!observeCancellation || !Task.isCancelled) {
                 try? await Task.sleep(for: .milliseconds(150))
             }
             if process.isRunning {
                 cancelled = observeCancellation && Task.isCancelled
                 timedOut = !cancelled
-                process.terminate()
-                let terminationDeadline = Date().addingTimeInterval(5)
-                while process.isRunning, Date() < terminationDeadline {
-                    try? await Task.sleep(for: .milliseconds(100))
-                }
-                if process.isRunning {
-                    kill(process.processIdentifier, SIGKILL)
-                    let killDeadline = Date().addingTimeInterval(5)
-                    while process.isRunning, Date() < killDeadline {
+                // Git and download helpers must exit before their staging directory is removed.
+                await Task.detached {
+                    kill(signalTarget, SIGTERM)
+                    let terminationDeadline = ContinuousClock.now.advanced(by: .seconds(2))
+                    while kill(signalTarget, 0) == 0, ContinuousClock.now < terminationDeadline {
                         try? await Task.sleep(for: .milliseconds(100))
                     }
-                }
+                    if kill(signalTarget, 0) == 0 { kill(signalTarget, SIGKILL) }
+                    let killDeadline = ContinuousClock.now.advanced(by: .seconds(2))
+                    while process.isRunning, ContinuousClock.now < killDeadline {
+                        try? await Task.sleep(for: .milliseconds(100))
+                    }
+                }.value
             }
             try? stdoutHandle.close()
             try? stderrHandle.close()

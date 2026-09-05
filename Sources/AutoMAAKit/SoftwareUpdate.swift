@@ -323,7 +323,7 @@ public enum SoftwareUpdateVerifier {
 public protocol SoftwareUpdateServing: Sendable {
     func check() async throws -> SoftwareUpdateRelease?
     func prepare(_ release: SoftwareUpdateRelease, directories: AppDirectories) async throws -> PreparedSoftwareUpdate
-    func restorePreparedUpdate(directories: AppDirectories) async -> PreparedSoftwareUpdate?
+    func restorePreparedUpdate(directories: AppDirectories) async throws -> PreparedSoftwareUpdate?
 }
 
 public actor SoftwareUpdateService: SoftwareUpdateServing {
@@ -338,12 +338,18 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
         self.currentVersion = currentVersion
         self.repository = repository
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 20
-        configuration.timeoutIntervalForResource = 300
+        configuration.timeoutIntervalForRequest = UpdatePolicy.checkTimeout
+        configuration.timeoutIntervalForResource = UpdatePolicy.packageTimeout
         session = URLSession(configuration: configuration)
     }
 
     public func check() async throws -> SoftwareUpdateRelease? {
+        try await UpdateDeadline(timeout: UpdatePolicy.checkTimeout).perform(operation: "检查 AutoMAA 更新") {
+            try await self.checkRelease()
+        }
+    }
+
+    private func checkRelease() async throws -> SoftwareUpdateRelease? {
         let repositoryParts = repository.split(separator: "/", omittingEmptySubsequences: false)
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
         guard repositoryParts.count == 2,
@@ -352,7 +358,7 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
         else {
             throw SoftwareUpdateError.invalidDownloadURL
         }
-        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: UpdatePolicy.checkTimeout)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
         request.setValue("AutoMAA/\(currentVersion)", forHTTPHeaderField: "User-Agent")
@@ -367,6 +373,14 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
     }
 
     public func prepare(_ release: SoftwareUpdateRelease, directories: AppDirectories) async throws -> PreparedSoftwareUpdate {
+        try SoftwareUpdateReleaseResolver.validate(release)
+        return try await UpdateDeadline(timeout: UpdatePolicy.packageTimeout).perform(operation: "准备 AutoMAA 更新") {
+            try await self.prepareRelease(release, directories: directories)
+        }
+    }
+
+    private func prepareRelease(_ release: SoftwareUpdateRelease, directories: AppDirectories) async throws -> PreparedSoftwareUpdate {
+        try Task.checkCancellation()
         try directories.prepare()
         let updatesRoot = directories.root.appending(path: "Updates", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: updatesRoot, withIntermediateDirectories: true)
@@ -403,6 +417,7 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
                 in: workingDirectory,
                 expectedVersion: release.version.description
             )
+            try Task.checkCancellation()
             let prepared = PreparedSoftwareUpdate(
                 release: release,
                 applicationURL: stagedApplication,
@@ -417,13 +432,15 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
         }
     }
 
-    public func restorePreparedUpdate(directories: AppDirectories) async -> PreparedSoftwareUpdate? {
+    public func restorePreparedUpdate(directories: AppDirectories) async throws -> PreparedSoftwareUpdate? {
+        guard !Task.isCancelled else { return nil }
         let store = PreparedSoftwareUpdateStore(directories: directories)
         let prepared: PreparedSoftwareUpdate
         do {
             guard let stored = try store.load() else { return nil }
             prepared = stored
         } catch {
+            if Task.isCancelled { return nil }
             store.clear()
             return nil
         }
@@ -433,12 +450,17 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
             return nil
         }
         do {
-            try await SoftwareUpdateApplicationValidator().validate(
-                prepared.applicationURL,
-                expectedVersion: prepared.release.version.description
-            )
+            try await UpdateDeadline(timeout: UpdatePolicy.checkTimeout).perform(operation: "校验已下载的 AutoMAA 更新") {
+                try await SoftwareUpdateApplicationValidator().validate(
+                    prepared.applicationURL,
+                    expectedVersion: prepared.release.version.description
+                )
+            }
+            try Task.checkCancellation()
             return prepared
         } catch {
+            if Task.isCancelled { return nil }
+            if error is UpdateTimeoutError { throw error }
             store.clear()
             return nil
         }
@@ -446,23 +468,24 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
 
     private func download(_ asset: SoftwareUpdateAsset, to destination: URL) async throws {
         var lastError: Error = SoftwareUpdateError.network("未知网络错误")
-        for attempt in 0..<3 {
+        for attempt in 0..<UpdatePolicy.maximumAttempts {
             do {
+                try Task.checkCancellation()
                 try await downloadOnce(asset, to: destination)
                 return
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
                 lastError = error
-                guard attempt < 2, isRetryable(error) else { throw error }
-                try await Task.sleep(for: .milliseconds(attempt == 0 ? 500 : 1_500))
+                guard attempt + 1 < UpdatePolicy.maximumAttempts, isRetryable(error) else { throw error }
+                try await Task.sleep(for: UpdatePolicy.retryDelay)
             }
         }
         throw lastError
     }
 
     private func downloadOnce(_ asset: SoftwareUpdateAsset, to destination: URL) async throws {
-        var request = URLRequest(url: asset.downloadURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 300)
+        var request = URLRequest(url: asset.downloadURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: UpdatePolicy.checkTimeout)
         request.setValue("application/octet-stream", forHTTPHeaderField: "Accept")
         request.setValue("AutoMAA/\(currentVersion)", forHTTPHeaderField: "User-Agent")
         let temporaryURL: URL
@@ -475,6 +498,8 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
             }
             throw SoftwareUpdateError.network(error.localizedDescription)
         }
+        defer { try? FileManager.default.removeItem(at: temporaryURL) }
+        try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse,
               (200..<300).contains(http.statusCode)
         else {
@@ -490,7 +515,7 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
 
     private func data(for request: URLRequest) async throws -> (Data, URLResponse) {
         var lastError: Error = SoftwareUpdateError.network("未知网络错误")
-        for attempt in 0..<3 {
+        for attempt in 0..<UpdatePolicy.maximumAttempts {
             do {
                 return try await session.data(for: request)
             } catch {
@@ -498,8 +523,8 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
                     throw CancellationError()
                 }
                 lastError = SoftwareUpdateError.network(error.localizedDescription)
-                guard attempt < 2 else { break }
-                try await Task.sleep(for: .milliseconds(attempt == 0 ? 500 : 1_500))
+                guard attempt + 1 < UpdatePolicy.maximumAttempts else { break }
+                try await Task.sleep(for: UpdatePolicy.retryDelay)
             }
         }
         throw lastError

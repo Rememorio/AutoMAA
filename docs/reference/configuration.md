@@ -25,7 +25,7 @@ AutoMAA 的用户数据保存在：
 | `execution-state.json` | 按方案隔离的当天成功任务断点 |
 | `fight-stage-memory.json` | 按客户端和账号记录备用常规关卡与剿灭后的单次恢复状态；供“跟随游戏，剿灭后恢复”策略使用 |
 | `history.json` | 图形界面中的结构化活动记录；新记录按每次运行分组 |
-| `maa-maintenance.json` | 最近一次 MAA 核心与基础资源更新尝试时间，用于限制自动更新频率 |
+| `maa-maintenance.json` | 最近一次完整 MAA 更新尝试时间，用于限制自动更新频率 |
 | `Logs/` | 最近 30 次 maa-cli 诊断输出，以及 LaunchAgent 与 Runner 输出 |
 | `Updates/` | 已下载并通过校验、等待安装的 AutoMAA 更新及准备清单；App 重启后会再次校验 |
 | `update-result.json` | 更新辅助程序写入的一次性结果；App 读取提示后删除 |

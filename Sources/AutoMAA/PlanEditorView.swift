@@ -447,7 +447,7 @@ struct PlanEditorView: View {
                 Label("执行策略", systemImage: "arrow.clockwise.circle.fill")
                     .font(.headline)
                 Divider()
-                Toggle("运行前热更新 MAA 资源", isOn: $plan.policy.hotUpdateBeforeRun)
+                Toggle("运行前更新识别数据", isOn: $plan.policy.hotUpdateBeforeRun)
                 Stepper("单步骤失败重试：\(plan.policy.maxRetries) 次", value: $plan.policy.maxRetries, in: 0...3)
                 Toggle("某一步失败后继续后续步骤", isOn: $plan.policy.continueAfterStepFailure)
                 Text("同一方案当天重跑会跳过已成功步骤；不同方案的完成状态彼此隔离。")

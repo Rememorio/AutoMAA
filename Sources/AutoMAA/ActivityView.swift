@@ -199,7 +199,7 @@ struct ActivityView: View {
 
                     if model.canCancelRun {
                         Button(role: .destructive) { model.cancelRun() } label: {
-                            Label(model.runningPlanID == nil ? "停止更新" : "安全停止", systemImage: "stop.fill")
+                            Label(model.runningPlanID == nil ? "取消更新" : "安全停止", systemImage: "stop.fill")
                         }
                         .buttonStyle(.bordered)
                         .tint(.red)
