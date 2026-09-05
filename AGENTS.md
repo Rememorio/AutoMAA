@@ -133,7 +133,7 @@ swift test --parallel
 
 ## 文档与视觉资产
 
-- 用户行为、系统要求或配置语义变化时同步更新 `README.md`。
+- 用户行为或配置语义变化时同步更新对应用户指南。`README.md` 聚焦项目用途、核心能力、使用条件和上手入口；只有这些内容变化时才调整，参数、更新机制和维护流程链接到专门文档。
 - 完整用户指南位于 `docs/`；新增页面时同步更新 VitePress 导航，并运行 `npm run docs:build` 检查站内链接。
 - 产品截图必须直接保留原生 Retina 背板像素，禁止把 1× 截图放大伪装成 2×；使用无损 WebP 和透明窗口圆角，提交前运行 `npm run docs:check-screenshots`，并在 100% 缩放下确认正文与控件文字清晰。
 - 面向贡献者的流程更新在 `CONTRIBUTING.md`，发版流程更新在 `RELEASE.md`。

@@ -1,8 +1,8 @@
 # 参与开发
 
-AutoMAA 使用 Swift 6.2、SwiftUI 和 Swift Package Manager，最低支持 macOS 14。
+AutoMAA 是 Swift Package Manager 项目，界面使用 SwiftUI，最低支持 macOS 14。构建需要 Apple Silicon Mac 和 Xcode 26（Swift 6.2）或兼容工具链；单元测试不需要安装游戏、PlayCover 或 MAA。
 
-## 获取源码
+## 从源码运行
 
 ```bash
 git clone https://github.com/Rememorio/AutoMAA.git
@@ -12,30 +12,37 @@ swift test --parallel
 open .build/AutoMAA.app --args --data-directory /tmp/automaa-development
 ```
 
-项目分为：
+构建产物位于 `.build/AutoMAA.app`。上面的启动命令使用独立数据目录，同时隔离配置、日志和 LaunchAgent，并关闭系统 LaunchAgent 集成与自动更新检查。界面测试始终使用这一入口，不读取或覆盖日常使用的配置。
 
-- `AutoMAA`：SwiftUI 图形界面；
-- `AutoMAAKit`：配置、任务生成、工作流和系统集成；
-- `AutoMAARunner`：LaunchAgent 使用的无界面入口。
+## 代码从哪里看
 
-## 开始贡献
+| 目录 | 职责 |
+| --- | --- |
+| `Sources/AutoMAA/` | SwiftUI 界面、状态与交互；共享视觉组件位于 `Theme.swift` |
+| `Sources/AutoMAAKit/` | 配置模型、校验、MAA 文件生成、工作流、存储与系统集成 |
+| `Sources/AutoMAARunner/` | 定时任务使用的无界面入口 |
+| `Sources/AutoMAAResourceProbe/` | 在独立进程中验证 MaaCore 与识别资源组合 |
+| `Sources/AutoMAAUpdater/` | App 替换、失败回滚与重新启动 |
+| `Tests/AutoMAAKitTests/` | 核心逻辑与隔离测试 |
+| `scripts/` | 构建、打包与验证脚本 |
+| `docs/` | 用户指南和文档站 |
 
-请依次阅读：
+修改配置通常从 `Models.swift` 与 `ConfigurationValidation.swift` 开始，任务参数转换位于 `MAAConfigurationWriter.swift`，运行顺序、重试和断点位于 `WorkflowRunner.swift`。可测试逻辑应留在 `AutoMAAKit`，避免在界面层重复实现。
 
-- [AGENTS.md](https://github.com/Rememorio/AutoMAA/blob/main/AGENTS.md)：架构、安全边界和编码代理规则；
-- [CONTRIBUTING.md](https://github.com/Rememorio/AutoMAA/blob/main/CONTRIBUTING.md)：分支、Commit、PR 与测试规范；
-- [RELEASE.md](https://github.com/Rememorio/AutoMAA/blob/main/RELEASE.md)：维护者发版流程。
+## 修改与验证
 
-外部贡献者必须通过 fork、分支和 Pull Request 合入 `main`。涉及账号切换、端口、断点、取消和 MAA 参数的改动需要相应回归测试。
+提交方式、编码要求和测试隔离规范见 [CONTRIBUTING.md](https://github.com/Rememorio/AutoMAA/blob/main/CONTRIBUTING.md)。外部贡献者通过 fork、分支和 Pull Request 合入 `main`。
 
-## 测试隔离
+按改动范围运行相应检查：
 
-测试不得连接真实游戏或用户数据：
+| 改动范围 | 验证命令 |
+| --- | --- |
+| 所有改动 | `git diff --check` |
+| Swift 代码 | `swift test --parallel` |
+| SwiftUI、应用入口或系统集成 | 另运行 `./scripts/build-app.sh`，使用独立数据目录检查界面 |
+| README 或文档 | `npm ci`、`npm run docs:build`、`./scripts/check-public-content.sh` |
+| 打包脚本或发行结构 | `./scripts/verify-release.sh` |
 
-- 使用临时 `AppDirectories(root:)`；
-- 使用假 Bundle Identifier 与测试专用端口；
-- 不使用默认 MaaTools 地址或端口；
-- 不读取 `~/Library/Application Support/AutoMAA`；
-- 不依赖网络、PlayCover 或已登录账号。
+账号切换、端口释放、断点、取消和 MAA 参数的修改需要相应回归测试。测试不得连接真实游戏、默认 MaaTools 地址或用户数据；LaunchAgent 测试还需注入临时目录并关闭系统集成。
 
-所有构建配置都支持 `--data-directory <临时目录>`，它会同时隔离配置、日志和 LaunchAgent，并关闭系统 LaunchAgent 集成与自动更新检查。界面验收必须显式传入该参数；系统 LaunchAgent 也会拒绝注册位于系统临时目录的 Runner，避免临时 QA App 覆盖正式定时任务。提交前至少运行 `swift test --parallel` 和 `git diff --check`；涉及发布结构时运行 `./scripts/verify-release.sh`。
+文档修改见[文档站维护](./docs)。维护者发版流程集中在 [RELEASE.md](https://github.com/Rememorio/AutoMAA/blob/main/RELEASE.md)；编码代理还应遵循 [AGENTS.md](https://github.com/Rememorio/AutoMAA/blob/main/AGENTS.md)。

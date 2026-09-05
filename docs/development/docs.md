@@ -18,18 +18,27 @@ npm run docs:build
 npm run docs:preview
 ```
 
-VitePress 构建会检查站内链接。提交前应打开关键页面，确认桌面和移动宽度、深浅色、键盘焦点与中文搜索。
+VitePress 构建会检查页面链接，`docs:build` 还会验证截图格式。提交前应检查标题锚点并打开关键页面，确认桌面和窄屏、深浅色、键盘焦点与中文搜索。
 
 ## 信息架构
 
-- `guide/`：安装、首次配置、工作流和定时；
-- `tasks/`：用户可配置的任务；
-- `troubleshooting/`：常见问题和游戏更新；
-- `reference/`：配置、安全与隐私；
-- `development/`：开发和文档维护；
-- `about/`：项目关系、致谢和声明。
+从读者要完成的事情决定内容位置：
 
-新增页面后同步更新 `.vitepress/config.mts` 中的导航或侧边栏。用户行为改变时同时检查 README 和 App 内文案。
+| 位置 | 回答的问题 |
+| --- | --- |
+| 根目录 `README.md` | 这是什么、适不适合我、怎样开始、去哪里求助或贡献？ |
+| `guide/installation`、`guide/getting-started` | 需要准备什么，怎样跑通第一套方案？ |
+| `guide/workflow`、`guide/scheduling`、`guide/updates` | 日常怎样运行、续跑、定时和维护？ |
+| `tasks/` | 每项任务怎样选择，参数有什么影响？ |
+| `troubleshooting/` | 这个现象是什么原因，下一步该做什么？ |
+| `reference/` | 数据存在哪里，怎样备份，有哪些安全与隐私边界？ |
+| `development/`、`CONTRIBUTING.md` | 如何构建、修改、验证并提交贡献？ |
+| `about/`、`Assets/README.md` | 上游分工、致谢和资产授权是什么？ |
+| `CHANGELOG.md`、`RELEASE.md` | 版本有哪些变化，维护者怎样发布？ |
+
+每项用法保留一处完整说明，其他页面按需链接；不要因新增功能就在 README 末尾追加一节。首次配置只围绕完成首次运行，参数细节与维护机制留给专项指南。更新现有说明时有机改写，删除已经过时或重复的内容。
+
+新增页面同步更新 `.vitepress/config.mts` 的统一目录；修改标题时检查入站锚点。界面术语、默认值和限制以当前实现为准，行为改变时同步对应指南与 App 内文案。
 
 ## 公开内容
 

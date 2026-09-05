@@ -4,7 +4,7 @@ layout: home
 hero:
   name: AutoMAA
   text: 把 MAA 日常，组织成可复用自动化方案
-  tagline: 原生 macOS、多客户端、多账号；轻量收菜与完整日常独立配置、手动或定时运行。
+  tagline: 配好客户端与账号，安排任务和时间。AutoMAA 依次完成每套日常，你可以随时查看结果、处理异常或安全停止。
   image:
     src: /automaa-hero-icon.webp
     alt: AutoMAA 应用图标
@@ -13,7 +13,7 @@ hero:
       text: 下载与安装
       link: /guide/installation
     - theme: alt
-      text: 5 分钟完成配置
+      text: 首次配置
       link: /guide/getting-started
     - theme: alt
       text: GitHub
@@ -22,22 +22,22 @@ hero:
 features:
   - icon: ⛓️
     title: 可复用方案
-    details: 客户端和账号只配置一次，任意创建轻量、完整、周末或临时方案，不预置开发者数据。
+    details: 客户端和账号只配置一次，轻量收菜、完整日常和周末剿灭各用一套任务与参数。
   - icon: 🛡️
-    title: 安全切换
-    details: 当前客户端关闭并确认 MaaTools 连接释放后，才会启动下一项。
+    title: 多客户端与账号
+    details: 按顺序处理每个客户端与账号队列，确认当前客户端关闭、连接释放后，再启动下一个。
   - icon: ↩️
     title: 当日断点
     details: 成功步骤按方案与日期记录，失败后可以续跑，不同方案不会互相误跳过。
   - icon: ⚙️
-    title: MAA 参数
-    details: 每项任务可选择对齐当前 MAA 的推荐参数，或启用 AutoMAA 的清晰可视化配置。
-  - icon: 🏭
-    title: 三种基建模式
-    details: 轻量方案可仅收菜，完整方案可换班，也可读取 MAA 自定义排班文件。
+    title: 熟悉的 MAA 任务
+    details: 作战、公招、基建、信用购物与奖励领取，既可使用推荐参数，也能按方案精细调整。
+  - icon: 📋
+    title: 结果与异常
+    details: 在活动记录中查看每次运行的结果、失败原因和日志，需要人工处理时接收系统通知。
   - icon: 🕗
     title: 每方案定时
-    details: 每个方案都有独立的 macOS LaunchAgent，也可以随时手动运行或安全停止。
+    details: 每个方案分别选择星期和时间。在用户登录、Mac 唤醒时，主 App 退出后仍能按时运行。
 ---
 
 <figure class="slogan-artwork">
@@ -46,9 +46,9 @@ features:
 
 <section class="product-showcase" aria-labelledby="product-tour-title">
   <div class="showcase-heading">
-    <span class="showcase-kicker">PRODUCT TOUR</span>
+    <span class="showcase-kicker">工作方式</span>
     <h2 id="product-tour-title">一眼看清每套日常怎样执行</h2>
-    <p>方案、目标账号、任务组合、定时时间和各自的运行检查状态集中呈现；确认后，再交给 AutoMAA 串行完成。</p>
+    <p>从总览确认方案、目标账号和运行条件；需要调整时，再进入客户端或任务配置。</p>
   </div>
 
   <figure class="product-shot product-shot-wide">
@@ -73,12 +73,11 @@ features:
 
 <section class="home-note">
   <div>
-    <h2>第一次打开被 macOS 拦截？</h2>
-    <p>当前公开版本采用临时代码签名、尚未完成 Apple 公证。请先确认下载来源与校验值，再通过系统提供的“仍要打开”流程授权这一个 App。</p>
-    <span class="security-path">系统设置 → 隐私与安全性 → 仍要打开</span>
+    <h2>开始前准备</h2>
+    <p>需要 Apple Silicon Mac、macOS 14，以及独立安装的 MAA 和 PlayCover + MaaTools 游戏环境。<a href="./guide/installation">安装指南</a>会带你完成准备，再从一个客户端、一套方案开始。</p>
   </div>
   <div>
-    <h2>AutoMAA 与 MAA</h2>
-    <p>AutoMAA 负责编排；<a href="https://github.com/MaaAssistantArknights/MaaAssistantArknights">MAA / MaaCore</a> 负责识别与操作。两者各司其职。</p>
+    <h2>遇到问题或想参与改进？</h2>
+    <p>先按现象查阅<a href="./troubleshooting/common">常见问题</a>。欢迎反馈使用体验、改进文档或<a href="./development/">参与开发</a>；AutoMAA 与上游的分工见<a href="./about/credits">项目关系与致谢</a>。</p>
   </div>
 </section>

@@ -1,66 +1,57 @@
 # 数据与配置
 
-AutoMAA 的用户数据保存在：
+在“全局设置 → 数据与恢复”中点击“打开配置目录”，即可找到 AutoMAA 的本机数据。默认位置：
 
 ```text
 ~/Library/Application Support/AutoMAA
-├── config.json
-├── execution-state.json
-├── fight-stage-memory.json  # 每个账号的备用常规关卡与剿灭恢复状态
-├── history.json
-├── maa-maintenance.json     # 最近一次 MAA 核心更新尝试时间
-├── update-result.json       # 仅在更新后短暂存在
-├── Logs/
-├── Updates/
-└── MAA/
-    ├── profiles/
-    └── tasks/
 ```
-
-## 文件用途
-
-| 路径 | 用途 |
-| --- | --- |
-| `config.json` | 客户端、账号、自动化方案和全局设置 |
-| `execution-state.json` | 按方案隔离的当天成功任务断点 |
-| `fight-stage-memory.json` | 按客户端和账号记录备用常规关卡与剿灭后的单次恢复状态；供“跟随游戏，剿灭后恢复”策略使用 |
-| `history.json` | 图形界面中的结构化活动记录；新记录按每次运行分组 |
-| `maa-maintenance.json` | 最近一次完整 MAA 更新尝试时间，用于限制自动更新频率 |
-| `Logs/` | 最近 30 次 maa-cli 诊断输出，以及 LaunchAgent 与 Runner 输出 |
-| `Updates/` | 已下载并通过校验、等待安装的 AutoMAA 更新及准备清单；App 重启后会再次校验 |
-| `update-result.json` | 更新辅助程序写入的一次性结果；App 读取提示后删除 |
-| `MAA/profiles/` | AutoMAA 生成的独立 MAA Profile |
-| `MAA/tasks/` | AutoMAA 按方案、客户端和账号生成的任务文件 |
-
-`config.json` 中的 `notifications.importantEventsEnabled` 记录用户是否希望接收重要通知。它不代表 macOS 已经授权；系统权限仍由“系统设置 → 通知 → AutoMAA”独立控制。
-
-`applicationUpdates.automaticallyDownloadsUpdates` 记录是否在 AutoMAA 打开且空闲时自动下载并准备正式版本。它不允许 App 静默重启，也不会让后台定时 Runner 下载或安装更新。
-
-`maaUpdates.automaticallyUpdatesCoreAndResources` 记录是否在 AutoMAA 打开且空闲时，每 24 小时最多通过稳定通道尝试一次 MaaCore 与基础资源更新。该选项默认关闭；后台定时 Runner 不会触发更新，90 分钟内有定时方案时也会推迟。
-
-每个方案的 `schedule.rules` 保存周计划。每条规则包含一组语义化星期值（例如 `monday`、`sunday`）以及 `hour`、`minute`；同一方案不能在同一个星期出现两条规则。LaunchAgent 安装时才会把这些值转换为系统使用的 `Weekday` 数字，配置文件不依赖 Foundation 或 launchd 的星期编号。
-
-理智作战的 `stageStrategy` 保存关卡来源，是 schema v6 的必要字段：`gameCurrentOrLast` 沿用 MAA 当前/上次关卡；`rememberedRegular` 平时同样跟随当前/上次，只在 AutoMAA 执行剿灭后按账号显式恢复一次备用常规关卡；`fixed` 使用方案内的 `stage`。备用关卡与待恢复状态使用独立的 `fight-stage-memory.json`，不会把账号相关运行状态复制进每个自动化方案；旧版记录会在读取时兼容升级。
-
-## 哪些文件可以编辑
-
-优先在 AutoMAA 界面修改配置。`MAA/` 中的文件会在保存配置时重新生成，不应手工编辑。
-
-删除方案、客户端或账号时，AutoMAA 只会清理由自身生成清单或严格命名规则确认归属的文件，不会清空整个 MAA 目录。
 
 ## 备份与恢复
 
-备份前先停止正在运行的工作流，然后复制整个 AutoMAA 数据目录。恢复时确保 App 和配置协议版本兼容。
+1. 暂停相关方案的定时，结束正在运行的流程并退出 AutoMAA。
+2. 复制整个数据目录，妥善保存；备份完成后可重新打开 App 并按需恢复定时。
+3. 恢复时也先暂停定时、结束运行并退出 App，另行保留现有数据，再将备份放回原位置。
+4. 使用兼容版本打开 AutoMAA，检查客户端路径、连接和方案配置。手动验证后再启用定时。
 
-当前配置协议以 v0.10.0 生成的完整 schema v6 为唯一基线。schema v5 及更早版本、缺少必要字段、仍使用旧版每日时间结构或无法解码的配置都不自动迁移。图形界面会先在同一目录创建 `config-schema-v*.backup.json`，再恢复通用空配置；无界面 Runner 只报告无法处理的配置并退出。备份仍可能含账号片段和本机路径，分享前同样需要脱敏。
+换到另一台 Mac 时，游戏应用、自定义排班文件和 maa-cli 的路径可能不同，不能只复制配置就直接运行。
 
-## 配置中不包含什么
+### 配置版本不兼容时
 
-AutoMAA 不保存：
+当前使用 schema v6（自 AutoMAA v0.10.0 起）。schema v5 及更早版本、缺少必要字段或损坏的配置不自动迁移：图形界面会先创建 `config-schema-v*.backup.json`，再恢复空配置；后台 Runner 只报告错误并退出。
 
-- 游戏密码；
-- 短信或邮箱验证码；
-- Apple ID 或其他系统凭据；
-- MaaTools 的远程访问凭据。
+遇到恢复提示时先保留备份，根据提示重新配置，不要删除唯一副本。备份仍包含账号片段和本机路径，分享前需要脱敏。
 
-账号匹配片段仍可能属于隐私信息。分享 `config.json` 前必须删除或替换它们，并检查本机路径和自定义账号名称。
+## 文件用途
+
+| 文件或目录 | 内容 |
+| --- | --- |
+| `config.json` | 客户端、账号、方案和全局设置 |
+| `execution-state.json` | 各方案当天已成功的任务 |
+| `fight-stage-memory.json` | 每个账号的备用常规关卡与剿灭恢复状态 |
+| `history.json` | 活动记录，包括运行结果与 MAA 更新详情 |
+| `release-notes.json` | 更新说明缓存和阅读状态 |
+| `maa-maintenance.json` | 最近一次完整 MAA 更新尝试时间 |
+| `Logs/` | 最近 30 次 maa-cli 诊断输出，以及 Runner 与定时运行输出 |
+| `Updates/` | 已下载、待安装的 AutoMAA 更新 |
+| `update-result.json` | App 读取后即删除的一次性更新结果 |
+| `MAA/profiles/`、`MAA/tasks/` | AutoMAA 生成的 MAA 配置与任务文件 |
+
+日常修改优先使用界面。`MAA/` 下的文件会重新生成，不应手工编辑；删除方案或账号时，只清理能够确认由 AutoMAA 生成的文件。
+
+## 检查配置字段
+
+以下用于排查配置或参与开发，完整结构以 [Models.swift](https://github.com/Rememorio/AutoMAA/blob/main/Sources/AutoMAAKit/Models.swift)为准。
+
+| 字段 | 含义 |
+| --- | --- |
+| `notifications.importantEventsEnabled` | 希望接收重要通知；macOS 是否授权仍由系统单独控制 |
+| `applicationUpdates.automaticallyDownloadsUpdates` | 空闲时自动准备 AutoMAA 更新，不代表允许静默重启 |
+| `maaUpdates.automaticallyUpdatesCoreAndResources` | 空闲时自动维护 MAA；具体时机见[更新指南](../guide/updates#自动更新-maa) |
+| `schedule.rules` | 方案的星期集合、小时和分钟；同一个星期不能出现在多条规则中 |
+| `stageStrategy` | `gameCurrentOrLast` 跟随游戏、`rememberedRegular` 剿灭后恢复、`fixed` 固定关卡 |
+
+关卡恢复状态独立于方案保存，行为见[理智作战](../tasks/fight)。方案使用自己的任务参数，账号不保存另一份任务配置。
+
+## 分享配置前
+
+AutoMAA 不保存游戏密码或验证码，但账号匹配片段、显示名称和路径仍可能识别个人。不要直接上传整个目录；问题报告通常只需要相关日志和已脱敏的配置片段，见[安全与隐私](./safety)。

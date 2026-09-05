@@ -1,86 +1,20 @@
 # 下载与安装
 
-AutoMAA 当前面向 macOS 14 或更高版本的 Apple Silicon Mac。它不内置 MaaCore、`maa-cli` 或游戏包体。
+本页帮助你准备运行环境并打开 AutoMAA。完成后，前往[首次配置](./getting-started)跑通第一个方案。
 
-## 下载正确的文件
+## 系统与运行环境
 
-前往 [GitHub Releases](https://github.com/Rememorio/AutoMAA/releases/latest)，下载同一版本的两个文件：
+| 项目 | 要求 |
+| --- | --- |
+| Mac | Apple Silicon，macOS 14 或更高版本 |
+| MAA | 单独安装 `maa-cli`、MaaCore 和识别资源 |
+| 游戏连接 | PlayCover + MaaTools，客户端可手动启动并进入游戏 |
 
-```text
-AutoMAA-<版本>-macOS-arm64.dmg
-AutoMAA-<版本>-macOS-arm64.dmg.sha256
-```
+AutoMAA 负责客户端管理与任务编排，不包含 MAA 或游戏包体。MAA 支持的其他模拟器与连接方式，目前尚未接入 AutoMAA。
 
-只从 `github.com/Rememorio/AutoMAA` 下载公开版本。第三方转载的安装包可能已被修改，本项目无法验证其安全性。
+### 安装 MAA
 
-### 可选：校验安装包
-
-假设两个文件都在“下载”文件夹：
-
-```bash
-cd ~/Downloads
-shasum -a 256 -c AutoMAA-<版本>-macOS-arm64.dmg.sha256
-```
-
-看到 `OK` 后再继续。如果校验失败，请删除这两个文件并从 Release 重新下载。
-
-## 安装 App
-
-1. 双击打开 DMG。
-2. 将 `AutoMAA.app` 拖入窗口中的“应用程序”文件夹。
-3. 在 Finder 打开“应用程序”，找到 AutoMAA。
-
-## 处理“Apple 无法验证”提示
-
-::: warning 为什么会出现这个提示？
-当前公开版本使用临时代码签名，尚未使用 Apple Developer ID 签名和公证。macOS 因而无法向 Apple 验证开发者身份，会阻止第一次直接启动。这一提示本身不代表系统已经发现恶意软件，但你仍应确认下载来源和 SHA-256。
-:::
-
-优先尝试：
-
-1. 在 Finder 中按住 Control 点击 AutoMAA，选择“打开”。
-2. 在确认窗口中再次选择“打开”。
-
-如果窗口只有“完成”按钮，或仍然提示无法验证：
-
-1. 关闭提示窗口。
-2. 打开“系统设置 → 隐私与安全性”。
-3. 向下找到“已阻止‘AutoMAA.app’以保护 Mac”。
-4. 点击右侧的“仍要打开”。
-5. 在最后的系统确认窗口中选择“打开”；macOS 可能要求 Touch ID 或登录密码。
-
-这会为当前这份 AutoMAA 建立本机安全例外。以后正常双击即可启动；重新下载的新版本可能需要再次确认。
-
-::: danger 不要全局关闭 Gatekeeper
-不要运行 `sudo spctl --master-disable`，也不建议使用递归删除隔离属性的命令。它们会削弱整个系统或一批文件的安全检查。使用 macOS 提供的“仍要打开”，只授权你已经核验的这个 App。
-:::
-
-## 更新 AutoMAA
-
-AutoMAA 会在启动时检查本项目最新的正式 GitHub Release。也可以选择 App 菜单中的“检查更新…”，或在“全局设置 → AutoMAA 更新”中手动检查。
-
-“AutoMAA 更新”中的“自动下载并准备更新”默认关闭。启用后，AutoMAA 在打开且没有运行方案或 MAA 维护操作时，会自动下载发现的新版本并完成安全校验；如果当时正在运行，会在流程结束后继续。后台定时 Runner 不会自行检查、下载或安装 App 更新。
-
-发现新版本后：
-
-1. 手动点击“下载并校验”，或启用“自动下载并准备更新”；
-2. 等待 DMG 通过附件大小、SHA-256、磁盘映像、Bundle ID、版本、arm64 架构和代码签名校验；
-3. 点击“重启并立即更新”；
-4. AutoMAA 退出后由独立辅助程序替换 App 并重新打开。
-
-“更新内容”会保留在版本信息旁，下载中、等待重启、取消或失败后都能打开。说明在应用内按标题和列表显示；跨多个版本升级时，会读取当前版本到目标版本之间的正式发布说明。历史较长或上游暂不可用时，会保留已取得的内容并提供上游页面入口。
-
-更新成功后，设置中保留“查看本次变化”的提示，打开本版本说明后消失。“关于 AutoMAA → 本版本更新内容”始终可用；当前版本的说明随 App 提供，离线也能阅读。
-
-已下载并通过校验的更新会在下次启动时重新校验并恢复安装入口，不必重复下载。替换或重新启动失败时，更新器会恢复旧版本，并在 AutoMAA 再次打开后显示原因。应用内更新要求 `AutoMAA.app` 位于可写磁盘中，且没有手动或定时流程正在运行；如果正在 DMG 内运行或所在目录不可写，请按本页前面的步骤手动安装。
-
-::: info 首次启用应用内更新
-`v0.1.0` 尚未包含更新器，因此需要从 Releases 手动安装一次 `v0.1.1`。之后的版本可以使用上述应用内更新流程。
-:::
-
-## 安装 MAA 运行环境
-
-AutoMAA 通过 `maa-cli` 调用 MaaCore。使用 Homebrew 安装：
+使用 Homebrew：
 
 ```bash
 brew install MaaAssistantArknights/tap/maa-cli
@@ -88,16 +22,45 @@ maa install
 maa version
 ```
 
-`maa install` 会安装 MaaCore 和资源。其他安装方式请参考 [maa-cli 官方安装文档](https://docs.maa.plus/zh-cn/manual/cli/install.html)。
+`maa install` 安装 MaaCore 和资源；`maa version` 应能显示 maa-cli 与 MaaCore 版本。已有安装时直接检测即可，其他方式见 [maa-cli 安装文档](https://docs.maa.plus/zh-cn/manual/cli/install.html)。
 
-## 查看 MAA 更新内容
+### 准备游戏客户端
 
-“全局设置 → MAA 更新”提供稳定版发布说明入口；Beta 说明可从“更新 MAA”菜单打开。发布说明遵循 maa-cli 的更新来源配置，内容来自 MAA 上游，可能包含 Windows 界面或 MaaMacGui 的专属变化，不代表 AutoMAA 已开放全部相关功能。
+按照 [MAA 的 macOS 连接指南](https://docs.maa.plus/zh-cn/manual/device/macos.html)配置支持 MaaTools 的 PlayCover 环境。确认游戏窗口显示连接地址，并完成游戏数据下载、登录和必要确认。
 
-一次更新开始后，可以打开“本次更新详情”查看更新前的安装信息。只有候选组件校验并成功启用后，详情才会显示“已启用”版本；失败或取消不会把下载的候选标记为当前安装。历史详情也可以从活动记录中的“更新内容”打开。
+记录每个客户端的游戏 `.app` 与 MaaTools 地址，稍后填入 AutoMAA。不要仅凭安装了 PlayCover 就假定已启用 MaaTools。
 
-详情分别展示 MAA 引擎版本、随引擎发布的基础识别数据时间、识别数据补丁的仓库修订。资源标注的活动名称用于识别这套资源，不能代替完整变更说明。前后修订属于同一个 GitHub 上游时，可读取提交摘要并打开完整比较页；没有修订信息时会明确标注，不推测具体变化。仓库修订相同只表示该仓库没有变化，不代表其他在线缓存也完全相同。
+## 下载并安装 AutoMAA
 
-读取说明与更新操作相互独立。网络不可用、上游没有正文或版本无法匹配时，会保留已知版本和已缓存说明，并提供重试或上游页面入口；不会因此阻止下载或绕过组件校验。
+1. 前往 [GitHub Releases](https://github.com/Rememorio/AutoMAA/releases/latest)，下载 `AutoMAA-<版本>-macOS-arm64.dmg`。
+2. 打开 DMG，将 `AutoMAA.app` 拖入“应用程序”。
+3. 从 Finder 的“应用程序”中启动 AutoMAA。
 
-接下来前往[首次配置](./getting-started)。
+### 校验安装包
+
+如需确认下载完整，同时下载同版本的 `.dmg.sha256` 文件。将两个文件放在同一目录，在终端执行以下命令；把 `<版本>` 替换为下载文件中的实际版本号：
+
+```bash
+cd ~/Downloads
+shasum -a 256 -c AutoMAA-<版本>-macOS-arm64.dmg.sha256
+```
+
+结果应为 `OK`。校验失败时重新从本仓库 Release 下载，不要继续安装该文件。
+
+## 处理“Apple 无法验证”提示
+
+当前公开版本使用临时代码签名，尚未使用 Apple Developer ID 签名和公证，因此首次启动可能被 macOS 拦截。
+
+确认安装包来自本仓库并核验 SHA-256 后：
+
+1. 在 Finder 中按住 Control 点击 AutoMAA，选择“打开”，再在确认窗口中选择“打开”。
+2. 若仍被拦截，打开“系统设置 → 隐私与安全性”，找到 AutoMAA 的阻止提示，点击“仍要打开”。
+3. 按系统提示确认，可能需要 Touch ID 或登录密码。
+
+这是对当前这份 App 的单独授权。不要全局关闭 Gatekeeper，也不要使用来源不明的命令移除系统保护。关于提示含义与系统流程，可参阅 [Apple 的说明](https://support.apple.com/zh-cn/102445)。
+
+## 确认安装完成
+
+打开 AutoMAA 的“全局设置”，确认 `maa-cli` 路径正确，点击“检测环境”能看到版本信息。然后进入[首次配置](./getting-started)。若检测失败，先查看[常见问题](../troubleshooting/common#找不到-maa-cli)。
+
+后续维护见[更新应用与 MAA](./updates)；不需要为每次更新重新配置账号和方案。

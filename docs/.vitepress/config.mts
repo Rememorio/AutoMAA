@@ -40,11 +40,13 @@ export default defineConfig({
     nav: [
       { text: "首页", link: "/" },
       { text: "开始使用", link: "/guide/installation" },
-      { text: "任务配置", link: "/tasks/fight" },
+      { text: "任务配置", link: "/tasks/" },
       { text: "常见问题", link: "/troubleshooting/common" },
       {
         text: "项目",
         items: [
+          { text: "参与开发", link: "/development/" },
+          { text: "项目关系与致谢", link: "/about/credits" },
           { text: "GitHub", link: "https://github.com/Rememorio/AutoMAA" },
           { text: "下载最新版", link: "https://github.com/Rememorio/AutoMAA/releases/latest" },
           { text: "更新日志", link: "https://github.com/Rememorio/AutoMAA/blob/main/CHANGELOG.md" },
@@ -52,65 +54,53 @@ export default defineConfig({
         ],
       },
     ],
-    sidebar: {
-      "/guide/": [
-        {
-          text: "开始使用",
-          items: [
-            { text: "下载与安装", link: "/guide/installation" },
-            { text: "首次配置", link: "/guide/getting-started" },
-            { text: "理解执行流程", link: "/guide/workflow" },
-            { text: "每周定时运行", link: "/guide/scheduling" },
-          ],
-        },
-      ],
-      "/tasks/": [
-        {
-          text: "任务配置",
-          items: [
-            { text: "配置模式", link: "/tasks/" },
-            { text: "理智作战", link: "/tasks/fight" },
-            { text: "公开招募", link: "/tasks/recruit" },
-            { text: "基建", link: "/tasks/infrast" },
-            { text: "信用与购物", link: "/tasks/mall" },
-            { text: "领取奖励", link: "/tasks/award" },
-          ],
-        },
-      ],
-      "/troubleshooting/": [
-        {
-          text: "故障排查",
-          items: [
-            { text: "常见问题", link: "/troubleshooting/common" },
-            { text: "游戏更新与人工处理", link: "/troubleshooting/game-update" },
-          ],
-        },
-      ],
-      "/reference/": [
-        {
-          text: "参考",
-          items: [
-            { text: "数据与配置", link: "/reference/configuration" },
-            { text: "安全与隐私边界", link: "/reference/safety" },
-          ],
-        },
-      ],
-      "/development/": [
-        {
-          text: "开发",
-          items: [
-            { text: "参与开发", link: "/development/" },
-            { text: "文档站维护", link: "/development/docs" },
-          ],
-        },
-      ],
-      "/about/": [
-        {
-          text: "关于",
-          items: [{ text: "项目关系与致谢", link: "/about/credits" }],
-        },
-      ],
-    },
+    sidebar: [
+      {
+        text: "开始使用",
+        items: [
+          { text: "下载与安装", link: "/guide/installation" },
+          { text: "首次配置", link: "/guide/getting-started" },
+        ],
+      },
+      {
+        text: "日常使用",
+        items: [
+          { text: "理解执行流程", link: "/guide/workflow" },
+          { text: "每周定时运行", link: "/guide/scheduling" },
+          { text: "更新应用与 MAA", link: "/guide/updates" },
+        ],
+      },
+      {
+        text: "任务配置",
+        collapsed: true,
+        items: [
+          { text: "选择任务与参数", link: "/tasks/" },
+          { text: "理智作战", link: "/tasks/fight" },
+          { text: "公开招募", link: "/tasks/recruit" },
+          { text: "基建", link: "/tasks/infrast" },
+          { text: "信用与购物", link: "/tasks/mall" },
+          { text: "领取奖励", link: "/tasks/award" },
+        ],
+      },
+      {
+        text: "排查与参考",
+        items: [
+          { text: "常见问题", link: "/troubleshooting/common" },
+          { text: "游戏更新与人工处理", link: "/troubleshooting/game-update" },
+          { text: "数据与配置", link: "/reference/configuration" },
+          { text: "安全与隐私边界", link: "/reference/safety" },
+        ],
+      },
+      {
+        text: "参与项目",
+        collapsed: true,
+        items: [
+          { text: "参与开发", link: "/development/" },
+          { text: "文档站维护", link: "/development/docs" },
+          { text: "项目关系与致谢", link: "/about/credits" },
+        ],
+      },
+    ],
     socialLinks: [
       { icon: "github", link: "https://github.com/Rememorio/AutoMAA" },
     ],
@@ -145,6 +135,9 @@ export default defineConfig({
     returnToTopLabel: "返回顶部",
     sidebarMenuLabel: "文档目录",
     darkModeSwitchLabel: "切换深浅色",
+    lightModeSwitchTitle: "切换到浅色主题",
+    darkModeSwitchTitle: "切换到深色主题",
+    skipToContentLabel: "跳转到正文",
     langMenuLabel: "切换语言",
     externalLinkIcon: true,
   },
