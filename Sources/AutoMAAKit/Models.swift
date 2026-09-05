@@ -621,6 +621,7 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
     public var accountID: UUID?
     public var task: TaskKind?
     public var runSummary: WorkflowRunSummary?
+    public var updateInformation: MAAUpdateInformation?
 
     public init(
         id: UUID = UUID(),
@@ -635,7 +636,8 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
         clientID: UUID? = nil,
         accountID: UUID? = nil,
         task: TaskKind? = nil,
-        runSummary: WorkflowRunSummary? = nil
+        runSummary: WorkflowRunSummary? = nil,
+        updateInformation: MAAUpdateInformation? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -650,6 +652,7 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
         self.accountID = accountID
         self.task = task
         self.runSummary = runSummary
+        self.updateInformation = updateInformation
     }
 }
 
@@ -680,6 +683,7 @@ public struct ActivitySession: Identifiable, Sendable, Equatable {
     public var warningCount: Int { entries.count { $0.level == .warning && $0.phase != .completed } }
     public var errorCount: Int { entries.count { $0.level == .error } }
     public var runSummary: WorkflowRunSummary? { entries.lazy.reversed().compactMap(\.runSummary).first }
+    public var updateInformation: MAAUpdateInformation? { entries.lazy.reversed().compactMap(\.updateInformation).first }
     public var completedTaskCount: Int {
         runSummary?.completedSteps ?? entries.count { $0.level == .success && $0.task != nil }
     }

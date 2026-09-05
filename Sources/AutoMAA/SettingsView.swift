@@ -50,10 +50,12 @@ struct SettingsView: View {
                 )
                 Divider()
 
+                applicationUpdateInformation
+
                 switch model.applicationUpdateState {
                 case .idle:
                     updateRow(
-                        message: "当前使用 v\(model.currentApplicationVersion)，启动时会自动检查正式版本。",
+                        message: "启动时会自动检查正式版本。",
                         buttonTitle: "检查更新",
                         action: { model.checkForApplicationUpdate() }
                     )
@@ -66,34 +68,20 @@ struct SettingsView: View {
                     )
                 case .upToDate:
                     updateRow(
-                        message: "v\(model.currentApplicationVersion) 已是最新版本。",
+                        message: "已是最新版本。",
                         symbol: "checkmark.circle.fill",
                         color: .green,
                         buttonTitle: "再次检查",
                         action: { model.checkForApplicationUpdate() }
                     )
                 case let .available(release):
-                    VStack(alignment: .leading, spacing: 10) {
-                        Label(
-                            "v\(release.version.description) 可用（当前 v\(model.currentApplicationVersion)）",
-                            systemImage: "sparkles"
-                        )
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(Color.maaAccent)
-                        if !release.releaseNotes.isEmpty {
-                            Text(releaseSummary(release.releaseNotes))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(3)
-                        }
-                        HStack {
-                            Link("查看发布说明", destination: release.pageURL)
-                            Spacer()
-                            Button("下载并校验") { model.downloadApplicationUpdate(release) }
-                                .buttonStyle(.borderedProminent)
-                                .tint(.maaAction)
-                                .disabled(model.isWorkflowRunning)
-                        }
+                    HStack {
+                        Text("新版本可下载").font(.callout).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("下载并校验") { model.downloadApplicationUpdate(release) }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.maaAction)
+                            .disabled(model.isWorkflowRunning)
                     }
                 case let .downloading(release):
                     UpdateProgressRow(
@@ -115,11 +103,11 @@ struct SettingsView: View {
                         Label("v\(prepared.release.version.description) 已准备好", systemImage: "checkmark.shield.fill")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.green)
-                        Text("更新包已通过 SHA-256、Bundle ID、架构和代码签名校验。重启后会替换当前 App；失败时自动恢复旧版本。")
+                        Text("更新包已通过校验，重启后生效；安装失败时自动恢复旧版本。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         HStack {
-                            Link("查看发布说明", destination: prepared.release.pageURL)
+                            DetailDisclosure(details: "更新包已通过 SHA-256、Bundle ID、版本、架构和代码签名校验。")
                             Spacer()
                             Button("重启并立即更新") { model.restartAndInstallApplicationUpdate(prepared) }
                                 .buttonStyle(.borderedProminent)
@@ -151,6 +139,53 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private var applicationUpdateInformation: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                if let release = model.applicationUpdateRelease {
+                    Text("当前 v\(model.currentApplicationVersion) → v\(release.version.description)")
+                        .font(.subheadline.weight(.semibold))
+                } else {
+                    Text("当前版本 v\(model.currentApplicationVersion)")
+                        .font(.subheadline.weight(.semibold))
+                }
+                Spacer()
+                Button(model.applicationUpdateRelease == nil ? "本版本更新内容" : "更新内容") {
+                    model.showApplicationNotes()
+                }
+            }
+            if let release = model.applicationUpdateRelease {
+                HStack(spacing: 10) {
+                    if let date = release.publishedAt {
+                        Text(date, format: .dateTime.year().month().day())
+                    }
+                    Text(ByteCountFormatter.string(fromByteCount: Int64(release.diskImage.size), countStyle: .file))
+                }.font(.caption).foregroundStyle(.secondary)
+                if release.notes.highlights.isEmpty {
+                    Text(release.releaseNotes.isEmpty ? "此版本尚未提供详细更新说明。" : "打开“更新内容”查看此版本的完整说明。")
+                        .font(.callout).foregroundStyle(.secondary)
+                } else {
+                    ForEach(Array(release.notes.highlights.enumerated()), id: \.offset) { _, text in
+                        HStack(alignment: .top, spacing: 6) {
+                            Text("•").accessibilityHidden(true)
+                            Text(.init(text))
+                        }.font(.callout).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            if model.releaseNotesState.unreadVersion == model.currentApplicationVersion {
+                HStack {
+                    Label("已更新到 v\(model.currentApplicationVersion)", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                    Button("查看本次变化") { model.showApplicationNotes(currentVersion: true) }
+                }.font(.callout)
+            }
+        }
+        .environment(\.openURL, OpenURLAction { url in
+            ReleaseNotes.safePageURL(url) == nil ? .discarded : .systemAction
+        })
     }
 
     private var applicationCheckMessage: String {
@@ -189,14 +224,6 @@ struct SettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-    }
-
-    private func releaseSummary(_ notes: String) -> String {
-        let lines = notes
-            .split(whereSeparator: \.isNewline)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty && !$0.hasPrefix("#") && !$0.hasPrefix("本项目遵循") }
-        return lines.prefix(3).joined(separator: " ")
     }
 
     private var notificationPanel: some View {
@@ -298,6 +325,15 @@ struct SettingsView: View {
                             .frame(minHeight: 28)
                     }
                 }
+                HStack {
+                    Button("查看 MAA 稳定版发布说明") { model.updateDetailsRequest = .maaLatest(.stable) }
+                    Spacer()
+                    if let information = model.latestMAAUpdateInformation {
+                        Button(model.maaUpdateActivity == nil ? "最近更新详情" : "本次更新详情") {
+                            model.updateDetailsRequest = .maa(information)
+                        }
+                    }
+                }.font(.callout)
                 Divider()
                 SettingsToggleRow(
                     title: "空闲时自动更新 MAA",
@@ -322,6 +358,8 @@ struct SettingsView: View {
                         Button("更新 MAA Beta…") {
                             showsBetaUpdateConfirmation = true
                         }
+                        Divider()
+                        Button("查看 Beta 发布说明") { model.updateDetailsRequest = .maaLatest(.beta) }
                     } label: {
                         Text("更新 MAA")
                     } primaryAction: {
@@ -353,6 +391,15 @@ struct SettingsView: View {
                             cancel: { model.cancelRun() }
                         )
                     }
+                }
+                if let information = model.latestMAAUpdateInformation, let after = information.after {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("最近启用 · \(information.date.formatted(date: .abbreviated, time: .shortened))")
+                        if let old = information.before.core, let current = after.core {
+                            Text(old == current ? "MAA 引擎 v\(current) · 版本未变" : "MAA 引擎 v\(old) → v\(current)")
+                        }
+                        if let summary = information.recognitionSummary { Text(summary) }
+                    }.font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                 }
                 Text("“更新 MAA”包含引擎及配套识别数据，上限 \(UpdatePolicy.durationDescription(UpdatePolicy.packageTimeout))；仅更新识别数据获取增量，不更换引擎，上限 \(UpdatePolicy.durationDescription(UpdatePolicy.resourceTimeout))。最多重试一次，计入总时限；校验通过后才启用，失败或取消保留当前安装。")
                     .font(.caption)

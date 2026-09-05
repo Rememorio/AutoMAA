@@ -114,6 +114,8 @@ Data entry uses native controls and keeps validation near the affected setting. 
 
 “更新 MAA” includes the engine and recognition data; “仅更新识别数据” synchronizes separately published data without replacing the engine. Beta remains an explicit native confirmation. SwiftUI/macOS own focus, menus, semantic colors and scrolling; these native variants also apply to update controls.
 
+Release information remains visible independently of operation state. Settings shows the installed and target versions with a short list of changes; `UpdateDetailsView` is the shared native sheet for full release notes and MAA installation comparisons. About retains a permanent current-version entry. Headings, lists and source links preserve the upstream document structure; technical validation output stays in disclosure details. Offline or missing notes never replace known version information or change update eligibility. MAA history distinguishes the installed snapshot from a successfully activated snapshot and labels upstream GUI-specific content.
+
 ### Iconography
 
 Use SF Symbols. Filled task symbols are acceptable inside the 2rem task container; ordinary action symbols follow the native rendering mode. Symbols support text rather than replace it for consequential actions.

@@ -33,6 +33,8 @@ struct AboutView: View {
                         .accessibilityLabel("AutoMAA 版本 \(model.currentApplicationVersion)")
                     Button("管理更新") { model.selection = .settings }
                         .buttonStyle(.link)
+                    Button("本版本更新内容") { model.showApplicationNotes(currentVersion: true) }
+                        .buttonStyle(.link)
                 }
                 HStack(spacing: 14) {
                     Link("使用文档", destination: model.documentationURL)
@@ -87,7 +89,7 @@ struct AboutView: View {
                 Label("配置、断点和运行历史保存在本机", systemImage: "checkmark.circle.fill")
                 Label("不读取或保存游戏密码、验证码", systemImage: "checkmark.circle.fill")
                 Label("任务串行执行，并在切换客户端前确认连接释放", systemImage: "checkmark.circle.fill")
-                Text("应用只会为检查更新与 MAA 自身的资源更新访问网络；实际任务的网络行为由游戏、maa-cli 和 MaaCore 决定。")
+                Text("应用会为检查更新、读取更新说明与同步 MAA 资源访问网络；实际任务的网络行为由游戏、maa-cli 和 MaaCore 决定。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

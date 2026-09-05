@@ -3,6 +3,12 @@ import Foundation
 import Testing
 @testable import AutoMAA
 
+private struct UnavailableReleaseNotesService: ReleaseNotesServing {
+    func application(repository: String, from: String, through: String) async throws -> ReleaseNotesCollection { throw URLError(.notConnectedToInternet) }
+    func maa(manifestURL: URL, version: String?) async throws -> ReleaseNotesCollection { throw URLError(.notConnectedToInternet) }
+    func resources(comparisonURL: URL) async throws -> ReleaseNotesCollection { throw URLError(.notConnectedToInternet) }
+}
+
 private actor StubSoftwareUpdateService: SoftwareUpdateServing {
     let release: SoftwareUpdateRelease
     let prepared: PreparedSoftwareUpdate
@@ -14,6 +20,7 @@ private actor StubSoftwareUpdateService: SoftwareUpdateServing {
     var returnsLateResult = false
     var slowRestoration = false
     var restorationFails = false
+    var downloadFails = false
 
     init(release: SoftwareUpdateRelease, prepared: PreparedSoftwareUpdate, restored: PreparedSoftwareUpdate? = nil) {
         self.release = release
@@ -35,6 +42,7 @@ private actor StubSoftwareUpdateService: SoftwareUpdateServing {
         directories: AppDirectories
     ) async throws -> PreparedSoftwareUpdate {
         prepareCount += 1
+        if downloadFails { throw URLError(.cannotConnectToHost) }
         if slowDownloads {
             if returnsLateResult {
                 try? await Task.sleep(for: .seconds(30))
@@ -66,10 +74,93 @@ private actor StubSoftwareUpdateService: SoftwareUpdateServing {
         slowRestoration = cancel
         restorationFails = !cancel
     }
+
+    func failDownload() { downloadFails = true }
 }
 
 @Suite("Application updates")
 struct ApplicationUpdateTests {
+    @Test("notes failures leave automatic downloads and their cancellation available")
+    @MainActor
+    func unavailableNotesDoNotInterruptUpdates() async throws {
+        let fixture = try makeFixture(automaticallyDownloads: true)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        await fixture.service.delay(downloads: true)
+        fixture.model.checkForApplicationUpdate()
+        try await waitUntil {
+            if case .downloading = fixture.model.applicationUpdateState { return true }
+            return false
+        }
+        await #expect(throws: URLError.self) {
+            try await fixture.model.loadReleaseNotes(for: .application("9.9.9"))
+        }
+        if case .downloading = fixture.model.applicationUpdateState {} else { Issue.record("说明读取影响了下载") }
+        #expect(fixture.model.applicationUpdateState.canCancel)
+        fixture.model.cancelApplicationUpdate()
+        try await waitUntil { !fixture.model.applicationUpdateState.isBusy }
+    }
+
+    @Test("an open MAA details request follows only its own activated installation")
+    @MainActor
+    func maaDetailsFollowActivation() throws {
+        let fixture = try makeFixture(automaticallyDownloads: false)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let before = MAAInstalledVersions(core: "1.0.0", baseResources: .init(), recognitionData: .init())
+        let pending = MAAUpdateInformation(title: "MAA", before: before)
+        #expect(fixture.model.resolvedUpdateDetails(.maa(pending)) == .maa(pending))
+        var activated = pending
+        activated.after = .init(core: "1.1.0", baseResources: .init(), recognitionData: .init())
+        fixture.model.activityEntries = [
+            .init(level: .info, message: "准备更新", updateInformation: pending),
+            .init(level: .info, message: "已启用", updateInformation: activated),
+            .init(level: .info, message: "另一次更新", updateInformation: .init(title: "MAA", before: before))
+        ]
+        #expect(fixture.model.resolvedUpdateDetails(.maa(pending)) == .maa(activated))
+    }
+
+    @Test("release notes survive automatic download, cancellation and preparation failure")
+    @MainActor
+    func releaseNotesSurviveOperationStates() async throws {
+        let fixture = try makeFixture(automaticallyDownloads: true)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        await fixture.service.delay(downloads: true)
+        fixture.model.checkForApplicationUpdate()
+        try await waitUntil {
+            if case .downloading = fixture.model.applicationUpdateState { return true }
+            return false
+        }
+        #expect(fixture.model.applicationUpdateRelease == fixture.service.release)
+        fixture.model.showApplicationNotes()
+        #expect(fixture.model.updateDetailsRequest?.id == "application-9.9.9")
+        #expect(fixture.model.initialReleaseNotes(for: .application("9.9.9")).first?.body == "测试更新")
+        fixture.model.cancelApplicationUpdate()
+        #expect(fixture.model.applicationUpdateRelease == fixture.service.release)
+        try await waitUntil { !fixture.model.applicationUpdateState.isBusy }
+        await fixture.service.failDownload()
+        fixture.model.downloadApplicationUpdate(fixture.service.release)
+        try await waitUntil {
+            if case .failed = fixture.model.applicationUpdateState { return true }
+            return false
+        }
+        #expect(fixture.model.applicationUpdateRelease == fixture.service.release)
+        let cache = ReleaseNotesCache(directories: AppDirectories(root: fixture.root)).load()
+        #expect(cache.releases.first?.body == "测试更新")
+    }
+
+    @Test("update success retains a readable notice until the current version notes are opened")
+    @MainActor
+    func successfulUpdateHasPersistentNotesEntry() async throws {
+        let fixture = try makeFixture(automaticallyDownloads: false)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try SoftwareUpdateResultStore(directories: AppDirectories(root: fixture.root)).save(.init(
+            status: .success, version: fixture.model.currentApplicationVersion, message: "更新成功"))
+        fixture.model.prepareApplication()
+        #expect(fixture.model.releaseNotesState.unreadVersion == fixture.model.currentApplicationVersion)
+        fixture.model.showApplicationNotes(currentVersion: true)
+        #expect(fixture.model.releaseNotesState.unreadVersion == nil)
+        #expect(ReleaseNotesCache(directories: AppDirectories(root: fixture.root)).load().unreadVersion == nil)
+    }
+
     @Test("interrupted prepared-update validation does not start a new download", arguments: [true, false])
     @MainActor
     func interruptedRestorationStopsChecking(cancel: Bool) async throws {
@@ -272,7 +363,8 @@ struct ApplicationUpdateTests {
             managesSystemLaunchAgents: false,
             checksForUpdatesAutomatically: startup,
             softwareUpdateService: service,
-            applicationUpdateAvailabilityValidator: {}
+            applicationUpdateAvailabilityValidator: {},
+            releaseNotesService: UnavailableReleaseNotesService()
         )
         return (root, model, service)
     }

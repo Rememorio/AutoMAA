@@ -1637,7 +1637,7 @@ final class AutoMAAKitTests: XCTestCase {
 
         XCTAssertTrue(succeeded)
         XCTAssertEqual(arguments, "update\nstable\n--test-time\n10\n--batch\n")
-        XCTAssertEqual(entries.map(\.phase), [.updating, .updating, .updating, .updating, .updating, .completed])
+        XCTAssertEqual(entries.map(\.phase), [.updating, .updating, .updating, .updating, .updating, .updating, .completed])
         XCTAssertTrue(entries.allSatisfy { $0.runID == runID })
         XCTAssertEqual(entries.last?.message, "MAA 引擎已更新，识别数据已通过校验")
         XCTAssertTrue(FileManager.default.fileExists(
@@ -1841,7 +1841,7 @@ final class AutoMAAKitTests: XCTestCase {
 
         XCTAssertTrue(succeeded)
         XCTAssertEqual(attempts, "2")
-        XCTAssertEqual(entries.map(\.phase), [.updating, .updating, .updating, .updating, .updating, .updating, .completed])
+        XCTAssertEqual(entries.map(\.phase), [.updating, .updating, .updating, .updating, .updating, .updating, .updating, .completed])
         XCTAssertEqual(entries[1].level, .info)
         XCTAssertTrue(entries.contains { $0.message.contains("临时网络问题") })
         XCTAssertEqual(entries.last?.message, "MAA 引擎重试后已更新，识别数据已通过校验")
@@ -2035,6 +2035,38 @@ final class AutoMAAKitTests: XCTestCase {
     }
 
     @MainActor
+    func testResourceUpdateHistoryRecordsOnlyActivatedRevisions() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        try directories.prepare()
+        let installation = try makeFakeMAAInstallation(at: root)
+        let git = installation.hotUpdate.appending(path: ".git")
+        try FileManager.default.createDirectory(at: git, withIntermediateDirectories: true)
+        let old = String(repeating: "a", count: 40), new = String(repeating: "b", count: 40)
+        try Data(old.utf8).write(to: git.appending(path: "HEAD"))
+        try Data("[remote \"origin\"]\nurl = https://github.com/example/resources.git\n".utf8)
+            .write(to: git.appending(path: "config"))
+        let cli = root.appending(path: "maa-cli")
+        try writeFakeMAACLI(at: cli, installation: installation, body: """
+        if [ "$1" = "hot-update" ]; then
+          printf '%s' '\(new)' > "$MAA_DATA_DIR/MaaResource/.git/HEAD"
+        fi
+        """)
+        let succeeded = await WorkflowRunner(directories: directories, resourceProbeExecutable: installation.probe)
+            .hotUpdate(cliPath: cli.path)
+        XCTAssertTrue(succeeded)
+        let information = HistoryStore(directories: directories).load().compactMap(\.updateInformation)
+        XCTAssertEqual(information.count, 2)
+        XCTAssertEqual(information[0].before.recognitionData.revision, old)
+        XCTAssertNil(information[0].after)
+        XCTAssertEqual(information[1].after?.recognitionData.revision, new)
+        XCTAssertEqual(information[0].id, information[1].id)
+        XCTAssertNotNil(information[1].resourceComparisonURL)
+        XCTAssertEqual(try String(contentsOf: git.appending(path: "HEAD"), encoding: .utf8), new)
+    }
+
+    @MainActor
     func testCancellationDuringResourceValidationDoesNotActivateOrReportIncompatibility() async throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -2066,6 +2098,7 @@ final class AutoMAAKitTests: XCTestCase {
         let entries = HistoryStore(directories: directories).load()
         XCTAssertEqual(entries.last?.phase, .cancelled)
         XCTAssertFalse(entries.contains { $0.phase == .failed || $0.message.contains("不兼容") })
+        XCTAssertTrue(entries.compactMap(\.updateInformation).allSatisfy { $0.after == nil })
         XCTAssertEqual(try String(contentsOf: installation.hotUpdate.appending(path: "resource/version.json"), encoding: .utf8), "hot")
         XCTAssertFalse(ProcessLock.isHeld(at: directories.lock))
         XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: installation.data.path).contains {

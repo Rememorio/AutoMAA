@@ -52,6 +52,11 @@ public struct SoftwareUpdateRelease: Codable, Equatable, Sendable {
     public let pageURL: URL
     public let diskImage: SoftwareUpdateAsset
     public let checksum: SoftwareUpdateAsset
+    public let publishedAt: Date?
+
+    public var notes: ReleaseNotes {
+        .init(version: version.description, body: releaseNotes, pageURL: pageURL, publishedAt: publishedAt)
+    }
 
     public init(
         version: SoftwareVersion,
@@ -59,7 +64,8 @@ public struct SoftwareUpdateRelease: Codable, Equatable, Sendable {
         releaseNotes: String,
         pageURL: URL,
         diskImage: SoftwareUpdateAsset,
-        checksum: SoftwareUpdateAsset
+        checksum: SoftwareUpdateAsset,
+        publishedAt: Date? = nil
     ) {
         self.version = version
         self.tagName = tagName
@@ -67,6 +73,7 @@ public struct SoftwareUpdateRelease: Codable, Equatable, Sendable {
         self.pageURL = pageURL
         self.diskImage = diskImage
         self.checksum = checksum
+        self.publishedAt = publishedAt
     }
 }
 
@@ -258,7 +265,8 @@ public enum SoftwareUpdateReleaseResolver {
             releaseNotes: (response.body ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
             pageURL: pageURL,
             diskImage: SoftwareUpdateAsset(name: diskImage.name, size: diskImage.size, downloadURL: diskImageURL),
-            checksum: SoftwareUpdateAsset(name: checksum.name, size: checksum.size, downloadURL: checksumURL)
+            checksum: SoftwareUpdateAsset(name: checksum.name, size: checksum.size, downloadURL: checksumURL),
+            publishedAt: response.publishedAt.flatMap { ISO8601DateFormatter().date(from: $0) }
         )
         try validate(release)
         return release
@@ -855,6 +863,7 @@ private struct GitHubReleaseResponse: Decodable {
     let draft: Bool
     let prerelease: Bool
     let assets: [Asset]
+    let publishedAt: String?
 
     enum CodingKeys: String, CodingKey {
         case tagName = "tag_name"
@@ -863,5 +872,6 @@ private struct GitHubReleaseResponse: Decodable {
         case draft
         case prerelease
         case assets
+        case publishedAt = "published_at"
     }
 }

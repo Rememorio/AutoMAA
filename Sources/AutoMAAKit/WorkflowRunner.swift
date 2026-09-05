@@ -900,18 +900,16 @@ public final class WorkflowRunner {
 
     private func coreManifestURL(
         cliPath: String,
-        channel: MAAUpdateChannel
+        channel: MAAUpdateChannel,
+        timeout: TimeInterval = 20
     ) async throws -> URL {
-        let extensions = ["json", "yaml", "yml", "toml"]
-        let configURL = extensions
-            .map { directories.maaConfig.appending(path: "cli.\($0)") }
-            .first { FileManager.default.fileExists(atPath: $0.path) }
+        let configURL = MAACoreReleaseManifestEndpoint.configurationURL(in: directories.maaConfig)
         var configurationData: Data?
         if let configURL {
             let result = await runCommand(
                 executable: cliPath,
                 arguments: ["convert", configURL.path, "--format", "json", "--batch"],
-                timeout: 20
+                timeout: timeout
             )
             guard !result.cancelled, !Task.isCancelled else { throw RuntimeError.cancelled }
             guard result.exitCode == 0, !result.timedOut else {
@@ -974,7 +972,20 @@ public final class WorkflowRunner {
 
         guard !Task.isCancelled else { return .cancelled }
         guard deadline.remaining > 0 else { return .failed(timeoutMessage) }
-        emit(.updating, "正在下载\(component.title)", 0, .info)
+        let before = await installedVersions(
+            cliPath: cliPath, resource: paths.resource, recognition: paths.hotUpdate,
+            deadline: deadline
+        )
+        var information = MAAUpdateInformation(title: component.title, before: before)
+        if case let .core(channel) = component, deadline.remaining > 0 {
+            let url = try? await coreManifestURL(
+                cliPath: cliPath, channel: channel, timeout: min(3, deadline.remaining)
+            )
+            information.manifestURL = url.flatMap(ReleaseNotes.safeSourceURL)
+        }
+        guard !Task.isCancelled else { return .cancelled }
+        guard deadline.remaining > 0 else { return .failed(timeoutMessage) }
+        emit(.updating, "正在下载\(component.title)", 0, .info, updateInformation: information)
         let outcome = await runMaintenanceCommand(
             executable: cliPath,
             arguments: component.arguments,
@@ -1022,6 +1033,16 @@ public final class WorkflowRunner {
         let componentChanged = component.includesCore && installedCoreChecksum != (try? SoftwareUpdateVerifier.sha256(
             of: staging.library.appending(path: "libMaaCore.dylib")
         ))
+        let candidate: MAAInstalledVersions
+        if component.includesCore {
+            candidate = await installedVersions(
+                cliPath: cliPath, resource: staging.resource, recognition: staging.hotUpdate,
+                deadline: deadline, environment: ["MAA_DATA_DIR": staging.data.path]
+            )
+        } else {
+            candidate = .init(core: before.core, baseResources: before.baseResources,
+                              recognitionData: MAAResourceVersion.read(at: staging.hotUpdate, repository: true))
+        }
 
         guard !Task.isCancelled else { return .cancelled }
         guard deadline.remaining > 0 else { return .failed(timeoutMessage) }
@@ -1038,10 +1059,28 @@ public final class WorkflowRunner {
         } catch {
             return .failed("无法启用已验证的候选组件；当前安装已尝试恢复：\(error.localizedDescription)")
         }
+        information.after = candidate
+        emit(.updating, "已启用通过校验的\(component.title)", 0, .info, updateInformation: information)
         return .success(
             changed: componentChanged,
             recoveredAfterRetry: outcome.recoveredAfterRetry
         )
+    }
+
+    private func installedVersions(
+        cliPath: String, resource: URL, recognition: URL,
+        deadline: UpdateDeadline, environment: [String: String] = [:]
+    ) async -> MAAInstalledVersions {
+        var version: String?
+        if !Task.isCancelled, deadline.remaining > 0 {
+            let result = await runCommand(executable: cliPath, arguments: ["version", "maa-core", "--batch"],
+                                          timeout: min(3, deadline.remaining), environment: environment)
+            if result.exitCode == 0, !result.timedOut, !result.cancelled {
+                version = MAACoreVersionParser.parseCLIOutput(result.combinedOutput)?.description
+            }
+        }
+        return .init(core: version, baseResources: MAAResourceVersion.read(at: resource, repository: false),
+                     recognitionData: MAAResourceVersion.read(at: recognition, repository: true))
     }
 
     private func maaInstallationPaths(cliPath: String) async -> MAAInstallationPaths? {
@@ -2034,7 +2073,8 @@ public final class WorkflowRunner {
         account: AccountConfiguration? = nil,
         task: TaskKind? = nil,
         details: String? = nil,
-        runSummary: WorkflowRunSummary? = nil
+        runSummary: WorkflowRunSummary? = nil,
+        updateInformation: MAAUpdateInformation? = nil
     ) {
         let normalizedProgress = runProgress.advance(to: proposedProgress)
         let log = LogEntry(
@@ -2048,7 +2088,8 @@ public final class WorkflowRunner {
             clientID: client?.id,
             accountID: account?.id,
             task: task,
-            runSummary: runSummary
+            runSummary: runSummary,
+            updateInformation: updateInformation
         )
         historyStore.append(log)
         eventSink(RunnerEvent(phase: phase, message: message, progress: normalizedProgress, log: log))

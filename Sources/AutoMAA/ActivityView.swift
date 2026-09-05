@@ -203,6 +203,10 @@ struct ActivityView: View {
                             Text(model.activePhase.displayName)
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(model.activePhase.statusTint)
+                            if let information = currentSession?.updateInformation {
+                                Button("更新内容") { model.updateDetailsRequest = .maa(information) }
+                                    .buttonStyle(.link).font(.caption)
+                            }
                         }
                         Text(model.activeStatusMessage)
                             .font(.callout)
@@ -356,6 +360,11 @@ struct ActivityView: View {
 
     private func sessionBadges(_ session: ActivitySession) -> some View {
         HStack(spacing: 6) {
+            if let information = session.updateInformation {
+                Button("更新内容") { model.updateDetailsRequest = .maa(information) }
+                    .buttonStyle(.link)
+                    .font(.caption)
+            }
             if let summary = session.runSummary {
                 sessionBadge("\(summary.completedSteps)/\(summary.totalSteps) 完成", color: .green)
             } else if session.completedTaskCount > 0 {

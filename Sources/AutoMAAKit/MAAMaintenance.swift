@@ -145,7 +145,7 @@ enum MAACoreVersionParser {
     }
 }
 
-enum MAACoreReleaseManifestEndpoint {
+public enum MAACoreReleaseManifestEndpoint {
     private struct CLIConfiguration: Decodable {
         struct Core: Decodable {
             let apiURL: String?
@@ -166,7 +166,12 @@ enum MAACoreReleaseManifestEndpoint {
 
     private static let defaultBaseURL = "https://api.maa.plus/MaaAssistantArknights/api/version"
 
-    static func url(channel: MAAUpdateChannel, configurationData: Data?) throws -> URL {
+    public static func configurationURL(in directory: URL) -> URL? {
+        ["json", "yaml", "yml", "toml"].map { directory.appending(path: "cli.\($0)") }
+            .first { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    public static func url(channel: MAAUpdateChannel, configurationData: Data?) throws -> URL {
         let config = try configurationData.map {
             try JSONDecoder().decode(CLIConfiguration.self, from: $0)
         }

@@ -8,6 +8,7 @@ struct MAAUpdateActivity {
     var phase: RunnerPhase = .preparing
     var message = "正在准备更新"
     var details: String?
+    var information: MAAUpdateInformation?
     var isCancelling = false
 
     var isFinished: Bool {

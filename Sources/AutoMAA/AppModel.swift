@@ -113,6 +113,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var maaVersionSummary = "尚未检测"
     @Published private(set) var isCheckingMAAEnvironment = false
     @Published private(set) var applicationUpdateState: ApplicationUpdateState = .idle
+    @Published private(set) var applicationUpdateRelease: SoftwareUpdateRelease?
+    @Published private(set) var releaseNotesState: ReleaseNotesCache.State = .init()
+    @Published var updateDetailsRequest: UpdateDetailsRequest?
     @Published private(set) var applicationUpdateStartedAt: Date?
     @Published private(set) var maaUpdateActivity: MAAUpdateActivity?
     @Published private(set) var isCancellingRun = false
@@ -125,6 +128,9 @@ final class AppModel: ObservableObject {
     let currentApplicationBuild: String
     let applicationUpdateRepository: String
     private let configurationStore: ConfigurationStore
+    private let releaseNotesService: any ReleaseNotesServing
+    private let releaseNotesCache: ReleaseNotesCache
+    private let bundledReleaseNotes: [ReleaseNotes]
     private let historyStore: HistoryStore
     private let executionStateStore: ExecutionStateStore
     private let fightStageMemoryStore: FightStageMemoryStore
@@ -162,9 +168,12 @@ final class AppModel: ObservableObject {
         runnerExecutableURL: URL? = nil,
         resourceProbeExecutable: URL? = nil,
         softwareUpdateService: (any SoftwareUpdateServing)? = nil,
-        applicationUpdateAvailabilityValidator: (@MainActor () throws -> Void)? = nil
+        applicationUpdateAvailabilityValidator: (@MainActor () throws -> Void)? = nil,
+        releaseNotesService: any ReleaseNotesServing = ReleaseNotesService()
     ) {
         self.directories = directories
+        self.releaseNotesService = releaseNotesService
+        releaseNotesCache = ReleaseNotesCache(directories: directories)
         self.checksForUpdatesAutomatically = checksForUpdatesAutomatically
         self.allowsAutomaticMAAMaintenance = allowsAutomaticMAAMaintenance
         self.applicationUpdateAvailabilityValidator = applicationUpdateAvailabilityValidator
@@ -188,6 +197,16 @@ final class AppModel: ObservableObject {
         )
         applicationUpdateRepository = Bundle.main.object(forInfoDictionaryKey: "AutoMAAUpdateRepository") as? String
             ?? SoftwareUpdateService.defaultRepository
+        let changelog = Bundle.main.url(forResource: "CHANGELOG", withExtension: "md")
+            .flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
+        bundledReleaseNotes = ReleaseNotesMarkdown.bundledVersions(changelog, repository: applicationUpdateRepository)
+        var notesState = releaseNotesCache.load()
+        if let previous = notesState.lastOpenedVersion.flatMap(SoftwareVersion.init),
+           let current = SoftwareVersion(applicationVersion), previous < current {
+            notesState.unreadVersion = applicationVersion
+        }
+        notesState.lastOpenedVersion = applicationVersion
+        releaseNotesState = notesState
         self.softwareUpdateService = softwareUpdateService ?? SoftwareUpdateService(
             currentVersion: currentApplicationVersion,
             repository: applicationUpdateRepository
@@ -196,6 +215,8 @@ final class AppModel: ObservableObject {
         maaMaintenanceStore = MAAMaintenanceStore(directories: directories)
         importantNotificationCenter = ImportantNotificationCenter()
         var startupMessages: [String] = []
+        do { try releaseNotesCache.save(notesState) }
+        catch { startupMessages.append("无法保存更新说明的阅读状态：\(error.localizedDescription)") }
         let configurationLoad = configurationStore.loadForApplication()
         configuration = configurationLoad.configuration
         if let notice = configurationLoad.startupNotice {
@@ -528,6 +549,10 @@ final class AppModel: ObservableObject {
         }
         if let result = softwareUpdateResultStore.loadAndClear() {
             applicationUpdateState = result.status == .success ? .upToDate : .failed(result.message)
+            if result.status == .success {
+                releaseNotesState.unreadVersion = currentApplicationVersion
+                persistReleaseNotes()
+            }
             showBanner(result.message)
             refreshMAAStatus()
             resumeAutomaticMAAUpdateIfNeeded()
@@ -689,6 +714,125 @@ final class AppModel: ObservableObject {
         startMAAUpdate(.core(channel))
     }
 
+    var currentApplicationNotes: ReleaseNotes {
+        applicationNotes(version: currentApplicationVersion)
+    }
+
+    var latestMAAUpdateInformation: MAAUpdateInformation? {
+        if let activity = maaUpdateActivity { return activity.information }
+        return activityEntries.reversed().compactMap(\.updateInformation).first
+    }
+
+    func showApplicationNotes(currentVersion: Bool = false) {
+        let version = currentVersion ? currentApplicationVersion : applicationUpdateRelease?.version.description ?? currentApplicationVersion
+        updateDetailsRequest = .application(version)
+        if version == currentApplicationVersion {
+            releaseNotesState.unreadVersion = nil
+            persistReleaseNotes()
+        }
+    }
+
+    func initialReleaseNotes(for request: UpdateDetailsRequest) -> [ReleaseNotes] {
+        switch request {
+        case let .application(version):
+            let targetNotes = applicationNotes(version: version)
+            guard let current = SoftwareVersion(currentApplicationVersion), let target = SoftwareVersion(version), target > current else {
+                return [targetNotes]
+            }
+            let prefix = "https://github.com/\(applicationUpdateRepository)/releases/"
+            let intermediate = releaseNotesState.releases.filter {
+                guard $0.pageURL?.absoluteString.hasPrefix(prefix) == true, let version = SoftwareVersion($0.version) else { return false }
+                return version > current && version < target
+            }.sorted { (SoftwareVersion($0.version) ?? current) > (SoftwareVersion($1.version) ?? current) }
+            return [targetNotes] + intermediate
+        case let .maa(information):
+            let version = information.coreVersionForNotes
+            return releaseNotesState.releases.filter {
+                ($0.version == version && information.manifestURL != nil && $0.sourceURL == information.manifestURL)
+                    || (information.resourceComparisonURL != nil && $0.sourceURL == information.resourceComparisonURL)
+            }
+        case .maaLatest:
+            return []
+        }
+    }
+
+    func resolvedUpdateDetails(_ request: UpdateDetailsRequest) -> UpdateDetailsRequest {
+        guard case let .maa(information) = request else { return request }
+        if let current = maaUpdateActivity?.information, current.id == information.id { return .maa(current) }
+        let recorded = activityEntries.reversed().compactMap(\.updateInformation).first { $0.id == information.id }
+        return .maa(recorded ?? information)
+    }
+
+    func loadReleaseNotes(for request: UpdateDetailsRequest) async throws -> ReleaseNotesCollection {
+        let result: ReleaseNotesCollection
+        switch request {
+        case let .application(version):
+            if version == currentApplicationVersion, !currentApplicationNotes.body.isEmpty {
+                return .init(releases: [currentApplicationNotes])
+            }
+            result = try await releaseNotesService.application(repository: applicationUpdateRepository,
+                                                               from: currentApplicationVersion, through: version)
+        case let .maa(information):
+            var releases: [ReleaseNotes] = []
+            var notices: [String] = []
+            if let url = information.manifestURL, let version = information.coreVersionForNotes {
+                do {
+                    let core = try await releaseNotesService.maa(manifestURL: url, version: version)
+                    releases += core.releases
+                    if let notice = core.notice { notices.append(notice) }
+                } catch {
+                    try Task.checkCancellation()
+                    notices.append("MAA 发布说明暂不可用：\(ReleaseNotesError.message(for: error))")
+                }
+            } else if information.manifestURL != nil {
+                notices.append("未取得本次实际启用的引擎版本，无法匹配对应发布说明。")
+            }
+            if let comparison = information.resourceComparisonURL {
+                do {
+                    let resources = try await releaseNotesService.resources(comparisonURL: comparison)
+                    releases += resources.releases
+                    if let notice = resources.notice { notices.append(notice) }
+                } catch {
+                    try Task.checkCancellation()
+                    notices.append("识别数据变更说明暂不可用：\(ReleaseNotesError.message(for: error))")
+                }
+            }
+            result = .init(releases: releases, notice: notices.isEmpty ? nil : notices.joined(separator: "\n"))
+        case let .maaLatest(channel):
+            result = try await releaseNotesService.latestMAA(cliPath: configuration.cliPath, directories: directories, channel: channel,
+                                                           cachedNotes: releaseNotesState.releases)
+        }
+        try Task.checkCancellation()
+        rememberReleaseNotes(result.releases)
+        return result
+    }
+
+    private func applicationNotes(version: String) -> ReleaseNotes {
+        if applicationUpdateRelease?.version.description == version, let notes = applicationUpdateRelease?.notes { return notes }
+        let prefix = "https://github.com/\(applicationUpdateRepository)/releases/"
+        if let cached = releaseNotesState.releases.first(where: { $0.version == version && $0.pageURL?.absoluteString.hasPrefix(prefix) == true && !$0.body.isEmpty }) {
+            return cached
+        }
+        if let bundled = bundledReleaseNotes.first(where: { $0.version == version }) { return bundled }
+        return .init(version: version, body: "", pageURL: URL(string: "\(prefix)tag/v\(version)"))
+    }
+
+    private func rememberApplicationRelease(_ release: SoftwareUpdateRelease) {
+        applicationUpdateRelease = release
+        rememberReleaseNotes([release.notes])
+    }
+
+    private func rememberReleaseNotes(_ releases: [ReleaseNotes]) {
+        let ids = Set(releases.map(\.id))
+        releaseNotesState.releases = Array((releases + releaseNotesState.releases.filter { !ids.contains($0.id) }).prefix(40))
+        persistReleaseNotes()
+    }
+
+    private func persistReleaseNotes() {
+        do { try releaseNotesCache.save(releaseNotesState) }
+        catch { showBanner("更新说明未能保存在本机：\(error.localizedDescription)") }
+    }
+
     private func startMAAUpdate(_ component: MAAComponentUpdate, automatic: Bool = false) {
         reloadActivityHistory()
         guard !isWorkflowRunning, !applicationUpdateState.blocksWorkflow else { return }
@@ -755,6 +899,7 @@ final class AppModel: ObservableObject {
                 let prepared = try await self.softwareUpdateService.restorePreparedUpdate(directories: self.directories)
                 try Task.checkCancellation()
                 if let prepared {
+                    self.rememberApplicationRelease(prepared.release)
                     self.applicationUpdateState = .ready(prepared)
                 } else {
                     self.applicationUpdateState = .checking
@@ -781,6 +926,7 @@ final class AppModel: ObservableObject {
             let release = try await softwareUpdateService.check()
             try Task.checkCancellation()
             if let release {
+                rememberApplicationRelease(release)
                 applicationUpdateState = .available(release)
                 if configuration.applicationUpdates.automaticallyDownloadsUpdates && !automaticApplicationDownloadPaused {
                     if isWorkflowRunning {
@@ -793,6 +939,7 @@ final class AppModel: ObservableObject {
                     showBanner("发现 AutoMAA v\(release.version)，可在全局设置中更新")
                 }
             } else {
+                applicationUpdateRelease = nil
                 applicationUpdateState = .upToDate
                 if showResult { showBanner("AutoMAA 已是最新版本") }
             }
@@ -811,6 +958,7 @@ final class AppModel: ObservableObject {
     }
 
     private func prepareApplicationUpdate(_ release: SoftwareUpdateRelease) async {
+        rememberApplicationRelease(release)
         do {
             try validateAutomaticUpdateAvailability()
             try Task.checkCancellation()
@@ -1432,6 +1580,7 @@ final class AppModel: ObservableObject {
             maaUpdateActivity?.phase = event.phase
             maaUpdateActivity?.message = event.message
             maaUpdateActivity?.details = event.log.details
+            if let information = event.log.updateInformation { maaUpdateActivity?.information = information }
         }
         activityEntries.append(event.log)
         if activityEntries.count > 1_000 { activityEntries.removeFirst(activityEntries.count - 1_000) }

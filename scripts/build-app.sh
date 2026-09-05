@@ -24,6 +24,7 @@ LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchS
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_VERSION" "$APP_DIR/Contents/Info.plist"
 /bin/cp "$PROJECT_DIR/Assets/AutoMAA.icns" "$APP_DIR/Contents/Resources/AutoMAA.icns"
 /bin/cp "$PROJECT_DIR/Assets/AutoMAA-slogan.png" "$APP_DIR/Contents/Resources/AutoMAA-slogan.png"
+/bin/cp "$PROJECT_DIR/CHANGELOG.md" "$APP_DIR/Contents/Resources/CHANGELOG.md"
 /usr/bin/codesign --force --sign - --identifier "$BUNDLE_IDENTIFIER" "$APP_DIR/Contents/MacOS/AutoMAARunner"
 /usr/bin/codesign --force --sign - --identifier "$BUNDLE_IDENTIFIER.resource-probe" "$APP_DIR/Contents/MacOS/AutoMAAResourceProbe"
 /usr/bin/codesign --force --sign - --identifier "$BUNDLE_IDENTIFIER.updater" "$APP_DIR/Contents/MacOS/AutoMAAUpdater"

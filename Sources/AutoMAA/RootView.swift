@@ -16,6 +16,9 @@ struct RootView: View {
                 .background(Color(nsColor: .windowBackgroundColor))
         }
         .navigationSplitViewStyle(.balanced)
+        .sheet(item: $model.updateDetailsRequest) { request in
+            UpdateDetailsView(model: model, request: request)
+        }
         .tint(.maaAccent)
         .overlay(alignment: .top) {
             if let message = model.bannerMessage {
