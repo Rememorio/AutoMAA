@@ -3,7 +3,8 @@ version: alpha
 name: "AutoMAA"
 description: "A calm, native macOS control surface for configuring and supervising MAA workflows."
 colors:
-  primary: "#14B0AD"
+  primary: "#007D78"
+  primary-dark: "#4FCCC2"
   info: "#217AF0"
 typography:
   sans:
@@ -21,6 +22,7 @@ spacing:
   section-gap: "1.25rem"
   page-inset: "1.75rem"
   page-max: "66.25rem"
+  reading-max: "56.25rem"
 components:
   button:
     textColor: "{colors.primary}"
@@ -28,6 +30,8 @@ components:
     rounded: "{rounded.lg}"
   task-card:
     textColor: "{colors.primary}"
+  accent-dark:
+    textColor: "{colors.primary-dark}"
   field:
     rounded: "{rounded.DEFAULT}"
   app-background:
@@ -60,6 +64,8 @@ AutoMAA should feel like a well-organized macOS utility inspector: a quiet contr
 
 `primary` is the product accent for selection, active task iconography, and constructive actions. `info` is reserved for informational emphasis where a second cool hue is useful. Success, warning, and danger use the corresponding macOS semantic colors; they must not be repurposed for decoration or replaced with fixed light-mode values.
 
+The accent adapts through the named AppKit color in `Theme.swift`: a deeper teal for light surfaces and a brighter teal for dark surfaces. Prominent actions use the deep `maaAction` fill in both appearances to retain contrast with their white labels. Selected weekday controls use primary text on a tinted surface; white text is not hand-painted on teal. Overview counts remain neutral, so warning and error colors retain operational meaning.
+
 Panels, labels, dividers, and text rely on SwiftUI semantic colors and materials so light mode, dark mode, increased contrast, and system appearance remain correct. Borders use low-opacity primary text rather than a fixed light-only gray. Status is never communicated by color alone: symbols or text accompany every important state.
 
 ## Typography
@@ -71,6 +77,8 @@ Technical values, stage names, percentages, and counters may use `mono` or monos
 ## Layout
 
 Primary editors use a centered content column capped at `page-max` with `page-inset` padding. Sections follow `section-gap`; related task cards use an adaptive grid with a 21.25rem minimum width and `card-gap`, allowing one column before content becomes cramped.
+
+`PageLayout` and `AppPage` own the shared 28-point inset and 20-point section gap. Overview and plan editing use the 1060-point column; client/account editing, activity, settings and About use a 900-point reading column. Step order and account choices wrap into adaptive grids.
 
 Forms preserve label/control relationships with native `Picker`, `Toggle`, `Stepper`, `DatePicker`, and `TextField` behavior. Optional or conditional settings appear directly below their controlling choice. Loading, validation, and saved state must not change the width or position of the primary action.
 
@@ -90,7 +98,7 @@ Default state uses primary text and native control styling. Hover, pressed, focu
 
 ### Buttons and actions
 
-Native button styles define ordinary actions. The principal run action is visually prominent and stable in size. Destructive actions use the destructive role and remain separated from constructive actions. Icon-only buttons require a help label and accessibility label.
+`SectionHeading`, `EntityIcon`, `SettingsToggleRow`, `StatusBadge`, `ReorderButtons` and `DetailDisclosure` in `InterfaceComponents.swift` own repeated page, heading, switch, status, ordering and detail treatments. Native button styles define ordinary actions. The principal run action is visually prominent and stable in size. Destructive actions use the destructive role and remain separated from constructive actions. Icon-only buttons require a help label and accessibility label.
 
 ### Navigation and data display
 
@@ -98,7 +106,7 @@ The macOS sidebar is the persistent navigation model. Panels organize dashboards
 
 ### Forms and overlays
 
-Data entry uses native controls and keeps validation near the affected setting. A controlling strategy choice precedes its conditional fields. Confirmation dialogs are reserved for destructive or consequential actions. Banners summarize save and run results; details remain in readiness or activity views.
+Data entry uses native controls and keeps validation near the affected setting. A controlling strategy choice precedes its conditional fields. Confirmation dialogs are reserved for destructive or consequential actions. Banners summarize save and run results in a bounded overlay; details remain in readiness or activity views. Banner and editable-name transitions respect Reduce Motion. Shared behavior and native-control ownership are documented in [UX-CONTRACT.md](UX-CONTRACT.md).
 
 ### Update behavior
 

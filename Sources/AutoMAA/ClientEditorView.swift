@@ -8,17 +8,12 @@ struct ClientEditorView: View {
     @State private var confirmDeleteClient = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                header
-                connectionPanel
-                accountsPanel
-                lifecyclePanel
-                deletePanel
-            }
-            .padding(28)
-            .frame(maxWidth: 900)
-            .frame(maxWidth: .infinity)
+        AppPage(width: PageLayout.readingWidth) {
+            header
+            connectionPanel
+            accountsPanel
+            lifecyclePanel
+            deletePanel
         }
         .navigationTitle(client.displayName)
         .confirmationDialog("删除 \(client.displayName)？", isPresented: $confirmDeleteClient) {
@@ -32,14 +27,7 @@ struct ClientEditorView: View {
 
     private var header: some View {
         HStack(spacing: 16) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 14)
-                    .fill(Color.maaAccent.opacity(0.12))
-                Image(systemName: client.kind.symbol)
-                    .font(.system(size: 29))
-                    .foregroundStyle(Color.maaAccent)
-            }
-            .frame(width: 58, height: 58)
+            EntityIcon(symbol: client.kind.symbol)
             VStack(alignment: .leading, spacing: 5) {
                 EditableDisplayNameField(label: "客户端名称", placeholder: "例如：晚间官服", text: $client.name)
                 Text("\(client.kind.title) · MAA \(client.kind.maaClientType)")
@@ -47,18 +35,9 @@ struct ClientEditorView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            HStack(spacing: 4) {
-                Button { model.moveClient(client.id, by: -1) } label: {
-                    Image(systemName: "arrow.up")
-                }
-                .disabled(clientIndex == 0)
-                Button { model.moveClient(client.id, by: 1) } label: {
-                    Image(systemName: "arrow.down")
-                }
-                .disabled(clientIndex == model.configuration.clients.count - 1)
+            ReorderButtons(name: client.displayName, index: clientIndex, count: model.configuration.clients.count) {
+                model.moveClient(client.id, by: $0)
             }
-            .buttonStyle(.borderless)
-            .help("调整客户端执行顺序")
             Toggle("启用客户端", isOn: $client.enabled)
                 .toggleStyle(.switch)
         }
@@ -67,25 +46,25 @@ struct ClientEditorView: View {
     private var connectionPanel: some View {
         Panel {
             VStack(alignment: .leading, spacing: 14) {
-                Label("客户端与连接", systemImage: "cable.connector")
-                    .font(.headline)
+                SectionHeading(title: "客户端与连接", symbol: "cable.connector")
                 Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
                     GridRow {
                         Text("服务器")
                             .foregroundStyle(.secondary)
-                        Picker("", selection: kindBinding) {
+                        Picker("服务器", selection: kindBinding) {
                             ForEach(ClientKind.allCases) { kind in
                                 Text(kind.title).tag(kind)
                             }
                         }
                         .labelsHidden()
-                        .frame(maxWidth: .infinity)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     GridRow {
                         Text("应用路径")
                             .foregroundStyle(.secondary)
                         HStack {
                             TextField(".app 路径", text: $client.appPath)
+                                .accessibilityLabel("应用路径")
                                 .textFieldStyle(.roundedBorder)
                             Button("选择…") { chooseApplication() }
                         }
@@ -94,18 +73,21 @@ struct ClientEditorView: View {
                         Text("MaaTools")
                             .foregroundStyle(.secondary)
                         TextField("127.0.0.1:1717", text: $client.address)
+                            .accessibilityLabel("MaaTools 地址")
                             .textFieldStyle(.roundedBorder)
                     }
                     GridRow {
                         Text("Bundle ID")
                             .foregroundStyle(.secondary)
                         TextField("选择应用后自动读取", text: $client.bundleIdentifier)
+                            .accessibilityLabel("Bundle ID")
                             .textFieldStyle(.roundedBorder)
                     }
                     GridRow {
                         Text("MAA Profile")
                             .foregroundStyle(.secondary)
                         TextField("例如 client-1", text: $client.profileName)
+                            .accessibilityLabel("MAA Profile")
                             .textFieldStyle(.roundedBorder)
                     }
                 }
@@ -120,14 +102,19 @@ struct ClientEditorView: View {
         Panel {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Label("账号队列", systemImage: "person.2.fill")
-                        .font(.headline)
+                    SectionHeading(title: "账号队列", symbol: "person.2.fill")
                     Spacer()
                     Button {
                         model.addAccount(to: client.id)
                     } label: {
                         Label("添加账号", systemImage: "plus")
                     }
+                }
+                if client.accounts.isEmpty {
+                    Text("还没有账号。添加后可在自动化方案中安排任务。")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 12)
                 }
                 ForEach(Array(client.accounts.enumerated()), id: \.element.id) { index, account in
                     HStack(spacing: 8) {
@@ -168,17 +155,9 @@ struct ClientEditorView: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        HStack(spacing: 3) {
-                            Button { model.moveAccount(clientID: client.id, accountID: account.id, by: -1) } label: {
-                                Image(systemName: "arrow.up")
-                            }
-                            .disabled(index == 0)
-                            Button { model.moveAccount(clientID: client.id, accountID: account.id, by: 1) } label: {
-                                Image(systemName: "arrow.down")
-                            }
-                            .disabled(index == client.accounts.count - 1)
+                        ReorderButtons(name: account.displayName, index: index, count: client.accounts.count) {
+                            model.moveAccount(clientID: client.id, accountID: account.id, by: $0)
                         }
-                        .buttonStyle(.borderless)
                     }
                     .padding(11)
                     .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
@@ -195,7 +174,7 @@ struct ClientEditorView: View {
     private var deletePanel: some View {
         HStack {
             Spacer()
-            Button("删除这个客户端", role: .destructive) { confirmDeleteClient = true }
+            Button("删除客户端", role: .destructive) { confirmDeleteClient = true }
         }
         .padding(.top, 4)
     }
@@ -220,8 +199,7 @@ struct ClientEditorView: View {
     private var lifecyclePanel: some View {
         Panel {
             VStack(alignment: .leading, spacing: 9) {
-                Label("生命周期保护", systemImage: "shield.lefthalf.filled")
-                    .font(.headline)
+                SectionHeading(title: "生命周期保护", symbol: "shield.lefthalf.filled")
                 Label("启动后等待 MaaTools 端口就绪", systemImage: "checkmark.circle.fill")
                 Label(client.kind.supportsAccountSwitching ? "账号按上方顺序串行执行" : "使用游戏当前已登录的单个账号", systemImage: "checkmark.circle.fill")
                 Label("结束后关闭客户端并确认端口释放", systemImage: "checkmark.circle.fill")

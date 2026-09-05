@@ -66,6 +66,7 @@ struct SidebarView: View {
                         .menuStyle(.borderlessButton)
                         .fixedSize()
                         .help("添加自动化方案")
+                        .accessibilityLabel("添加自动化方案")
                     }
                 }
 
@@ -74,9 +75,11 @@ struct SidebarView: View {
                         DisclosureGroup {
                             ForEach(client.accounts) { account in
                                 HStack(spacing: 9) {
-                                    StatusDot(color: account.enabled ? .maaAccent : .secondary.opacity(0.5))
+                                    Image(systemName: account.enabled ? "person.crop.circle" : "person.crop.circle.badge.xmark")
+                                        .foregroundStyle(account.enabled ? Color.maaAccent : .secondary)
                                     Text(account.displayName)
                                         .lineLimit(1)
+                                        .help(account.displayName + (account.enabled ? "" : "（已停用）"))
                                 }
                                 .tag(SidebarSelection.account(client.id, account.id))
                             }
@@ -98,8 +101,8 @@ struct SidebarView: View {
                                     .foregroundStyle(.secondary)
                             }
                             .contentShape(Rectangle())
-                            .onTapGesture { model.selection = .client(client.id) }
                         }
+                        .tag(SidebarSelection.client(client.id))
                     }
                 } header: {
                     HStack {
@@ -112,6 +115,7 @@ struct SidebarView: View {
                         }
                         .buttonStyle(.plain)
                         .help("添加客户端")
+                        .accessibilityLabel("添加客户端")
                     }
                 }
 
@@ -136,7 +140,8 @@ struct SidebarView: View {
             Image(nsImage: NSApp.applicationIconImage)
                 .resizable()
                 .scaledToFit()
-            .frame(width: 38, height: 38)
+                .frame(width: 38, height: 38)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 Text("AutoMAA")
                     .font(.headline)
@@ -161,20 +166,9 @@ struct SidebarView: View {
                 }
 
                 if model.canCancelRun || model.isCancellingRun {
-                    Button { model.cancelRun() } label: {
-                        Label(
-                            model.isCancellingRun ? "正在取消…" : model.runningPlanID == nil ? "取消更新" : "安全停止",
-                            systemImage: "stop.fill"
-                        )
+                    StopOperationButton(fillsWidth: true)
+                        .controlSize(.large)
                         .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(model.isCancellingRun)
-                    .controlSize(.large)
-                    .tint(.red)
-                    .help(model.runningPlanID == nil
-                          ? "取消当前更新，清理下载进程与临时文件"
-                          : "停止当前 MAA 命令，关闭客户端并释放连接")
                 } else {
                     Label("定时任务正在后台运行", systemImage: "clock.badge.checkmark")
                         .font(.caption)
@@ -193,8 +187,8 @@ struct SidebarView: View {
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
+                    .tint(.maaAction)
                     .controlSize(.large)
-                    .tint(.maaAccent)
                     .help("按当前方案依次执行客户端和账号")
                 } else {
                     Button {} label: {

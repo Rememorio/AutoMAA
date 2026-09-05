@@ -8,16 +8,11 @@ struct AccountEditorView: View {
     @State private var confirmDelete = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                accountHeader
-                selectorPanel
-                planPanel
-                deletePanel
-            }
-            .padding(28)
-            .frame(maxWidth: 820)
-            .frame(maxWidth: .infinity)
+        AppPage(width: PageLayout.readingWidth) {
+            accountHeader
+            selectorPanel
+            planPanel
+            deletePanel
         }
         .navigationTitle(account.displayName)
         .confirmationDialog("删除 \(account.displayName)？", isPresented: $confirmDelete) {
@@ -31,13 +26,7 @@ struct AccountEditorView: View {
 
     private var accountHeader: some View {
         HStack(alignment: .center, spacing: 16) {
-            ZStack {
-                Circle().fill(Color.maaAccent.opacity(0.12))
-                Image(systemName: "person.crop.circle.fill")
-                    .font(.system(size: 26))
-                    .foregroundStyle(Color.maaAccent)
-            }
-            .frame(width: 54, height: 54)
+            EntityIcon(symbol: "person.crop.circle")
             VStack(alignment: .leading, spacing: 5) {
                 EditableDisplayNameField(label: "账号名称", placeholder: "例如：主账号", text: $account.name)
                 Text("所属客户端 · \(client.displayName)")
@@ -54,8 +43,7 @@ struct AccountEditorView: View {
         Panel {
             VStack(alignment: .leading, spacing: 11) {
                 HStack {
-                    Label("账号切换", systemImage: "person.text.rectangle")
-                        .font(.headline)
+                    SectionHeading(title: "账号切换", symbol: "person.text.rectangle")
                     Spacer()
                     if !client.kind.supportsAccountSwitching {
                         Text("不支持")
@@ -73,6 +61,7 @@ struct AccountEditorView: View {
                 }
                 if client.kind.supportsAccountSwitching {
                     TextField("填写登录页能唯一匹配该账号的片段", text: $account.accountSelector)
+                        .accessibilityLabel("账号匹配片段")
                         .textFieldStyle(.roundedBorder)
                     Text(requiresSelector
                          ? "同一客户端启用了多个账号，每个账号都必须填写不同且唯一的匹配片段。"
@@ -96,8 +85,7 @@ struct AccountEditorView: View {
     private var planPanel: some View {
         Panel {
             VStack(alignment: .leading, spacing: 12) {
-                Label("参与的自动化方案", systemImage: "square.stack.3d.up.fill")
-                    .font(.headline)
+                SectionHeading(title: "参与的自动化方案", symbol: "square.stack.3d.up.fill")
                 Text("任务顺序和参数在方案中统一维护，账号这里只决定是否参与指定方案。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -121,6 +109,7 @@ struct AccountEditorView: View {
                             Spacer()
                             Toggle("", isOn: membershipBinding(plan.id))
                                 .labelsHidden()
+                                .accessibilityLabel("参与\(plan.displayName)")
                                 .disabled(plan.includesAllEnabledAccounts)
                         }
                     }
@@ -132,7 +121,7 @@ struct AccountEditorView: View {
     private var deletePanel: some View {
         HStack {
             Spacer()
-            Button("删除这个账号", role: .destructive) { confirmDelete = true }
+            Button("删除账号", role: .destructive) { confirmDelete = true }
         }
         .padding(.top, 4)
     }

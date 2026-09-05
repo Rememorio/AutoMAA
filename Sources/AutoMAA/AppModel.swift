@@ -97,6 +97,8 @@ final class AppModel: ObservableObject {
     }
     @Published private(set) var currentPlanID: UUID?
     @Published var activityEntries: [LogEntry]
+    @Published var activitySearch = ""
+    @Published var activityOnlyAttention = false
     @Published var phase: RunnerPhase = .idle
     @Published var statusMessage = "等待开始"
     @Published var progress = 0.0
@@ -1059,6 +1061,7 @@ final class AppModel: ObservableObject {
         do {
             try historyStore.clear()
             activityEntries = []
+            showBanner("活动记录已清除")
         } catch {
             showBanner("清理活动记录失败：\(error.localizedDescription)")
         }

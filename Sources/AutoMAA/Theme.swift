@@ -1,8 +1,14 @@
+import AppKit
 import AutoMAAKit
 import SwiftUI
 
 extension Color {
-    static let maaAccent = Color(red: 0.08, green: 0.69, blue: 0.68)
+    static let maaAction = Color(red: 0, green: 0.49, blue: 0.47)
+    static let maaAccent = Color(nsColor: NSColor(name: "AutoMAA Accent") { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 0.31, green: 0.80, blue: 0.76, alpha: 1)
+            : NSColor(Color.maaAction)
+    })
     static let maaBlue = Color(red: 0.13, green: 0.48, blue: 0.94)
     static let panelStroke = Color.primary.opacity(0.09)
 }
@@ -16,6 +22,7 @@ struct Panel<Content: View>: View {
 
     var body: some View {
         content
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(18)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay {
@@ -26,6 +33,7 @@ struct Panel<Content: View>: View {
 }
 
 struct EditableDisplayNameField: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let label: String
     let placeholder: String
     @Binding var text: String
@@ -54,6 +62,7 @@ struct EditableDisplayNameField: View {
             }
             .buttonStyle(.plain)
             .help(isFocused ? "完成编辑" : "修改\(label)")
+            .accessibilityLabel(isFocused ? "完成编辑" : "修改\(label)")
         }
         .padding(.horizontal, 11)
         .padding(.vertical, 7)
@@ -69,7 +78,7 @@ struct EditableDisplayNameField: View {
                     lineWidth: isFocused ? 1.5 : 1
                 )
         }
-        .animation(.easeOut(duration: 0.14), value: isFocused)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: isFocused)
         .onChange(of: isFocused) { _, focused in
             if !focused { normalizeName() }
         }
@@ -108,7 +117,6 @@ struct StatusDot: View {
         Circle()
             .fill(color)
             .frame(width: 7, height: 7)
-            .shadow(color: color.opacity(0.55), radius: 3)
     }
 }
 
@@ -173,7 +181,7 @@ extension RunnerPhase {
         switch self {
         case .idle: "空闲"
         case .preparing: "准备中"
-        case .updating: "更新资源"
+        case .updating: "更新中"
         case .launching: "启动客户端"
         case .switchingAccount: "准备账号"
         case .runningTask: "任务进行中"

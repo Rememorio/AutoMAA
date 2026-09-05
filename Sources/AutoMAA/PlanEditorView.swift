@@ -10,28 +10,23 @@ struct PlanEditorView: View {
     @State private var useCustomFightStage = false
     @State private var fightStageEditor: FightStageEditorContext?
 
-    private let columns = [GridItem(.adaptive(minimum: 340), spacing: 14)]
+    private let columns = [GridItem(.adaptive(minimum: 340), spacing: 14, alignment: .topLeading)]
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                header
-                targetPanel
-                schedulePanel
-                orderPanel
-                LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
-                    fightCard
-                    recruitCard
-                    infrastCard
-                    mallCard
-                    awardCard
-                    policyCard
-                }
-                actions
+        AppPage(width: PageLayout.contentWidth) {
+            header
+            targetPanel
+            schedulePanel
+            orderPanel
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
+                fightCard
+                recruitCard
+                infrastCard
+                mallCard
+                awardCard
+                policyCard
             }
-            .padding(28)
-            .frame(maxWidth: 1_060)
-            .frame(maxWidth: .infinity)
+            actions
         }
         .navigationTitle(plan.displayName)
         .confirmationDialog("删除「\(plan.displayName)」？", isPresented: $confirmDelete) {
@@ -52,14 +47,7 @@ struct PlanEditorView: View {
 
     private var header: some View {
         HStack(spacing: 16) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color.maaAccent.opacity(0.12))
-                Image(systemName: "clock.arrow.circlepath")
-                    .font(.system(size: 25, weight: .semibold))
-                    .foregroundStyle(Color.maaAccent)
-            }
-            .frame(width: 54, height: 54)
+            EntityIcon(symbol: "clock.arrow.circlepath")
             VStack(alignment: .leading, spacing: 5) {
                 EditableDisplayNameField(label: "方案名称", placeholder: "例如：工作日早晨", text: $plan.name)
                 Text("\(targetAccounts.count) 个账号 · \(plan.enabledTasks.count) 个步骤")
@@ -76,8 +64,7 @@ struct PlanEditorView: View {
         Panel {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Label("执行账号", systemImage: "person.2.fill")
-                        .font(.headline)
+                    SectionHeading(title: "执行账号", symbol: "person.2.fill")
                     Spacer()
                     Toggle("所有已启用账号", isOn: $plan.includesAllEnabledAccounts)
                         .toggleStyle(.switch)
@@ -97,7 +84,7 @@ struct PlanEditorView: View {
                                 Text(client.displayName)
                                     .font(.caption.weight(.semibold))
                                     .foregroundStyle(.secondary)
-                                HStack(spacing: 16) {
+                                LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), alignment: .topLeading)], alignment: .leading, spacing: 10) {
                                     ForEach(client.accounts) { account in
                                         Toggle(account.displayName, isOn: accountBinding(account.id))
                                             .toggleStyle(.checkbox)
@@ -116,8 +103,7 @@ struct PlanEditorView: View {
         Panel {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Label("定时运行", systemImage: "clock.badge.checkmark.fill")
-                        .font(.headline)
+                    SectionHeading(title: "定时运行", symbol: "clock.badge.checkmark.fill")
                     Spacer()
                     Toggle("", isOn: Binding(
                         get: { plan.schedule.enabled },
@@ -125,6 +111,7 @@ struct PlanEditorView: View {
                     ))
                     .labelsHidden()
                     .toggleStyle(.switch)
+                    .accessibilityLabel("启用定时运行")
                     .disabled(model.isWorkflowRunning)
                 }
                 ForEach(Array(plan.schedule.rules.enumerated()), id: \.element.id) { index, rule in
@@ -180,6 +167,7 @@ struct PlanEditorView: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
                     .help("删除这个时段")
+                    .accessibilityLabel("删除时段 \(index + 1)")
                     .disabled(model.isWorkflowRunning)
                 }
             }
@@ -192,12 +180,17 @@ struct PlanEditorView: View {
                     } label: {
                         Text(weekday.shortTitle)
                             .font(.caption.weight(.semibold))
-                            .frame(width: 28, height: 24)
-                            .foregroundStyle(selected ? Color.white : Color.primary)
+                            .frame(width: 30, height: 28)
+                            .foregroundStyle(Color.primary)
                             .background(
-                                selected ? Color.maaAccent : Color.primary.opacity(0.055),
+                                selected ? Color.maaAccent.opacity(0.16) : Color.primary.opacity(0.055),
                                 in: RoundedRectangle(cornerRadius: 7, style: .continuous)
                             )
+                    }
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .stroke(selected ? Color.maaAccent : .clear, lineWidth: 1)
+                            .allowsHitTesting(false)
                     }
                     .buttonStyle(.plain)
                     .disabled(model.isWorkflowRunning || (!selected && occupied))
@@ -217,14 +210,13 @@ struct PlanEditorView: View {
         Panel {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Label("步骤顺序", systemImage: "arrow.up.arrow.down")
-                        .font(.headline)
+                    SectionHeading(title: "步骤顺序", symbol: "arrow.up.arrow.down")
                     Spacer()
                     Text("每个方案独立记录当日完成状态")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                HStack(spacing: 8) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), alignment: .leading)], spacing: 8) {
                     ForEach(Array(plan.stepOrder.enumerated()), id: \.element) { index, task in
                         HStack(spacing: 7) {
                             Text("\(index + 1)")
@@ -232,17 +224,14 @@ struct PlanEditorView: View {
                                 .foregroundStyle(.secondary)
                             Image(systemName: task.symbol)
                                 .foregroundStyle(plan.isEnabled(task) ? Color.maaAccent : Color.secondary)
-                            Text(task.title)
-                                .font(.caption.weight(.medium))
-                            VStack(spacing: 0) {
-                                Button { move(task, by: -1) } label: { Image(systemName: "chevron.left") }
-                                    .disabled(index == 0)
-                                Button { move(task, by: 1) } label: { Image(systemName: "chevron.right") }
-                                    .disabled(index == plan.stepOrder.count - 1)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(task.title).font(.caption.weight(.medium))
+                                if !plan.isEnabled(task) {
+                                    Text("未启用").font(.caption2).foregroundStyle(.secondary)
+                                }
                             }
-                            .buttonStyle(.plain)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            Spacer(minLength: 0)
+                            ReorderButtons(name: task.title, index: index, count: plan.stepOrder.count) { move(task, by: $0) }
                         }
                         .padding(.horizontal, 9)
                         .padding(.vertical, 7)
@@ -351,6 +340,7 @@ struct PlanEditorView: View {
                 ForEach(InfrastMode.allCases) { mode in Text(mode.title).tag(mode) }
             }
             .pickerStyle(.segmented)
+            .tint(.maaAction)
             Text(plan.infrast.mode.detail)
                 .font(.caption)
                 .foregroundStyle(plan.infrast.mode == .collectOnly ? Color.maaAccent : Color.secondary)
@@ -370,7 +360,7 @@ struct PlanEditorView: View {
                 Text("处理设施")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 90))], alignment: .leading, spacing: 7) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 90), alignment: .leading)], alignment: .leading, spacing: 7) {
                     ForEach(InfrastFacility.allCases) { facility in
                         Toggle(facility.title, isOn: facilityBinding(facility))
                             .toggleStyle(.checkbox)
@@ -444,8 +434,7 @@ struct PlanEditorView: View {
     private var policyCard: some View {
         Panel {
             VStack(alignment: .leading, spacing: 11) {
-                Label("执行策略", systemImage: "arrow.clockwise.circle.fill")
-                    .font(.headline)
+                SectionHeading(title: "执行策略", symbol: "arrow.clockwise.circle.fill")
                 Divider()
                 Toggle("运行前更新识别数据", isOn: $plan.policy.hotUpdateBeforeRun)
                 Stepper("单步骤失败重试：\(plan.policy.maxRetries) 次", value: $plan.policy.maxRetries, in: 0...3)
@@ -829,6 +818,7 @@ private struct PlanTaskCard<Content: View>: View {
                             .foregroundStyle(.secondary)
                         Spacer()
                         Toggle("自定义参数", isOn: $usesCustomSettings)
+                            .accessibilityLabel("\(task.title)自定义参数")
                             .toggleStyle(.switch)
                             .controlSize(.mini)
                     }
@@ -842,7 +832,6 @@ private struct PlanTaskCard<Content: View>: View {
                     }
                 }
                 .disabled(!enabled)
-                .opacity(enabled ? 1 : 0.48)
             }
         }
     }

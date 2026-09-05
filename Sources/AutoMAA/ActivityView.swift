@@ -24,8 +24,8 @@ private struct DisplayActivitySession: Identifiable {
 
 struct ActivityView: View {
     @EnvironmentObject private var model: AppModel
-    @State private var search = ""
-    @State private var filter: ActivityFilter = .all
+    private var search: String { model.activitySearch }
+    private var filter: ActivityFilter { model.activityOnlyAttention ? .attention : .all }
     @State private var expandedSessionIDs: Set<String> = []
     @State private var followsLiveActivity = true
     @State private var showingClearConfirmation = false
@@ -72,18 +72,21 @@ struct ActivityView: View {
 
     private var controls: some View {
         HStack(spacing: 12) {
-            TextField("搜索活动记录", text: $search)
-                .textFieldStyle(.roundedBorder)
+            ActivitySearchField(text: $model.activitySearch)
                 .frame(minWidth: 180, maxWidth: 300)
 
-            Picker("显示范围", selection: $filter) {
+            Picker("显示范围", selection: Binding(
+                get: { filter },
+                set: { model.activityOnlyAttention = $0 == .attention }
+            )) {
                 ForEach(ActivityFilter.allCases) { item in
                     Text(item.title).tag(item)
                 }
             }
             .pickerStyle(.segmented)
+            .tint(.maaAction)
             .labelsHidden()
-            .frame(width: 190)
+            .frame(width: 160)
 
             Spacer()
 
@@ -109,13 +112,15 @@ struct ActivityView: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, PageLayout.inset)
         .padding(.vertical, 14)
+        .frame(maxWidth: PageLayout.readingWidth)
+        .frame(maxWidth: .infinity)
     }
 
     private var activityContent: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            LazyVStack(alignment: .leading, spacing: PageLayout.sectionSpacing) {
                 explanation
 
                 if model.isWorkflowRunning {
@@ -137,7 +142,14 @@ struct ActivityView: View {
                                 : "试试其他关键词，或切换到“全部”。")
                         )
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 64)
+                        .padding(.vertical, 40)
+                        if !model.activityEntries.isEmpty {
+                            Button("清除筛选") {
+                                model.activitySearch = ""
+                                model.activityOnlyAttention = false
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
                     }
                 } else {
                     ForEach(displayedSessions) { item in
@@ -145,7 +157,9 @@ struct ActivityView: View {
                     }
                 }
             }
-            .padding(20)
+            .padding(PageLayout.inset)
+            .frame(maxWidth: PageLayout.readingWidth)
+            .frame(maxWidth: .infinity)
         }
         .onAppear {
             if let first = displayedSessions.first {
@@ -162,7 +176,7 @@ struct ActivityView: View {
             Image(systemName: "info.circle.fill")
                 .foregroundStyle(Color.maaAccent)
                 .padding(.top, 1)
-            Text("手动与定时运行都会在这里整理为活动记录；理智作战会保留关卡、次数和总掉落，高星公招与保留标签会作为醒目提醒保留。maa-cli 的完整命令输出与 LaunchAgent 原始输出保存在诊断日志中，仅在排查问题时需要查看。")
+            Text("按每次运行整理进度与结果。“需留意”仅显示警告和错误，完整输出可从右上角“更多”查看诊断日志。")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -194,15 +208,18 @@ struct ActivityView: View {
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
-                        WorkflowProgressView(progress: model.activeProgress)
+                        if model.activePlanID != nil {
+                            WorkflowProgressView(progress: model.activeProgress)
+                        } else if let activity = model.maaUpdateActivity {
+                            Text("已用时 \(activity.startedAt, style: .timer) · 上限 \(UpdatePolicy.durationDescription(activity.component.timeout))")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
                     }
 
-                    if model.canCancelRun {
-                        Button(role: .destructive) { model.cancelRun() } label: {
-                            Label(model.runningPlanID == nil ? "取消更新" : "安全停止", systemImage: "stop.fill")
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(.red)
+                    Spacer(minLength: 12)
+                    if model.canCancelRun || model.isCancellingRun {
+                        StopOperationButton()
                     } else {
                         Label("定时任务在后台运行", systemImage: "clock.badge.checkmark")
                             .font(.callout)
@@ -226,6 +243,7 @@ struct ActivityView: View {
                     Label("跟随最新", systemImage: "arrow.down.to.line.compact")
                 }
                 .toggleStyle(.button)
+                .tint(.maaAction)
                 .controlSize(.small)
                 .help("开启后，新活动只会在当前运行卡内滚动到最新位置")
             }
@@ -267,10 +285,13 @@ struct ActivityView: View {
     private func filteredEntries(in session: ActivitySession) -> [LogEntry] {
         session.entries.filter { entry in
             let matchesLevel = filter == .all || entry.level == .warning || entry.level == .error
-            let matchesSearch = search.isEmpty
-                || entry.message.localizedCaseInsensitiveContains(search)
-                || entry.details?.localizedCaseInsensitiveContains(search) == true
-                || entry.task?.title.localizedCaseInsensitiveContains(search) == true
+            let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+            let matchesSearch = query.isEmpty
+                || entry.message.localizedCaseInsensitiveContains(query)
+                || entry.details?.localizedCaseInsensitiveContains(query) == true
+                || entry.task?.title.localizedCaseInsensitiveContains(query) == true
+                || context(for: entry)?.localizedCaseInsensitiveContains(query) == true
+                || sessionTitle(session).localizedCaseInsensitiveContains(query)
             return matchesLevel && matchesSearch
         }
     }
@@ -290,8 +311,11 @@ struct ActivityView: View {
                     }
                 }
             } label: {
-                sessionHeader(item.session)
-                    .contentShape(Rectangle())
+                VStack(alignment: .leading, spacing: 10) {
+                    sessionHeader(item.session)
+                    sessionBadges(item.session)
+                }
+                .contentShape(Rectangle())
             }
             .disclosureGroupStyle(.automatic)
         }
@@ -326,34 +350,31 @@ struct ActivityView: View {
             }
 
             Spacer()
-
-            HStack(spacing: 6) {
-                if let summary = session.runSummary {
-                    sessionBadge("\(summary.completedSteps)/\(summary.totalSteps) 完成", color: .green)
-                } else if session.completedTaskCount > 0 {
-                    sessionBadge("\(session.completedTaskCount) 完成", color: .green)
-                }
-                if session.unexecutedTaskCount > 0 {
-                    sessionBadge("\(session.unexecutedTaskCount) 未执行", color: .orange)
-                }
-                if session.warningCount > 0 {
-                    sessionBadge("\(session.warningCount) 警告", color: .orange)
-                }
-                if session.errorCount > 0 {
-                    sessionBadge("\(session.errorCount) 错误", color: .red)
-                }
-            }
         }
         .padding(.trailing, 8)
     }
 
+    private func sessionBadges(_ session: ActivitySession) -> some View {
+        HStack(spacing: 6) {
+            if let summary = session.runSummary {
+                sessionBadge("\(summary.completedSteps)/\(summary.totalSteps) 完成", color: .green)
+            } else if session.completedTaskCount > 0 {
+                sessionBadge("\(session.completedTaskCount) 完成", color: .green)
+            }
+            if session.unexecutedTaskCount > 0 {
+                sessionBadge("\(session.unexecutedTaskCount) 未执行", color: .orange)
+            }
+            if session.warningCount > 0 {
+                sessionBadge("\(session.warningCount) 警告", color: .orange)
+            }
+            if session.errorCount > 0 {
+                sessionBadge("\(session.errorCount) 错误", color: .red)
+            }
+        }
+    }
+
     private func sessionBadge(_ text: String, color: Color) -> some View {
-        Text(text)
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(color)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(color.opacity(0.1), in: Capsule())
+        StatusBadge(title: text, color: color)
     }
 
     private func expansionBinding(for id: String) -> Binding<Bool> {
@@ -427,7 +448,6 @@ private struct ActivityEventRow: View {
     let entry: LogEntry
     let context: String?
     let drawsConnector: Bool
-    @State private var showsDetails = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -463,27 +483,7 @@ private struct ActivityEventRow: View {
                 .foregroundStyle(.secondary)
 
                 if let details = entry.details, !details.isEmpty {
-                    Button {
-                        showsDetails.toggle()
-                    } label: {
-                        Label(showsDetails ? "收起详情" : "查看详情", systemImage: "chevron.right")
-                            .labelStyle(.titleAndIcon)
-                            .font(.caption)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-
-                    if showsDetails {
-                        ScrollView(.horizontal) {
-                            Text(details)
-                                .font(.caption.monospaced())
-                                .textSelection(.enabled)
-                                .fixedSize(horizontal: true, vertical: false)
-                                .padding(10)
-                        }
-                        .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 8))
-                        .transition(.opacity)
-                    }
+                    DetailDisclosure(details: details)
                 }
             }
             .padding(.bottom, drawsConnector ? 8 : 0)

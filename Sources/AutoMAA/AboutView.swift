@@ -5,18 +5,12 @@ struct AboutView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                identity
-                sloganArtwork
-                supportPanel
-                purposePanel
-                privacyPanel
-                openSourcePanel
-            }
-            .padding(28)
-            .frame(maxWidth: 820)
-            .frame(maxWidth: .infinity)
+        AppPage(width: PageLayout.readingWidth) {
+            identity
+            supportPanel
+            privacyPanel
+            openSourcePanel
+            sloganArtwork
         }
         .navigationTitle("关于 AutoMAA")
     }
@@ -26,21 +20,25 @@ struct AboutView: View {
             Image(nsImage: NSApp.applicationIconImage)
                 .resizable()
                 .scaledToFit()
-                .frame(width: 92, height: 92)
+                .frame(width: 72, height: 72)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 7) {
                 Text("AutoMAA")
-                    .font(.system(size: 30, weight: .bold, design: .rounded))
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
                 Text("把重复的 MAA 日常，整理成可靠的自动化方案。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                Text("v\(model.currentApplicationVersion)")
-                    .font(.caption.monospacedDigit().weight(.semibold))
-                    .foregroundStyle(Color.maaAccent)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 4)
-                    .background(Color.maaAccent.opacity(0.12), in: Capsule())
-                    .accessibilityLabel("AutoMAA 版本 \(model.currentApplicationVersion)")
+                HStack(spacing: 12) {
+                    StatusBadge(title: "v\(model.currentApplicationVersion)", color: .maaAccent)
+                        .accessibilityLabel("AutoMAA 版本 \(model.currentApplicationVersion)")
+                    Button("管理更新") { model.selection = .settings }
+                        .buttonStyle(.link)
+                }
+                HStack(spacing: 14) {
+                    Link("使用文档", destination: model.documentationURL)
+                    Link("GitHub 仓库", destination: model.repositoryURL)
+                }
+                .font(.callout)
             }
             Spacer()
         }
@@ -54,7 +52,7 @@ struct AboutView: View {
             Image(nsImage: image)
                 .resizable()
                 .scaledToFit()
-                .frame(maxWidth: 680)
+                .frame(maxWidth: 420)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 4)
                 .accessibilityLabel("直到日常变成一次运行")
@@ -64,55 +62,28 @@ struct AboutView: View {
 
     private var supportPanel: some View {
         Panel {
-            HStack(alignment: .top, spacing: 24) {
-                VStack(alignment: .leading, spacing: 9) {
-                    Label("反馈与支持", systemImage: "lifepreserver.fill")
-                        .font(.headline)
-                    Text("遇到问题时，复制版本与运行环境后随问题描述一起提交。诊断信息不包含账号、账号片段、本机路径或运行日志。")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 8)
-                VStack(alignment: .trailing, spacing: 10) {
-                    Button {
-                        model.copySupportDiagnostics()
-                    } label: {
+            VStack(alignment: .leading, spacing: 14) {
+                SectionHeading(title: "反馈与支持", symbol: "lifepreserver.fill",
+                               detail: "提交问题时，附上版本与运行环境，便于定位。")
+                HStack(spacing: 12) {
+                    Button { model.copySupportDiagnostics() } label: {
                         Label("复制诊断信息", systemImage: "doc.on.doc")
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.maaAccent)
+                    .buttonStyle(.bordered)
                     Link("前往问题反馈", destination: model.issueReportURL)
-                        .font(.callout)
                 }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var purposePanel: some View {
-        Panel {
-            VStack(alignment: .leading, spacing: 11) {
-                Label("项目定位", systemImage: "square.stack.3d.up.fill")
-                    .font(.headline)
-                Text("AutoMAA 是原生 macOS MAA 日常工作流编排器，负责组织客户端、账号、任务顺序、定时、重试和断点；图像识别与游戏操作由 maa-cli 和 MaaCore 完成。")
-                    .font(.callout)
+                Text("诊断信息不包含账号、匹配片段、本机路径或运行日志。")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack {
-                    Link("使用文档", destination: model.documentationURL)
-                    Link("GitHub 仓库", destination: model.repositoryURL)
-                }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var privacyPanel: some View {
         Panel {
             VStack(alignment: .leading, spacing: 10) {
-                Label("本地优先", systemImage: "hand.raised.fill")
-                    .font(.headline)
+                SectionHeading(title: "本地优先", symbol: "hand.raised.fill",
+                               detail: "AutoMAA 编排客户端、账号、任务、定时与断点；画面识别和游戏操作由 maa-cli 与 MaaCore 完成。")
                 Label("配置、断点和运行历史保存在本机", systemImage: "checkmark.circle.fill")
                 Label("不读取或保存游戏密码、验证码", systemImage: "checkmark.circle.fill")
                 Label("任务串行执行，并在切换客户端前确认连接释放", systemImage: "checkmark.circle.fill")
@@ -128,19 +99,23 @@ struct AboutView: View {
     private var openSourcePanel: some View {
         Panel {
             VStack(alignment: .leading, spacing: 11) {
-                Label("开源与致谢", systemImage: "heart.fill")
-                    .font(.headline)
+                SectionHeading(title: "开源与致谢", symbol: "heart.fill")
                 Text("AutoMAA 源代码与文档采用 MIT License；应用图标及宣传视觉资产不在该许可范围内。项目建立在 MAA、MaaCore、maa-cli 及其社区长期积累的成果之上，是独立的非官方社区项目。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                HStack {
-                    Link("查看许可证", destination: model.repositoryURL.appending(path: "blob/main/LICENSE"))
-                    Link("完整致谢", destination: model.documentationURL.appending(path: "about/credits"))
-                    Link("MAA 项目", destination: URL(string: "https://github.com/MaaAssistantArknights/MaaAssistantArknights")!)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 16) { creditLinks }
+                    VStack(alignment: .leading, spacing: 10) { creditLinks }
                 }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var creditLinks: some View {
+        Link("查看许可证", destination: model.repositoryURL.appending(path: "blob/main/LICENSE"))
+        Link("完整致谢", destination: model.documentationURL.appending(path: "about/credits"))
+        Link("MAA 项目", destination: URL(string: "https://github.com/MaaAssistantArknights/MaaAssistantArknights")!)
     }
 }

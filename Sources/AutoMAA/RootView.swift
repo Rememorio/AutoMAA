@@ -4,6 +4,7 @@ import SwiftUI
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         NavigationSplitView {
@@ -12,14 +13,7 @@ struct RootView: View {
         } detail: {
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background {
-                    LinearGradient(
-                        colors: [Color.maaAccent.opacity(0.035), Color.clear, Color.maaBlue.opacity(0.025)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                    .ignoresSafeArea()
-                }
+                .background(Color(nsColor: .windowBackgroundColor))
         }
         .navigationSplitViewStyle(.balanced)
         .tint(.maaAccent)
@@ -30,7 +24,7 @@ struct RootView: View {
                     .padding(.top, 10)
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: model.bannerMessage)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: model.bannerMessage)
         .onChange(of: model.configuration) { _, _ in
             model.scheduleSave()
         }
@@ -93,6 +87,7 @@ struct RootView: View {
                 .foregroundStyle(Color.maaAccent)
             Text(message)
                 .font(.callout.weight(.medium))
+                .fixedSize(horizontal: false, vertical: true)
             Button {
                 model.bannerMessage = nil
             } label: {
@@ -101,10 +96,14 @@ struct RootView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
+            .accessibilityLabel("关闭提示")
+            .help("关闭提示")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(.ultraThickMaterial, in: Capsule())
+        .frame(maxWidth: 680)
+        .background(.ultraThickMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .shadow(color: .black.opacity(0.12), radius: 14, y: 5)
+        .padding(.horizontal, 24)
     }
 }

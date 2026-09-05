@@ -16,6 +16,7 @@ struct PlanRunButton: View {
                 Label(readyTitle, systemImage: "play.fill")
             }
             .buttonStyle(.borderedProminent)
+            .tint(.maaAction)
             .controlSize(controlSize)
         case .running:
             disabledButton("正在运行", systemImage: "progress.indicator")

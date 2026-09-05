@@ -5,18 +5,13 @@ struct DashboardView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                header
-                metrics
-                routines
-                executionFlow
-                readiness
-                recentActivity
-            }
-            .padding(28)
-            .frame(maxWidth: 1_060, alignment: .leading)
-            .frame(maxWidth: .infinity)
+        AppPage(width: PageLayout.contentWidth) {
+            header
+            metrics
+            routines
+            executionFlow
+            readiness
+            recentActivity
         }
         .navigationTitle("自动化总览")
     }
@@ -36,38 +31,34 @@ struct DashboardView: View {
     }
 
     private var metrics: some View {
-        HStack(spacing: 12) {
-            metric(title: "自动化方案", value: "\(model.configuration.plans.count)", symbol: "clock.arrow.circlepath", color: .purple)
-            metric(title: "客户端", value: "\(model.activeClientCount)", symbol: "macwindow", color: .maaBlue)
-            metric(title: "启用账号", value: "\(model.activeAccountCount)", symbol: "person.2.fill", color: .maaAccent)
-            metric(title: "定时方案", value: "\(model.activeScheduleCount)", symbol: "clock.badge.checkmark.fill", color: .orange)
+        Panel {
+            HStack(spacing: 16) {
+                metric(title: "自动化方案", value: model.configuration.plans.count, symbol: "clock.arrow.circlepath")
+                Divider().frame(height: 32)
+                metric(title: "客户端", value: model.activeClientCount, symbol: "macwindow")
+                Divider().frame(height: 32)
+                metric(title: "启用账号", value: model.activeAccountCount, symbol: "person.2.fill")
+                Divider().frame(height: 32)
+                metric(title: "定时方案", value: model.activeScheduleCount, symbol: "clock.badge.checkmark.fill")
+            }
         }
     }
 
-    private func metric(title: String, value: String, symbol: String, color: Color) -> some View {
-        Panel {
-            HStack(spacing: 12) {
-                Image(systemName: symbol)
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(color)
-                    .frame(width: 36, height: 36)
-                    .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(value)
-                        .font(.title3.weight(.bold).monospacedDigit())
-                    Text(title)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 0)
-            }
+    private func metric(title: String, value: Int, symbol: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(title, systemImage: symbol)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(value, format: .number)
+                .font(.title2.weight(.semibold).monospacedDigit())
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
 
     private var routines: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionTitle("自动化方案", detail: "每张卡片都会独立显示运行检查结果；选择状态可在下方查看完整详情。")
+            sectionTitle("自动化方案", detail: "查看准备状态，选择方案后可展开运行检查。")
             if model.configuration.plans.isEmpty {
                 Panel {
                     VStack(spacing: 14) {
@@ -78,12 +69,13 @@ struct DashboardView: View {
                             .font(.headline)
                         Button("使用轻量日常模板") { model.addPlan(.lightRoutine) }
                             .buttonStyle(.borderedProminent)
+                            .tint(.maaAction)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 18)
                 }
             } else {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 12)], spacing: 12) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 12, alignment: .topLeading)], spacing: 12) {
                     ForEach(model.configuration.plans) { plan in
                         routineCard(plan)
                     }
@@ -101,19 +93,9 @@ struct DashboardView: View {
                     Text(plan.displayName)
                         .font(.headline)
                     if model.activePlanID == plan.id {
-                        Text("正在运行")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(Color.maaAccent)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 3)
-                            .background(Color.maaAccent.opacity(0.1), in: Capsule())
+                        StatusBadge(title: "正在运行", color: Color.maaAccent)
                     } else if !model.isWorkflowRunning, model.currentPlanID == plan.id {
-                        Text("正在查看")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 3)
-                            .background(Color.secondary.opacity(0.1), in: Capsule())
+                        StatusBadge(title: "正在查看", color: Color.secondary)
                     }
                     Spacer()
                     if model.isPlanScheduleCurrent(plan) {
@@ -429,10 +411,7 @@ struct DashboardView: View {
     }
 
     private func sectionTitle(_ title: String, detail: String?) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(title).font(.headline)
-            if let detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
-        }
+        SectionHeading(title: title, detail: detail)
     }
 
     private func targetCount(_ plan: AutomationPlan) -> Int {
