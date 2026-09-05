@@ -184,7 +184,7 @@ public enum InfrastMode: Int, Codable, CaseIterable, Identifiable, Sendable {
 
     public var detail: String {
         switch self {
-        case .fullShift: "MAA 单设施最优解，会处理所选设施并进行完整换班。"
+        case .fullShift: "由 MAA 计算所选设施的干员组合并进行完整换班。"
         case .customSchedule: "读取 MAA 基建排班文件，并执行其中指定的方案。"
         case .collectOnly: "一键轮换模式：保留收取产物、无人机与会客室逻辑，不进行常规换班。"
         }
