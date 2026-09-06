@@ -108,6 +108,7 @@ final class AppModel: ObservableObject {
     @Published var bannerMessage: String?
     @Published var installedPlanIDs: Set<UUID>
     @Published private(set) var fightStageMemory: FightStageMemory
+    @Published private(set) var executionState: ExecutionState
     @Published var lastReport: WorkflowReport?
     @Published private(set) var isSynchronizingSchedules = false
     @Published private(set) var maaVersionSummary = "尚未检测"
@@ -182,6 +183,7 @@ final class AppModel: ObservableObject {
         configurationStore = ConfigurationStore(directories: directories)
         historyStore = HistoryStore(directories: directories)
         executionStateStore = ExecutionStateStore(directories: directories)
+        executionState = ExecutionStateStore(directories: directories).loadForToday()
         fightStageMemoryStore = FightStageMemoryStore(directories: directories)
         let applicationVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
             ?? "开发构建"
@@ -460,7 +462,41 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func runPlan(_ planID: UUID, resumeToday: Bool = true) {
+    func continuation(for planID: UUID) -> PlanContinuation {
+        PlanContinuation(configuration: configuration, planID: planID, state: executionState, history: activityEntries)
+    }
+
+    func runTitle(for planID: UUID, readyTitle: String = "运行") -> String {
+        let state = continuation(for: planID)
+        if state.pending == 0 { return state.unconfirmed > 0 ? "结果待确认" : "今日已完成" }
+        return state.hasStarted ? "继续未完成" : readyTitle
+    }
+
+    func retryStep(for entry: LogEntry) -> WorkflowStep? {
+        guard Calendar.current.isDateInToday(entry.timestamp),
+              executionState.dateKey == ExecutionStateStore.todayKey,
+              let planID = entry.planID, let clientID = entry.clientID, let accountID = entry.accountID,
+              entry.task == .fight,
+              let plan = configuration.plans.first(where: { $0.id == planID }), plan.enabledTasks.contains(.fight),
+              let client = configuration.clients.first(where: { $0.id == clientID && $0.enabled }),
+              client.accounts.contains(where: { $0.id == accountID && plan.includes($0) }) else { return nil }
+        let step = WorkflowStep(planID: planID, clientID: clientID, accountID: accountID, task: .fight)
+        guard let status = executionState.fightResults?[step.key]?.status,
+              status == .failed || status == .unconfirmed,
+              activityEntries.last(where: {
+                  $0.planID == planID && $0.clientID == clientID && $0.accountID == accountID && $0.task == .fight
+              })?.id == entry.id else { return nil }
+        return step
+    }
+
+    func canConfirmAnnihilation(_ step: WorkflowStep) -> Bool {
+        guard let fight = configuration.plans.first(where: { $0.id == step.planID })?.fight else { return false }
+        return fight.usesCustomSettings && fight.annihilationFirst
+            && executionState.fightProgress?[step.key]?.annihilation?.reason == .navigationUnavailable
+    }
+
+    func runPlan(_ planID: UUID, resumeToday: Bool = true, retryStep: WorkflowStep? = nil,
+                 confirmAnnihilation: Bool = false) {
         reloadActivityHistory()
         selectCurrentPlan(planID)
         let issues = readinessIssues(for: planID)
@@ -492,13 +528,15 @@ final class AppModel: ObservableObject {
             self?.consume(event)
         }
         workflowTask = Task { [weak self] in
-            let report = await runner.run(snapshot, planID: planID, resumeToday: resumeToday)
+            let report = await runner.run(snapshot, planID: planID, resumeToday: resumeToday,
+                                          retryStep: retryStep, confirmAnnihilation: confirmAnnihilation)
             guard let self else { return }
             self.lastReport = report
             self.isRunning = false
             self.isCancellingRun = false
             self.runningPlanID = nil
             self.workflowTask = nil
+            self.reloadActivityHistory()
             self.reloadFightStageMemory()
             _ = self.saveNow(showConfirmation: false)
             await self.postImportantNotification(for: report, planID: planID)
@@ -1199,6 +1237,7 @@ final class AppModel: ObservableObject {
     func resetToday() {
         do {
             try executionStateStore.reset()
+            executionState = executionStateStore.loadForToday()
             showBanner("今日完成记录已重置")
         } catch {
             showBanner("重置失败：\(error.localizedDescription)")
@@ -1216,6 +1255,8 @@ final class AppModel: ObservableObject {
     }
 
     func reloadActivityHistory() {
+        let state = executionStateStore.loadForToday()
+        if state != executionState { executionState = state }
         let entries = historyStore.load()
         if entries != activityEntries {
             activityEntries = entries

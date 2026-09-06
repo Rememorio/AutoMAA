@@ -13,11 +13,15 @@ struct PlanRunButton: View {
             Button {
                 model.runPlan(planID)
             } label: {
-                Label(readyTitle, systemImage: "play.fill")
+                Label(model.runTitle(for: planID, readyTitle: readyTitle), systemImage: "play.fill")
             }
             .buttonStyle(.borderedProminent)
             .tint(.maaAction)
             .controlSize(controlSize)
+            .disabled(model.continuation(for: planID).pending == 0)
+            .help(model.continuation(for: planID).unconfirmed > 0
+                  ? "未确认的作战不会自动补跑；请在活动记录中处理"
+                  : "保留今日完成记录，只执行尚未完成的步骤")
         case .running:
             disabledButton("正在运行", systemImage: "progress.indicator")
         case .anotherPlanRunning:

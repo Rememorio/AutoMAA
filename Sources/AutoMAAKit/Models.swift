@@ -247,6 +247,7 @@ public struct FightConfiguration: Codable, Equatable, Sendable {
     public var settingsMode = TaskSettingsMode.custom
     public var stageStrategy = FightStageStrategy.gameCurrentOrLast
     public var stage = ""
+    public var annihilationFirst = false
     public var medicine: Int?
     public var medicineExpireDays: Int?
     public var stone: Int?
@@ -255,6 +256,21 @@ public struct FightConfiguration: Codable, Equatable, Sendable {
     public var drGrandet = false
 
     public init() {}
+
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try values.decode(Bool.self, forKey: .enabled)
+        settingsMode = try values.decode(TaskSettingsMode.self, forKey: .settingsMode)
+        stageStrategy = try values.decode(FightStageStrategy.self, forKey: .stageStrategy)
+        stage = try values.decode(String.self, forKey: .stage)
+        annihilationFirst = try values.decodeIfPresent(Bool.self, forKey: .annihilationFirst) ?? false
+        medicine = try values.decodeIfPresent(Int.self, forKey: .medicine)
+        medicineExpireDays = try values.decodeIfPresent(Int.self, forKey: .medicineExpireDays)
+        stone = try values.decodeIfPresent(Int.self, forKey: .stone)
+        times = try values.decodeIfPresent(Int.self, forKey: .times)
+        series = try values.decodeIfPresent(Int.self, forKey: .series)
+        drGrandet = try values.decode(Bool.self, forKey: .drGrandet)
+    }
 
     public var usesCustomSettings: Bool {
         get { settingsMode == .custom }
@@ -589,19 +605,36 @@ public struct WorkflowRunSummary: Codable, Sendable, Equatable {
     public var failedSteps: Int
     public var unexecutedSteps: Int
     public var totalSteps: Int
+    public var unconfirmedSteps: Int
+    public var unnecessarySteps: Int
 
-    public init(completedSteps: Int, failedSteps: Int, unexecutedSteps: Int, totalSteps: Int) {
+    public init(completedSteps: Int, failedSteps: Int, unexecutedSteps: Int, totalSteps: Int,
+                unconfirmedSteps: Int = 0, unnecessarySteps: Int = 0) {
         self.completedSteps = completedSteps
         self.failedSteps = failedSteps
         self.unexecutedSteps = unexecutedSteps
         self.totalSteps = totalSteps
+        self.unconfirmedSteps = unconfirmedSteps
+        self.unnecessarySteps = unnecessarySteps
     }
 
-    public var isPartial: Bool { failedSteps > 0 || unexecutedSteps > 0 }
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        completedSteps = try values.decode(Int.self, forKey: .completedSteps)
+        failedSteps = try values.decode(Int.self, forKey: .failedSteps)
+        unexecutedSteps = try values.decode(Int.self, forKey: .unexecutedSteps)
+        totalSteps = try values.decode(Int.self, forKey: .totalSteps)
+        unconfirmedSteps = try values.decodeIfPresent(Int.self, forKey: .unconfirmedSteps) ?? 0
+        unnecessarySteps = try values.decodeIfPresent(Int.self, forKey: .unnecessarySteps) ?? 0
+    }
+
+    public var isPartial: Bool { failedSteps > 0 || unexecutedSteps > 0 || unconfirmedSteps > 0 }
 
     public var completionDescription: String {
         var parts = ["\(completedSteps)/\(totalSteps) 个步骤完成"]
         if failedSteps > 0 { parts.append("\(failedSteps) 个失败") }
+        if unnecessarySteps > 0 { parts.append("\(unnecessarySteps) 个无需执行") }
+        if unconfirmedSteps > 0 { parts.append("\(unconfirmedSteps) 个结果未确认") }
         if unexecutedSteps > 0 { parts.append("\(unexecutedSteps) 个未执行") }
         return parts.joined(separator: "，")
     }
@@ -622,6 +655,7 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
     public var task: TaskKind?
     public var runSummary: WorkflowRunSummary?
     public var updateInformation: MAAUpdateInformation?
+    public var fightResult: FightResult?
 
     public init(
         id: UUID = UUID(),
@@ -637,7 +671,8 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
         accountID: UUID? = nil,
         task: TaskKind? = nil,
         runSummary: WorkflowRunSummary? = nil,
-        updateInformation: MAAUpdateInformation? = nil
+        updateInformation: MAAUpdateInformation? = nil,
+        fightResult: FightResult? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -653,6 +688,7 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
         self.task = task
         self.runSummary = runSummary
         self.updateInformation = updateInformation
+        self.fightResult = fightResult
     }
 }
 
@@ -760,6 +796,8 @@ public struct WorkflowReport: Sendable {
     public var skippedSteps: Int
     public var unexecutedSteps: Int
     public var totalSteps: Int
+    public var unconfirmedSteps = 0
+    public var unnecessarySteps = 0
     public var attentionMessages: [String]
     public var notices: [WorkflowNotice]
     public var pendingNotificationNotices: [WorkflowNotice]
@@ -793,22 +831,27 @@ public struct WorkflowReport: Sendable {
     public var runSummary: WorkflowRunSummary? {
         guard totalSteps > 0 else { return nil }
         return WorkflowRunSummary(
-            completedSteps: max(0, totalSteps - failedSteps - unexecutedSteps),
+            completedSteps: max(0, totalSteps - failedSteps - unexecutedSteps - unconfirmedSteps - unnecessarySteps),
             failedSteps: failedSteps,
             unexecutedSteps: unexecutedSteps,
-            totalSteps: totalSteps
+            totalSteps: totalSteps,
+            unconfirmedSteps: unconfirmedSteps,
+            unnecessarySteps: unnecessarySteps
         )
     }
 
     public var isSuccess: Bool {
-        !cancelled && fatalError == nil && failedSteps == 0 && unexecutedSteps == 0 && attentionMessages.isEmpty
+        !cancelled && fatalError == nil && failedSteps == 0 && unexecutedSteps == 0
+            && unconfirmedSteps == 0 && attentionMessages.isEmpty
     }
 }
 
-public struct ExecutionState: Codable, Sendable {
+public struct ExecutionState: Codable, Sendable, Equatable {
     public var dateKey: String
     public var completedSteps: Set<String>
     public var updatedAt: Date
+    public var fightResults: [String: FightResult]?
+    public var fightProgress: [String: FightProgress]?
 
     public init(dateKey: String = "", completedSteps: Set<String> = [], updatedAt: Date = Date()) {
         self.dateKey = dateKey

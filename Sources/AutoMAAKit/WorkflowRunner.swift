@@ -18,14 +18,8 @@ private struct TaskRunOutcome {
     let succeeded: Bool
     let recoveredAfterRetry: Bool
     let notices: [WorkflowNotice]
-    let fightSummary: MAAFightSummary?
-    let completionSummary: TaskCompletionSummary?
     let failureDetails: String?
-}
-
-private struct TaskCompletionSummary {
-    let messageSuffix: String
-    let details: String?
+    var fightResult: FightResult? = nil
 }
 
 private struct MaintenanceCommandOutcome {
@@ -203,7 +197,9 @@ public final class WorkflowRunner {
     public func run(
         _ configuration: AppConfiguration,
         planID: UUID,
-        resumeToday: Bool = true
+        resumeToday: Bool = true,
+        retryStep: WorkflowStep? = nil,
+        confirmAnnihilation: Bool = false
     ) async -> WorkflowReport {
         var report = WorkflowReport()
         var lock: ProcessLock?
@@ -211,13 +207,26 @@ public final class WorkflowRunner {
         beginActivity(sensitiveValues: configuration.clients.flatMap { $0.accounts.map(\.accountSelector) })
         defer { endActivity() }
         currentPlanID = nil
-        guard let plan = configuration.plans.first(where: { $0.id == planID }) else {
+        guard var plan = configuration.plans.first(where: { $0.id == planID }) else {
             report.fatalError = "找不到要运行的自动化方案"
             emit(.failed, report.fatalError ?? "方案不存在", 0, .error)
             return report
         }
         currentPlanID = plan.id
         defer { currentPlanID = nil }
+        if let retryStep {
+            guard retryStep.planID == planID,
+                  let client = configuration.clients.first(where: { $0.id == retryStep.clientID && $0.enabled }),
+                  let account = client.accounts.first(where: { $0.id == retryStep.accountID }),
+                  plan.includes(account), plan.enabledTasks.contains(retryStep.task) else {
+                report.fatalError = "重跑对象已停用或不再属于当前方案，请检查配置"
+                emit(.failed, report.fatalError!, 0, .error)
+                return report
+            }
+            plan.includesAllEnabledAccounts = false
+            plan.accountIDs = [retryStep.accountID]
+            plan.stepOrder = [retryStep.task]
+        }
         var fightStageMemory: FightStageMemory
         do {
             fightStageMemory = try fightStageMemoryStore.load()
@@ -266,8 +275,44 @@ public final class WorkflowRunner {
         _ = lock
         _ = lease
 
-        var state = resumeToday ? stateStore.loadForToday() : ExecutionState(dateKey: ExecutionStateStore.todayKey)
-        if !resumeToday { try? stateStore.save(state) }
+        var state: ExecutionState
+        do { state = try stateStore.loadForExecution() }
+        catch {
+            report.fatalError = "无法读取当日记录，请检查文件或在设置中重置断点：\(error.localizedDescription)"
+            emit(.failed, report.fatalError!, 0, .error)
+            return report
+        }
+        if !resumeToday, retryStep == nil {
+            let prefix = "\(plan.id)/"
+            state.completedSteps = state.completedSteps.filter { !$0.hasPrefix(prefix) }
+            state.fightResults = state.fightResults?.filter { !$0.key.hasPrefix(prefix) }
+            state.fightProgress = state.fightProgress?.filter { !$0.key.hasPrefix(prefix) }
+        }
+        if let retryStep {
+            guard !state.isResolved(retryStep.key) else {
+                report.fatalError = "本项今日已处理完成，请刷新活动记录"
+                emit(.failed, report.fatalError!, 0, .error)
+                return report
+            }
+            if confirmAnnihilation {
+                guard retryStep.task == .fight, plan.fight.usesCustomSettings, plan.fight.annihilationFirst,
+                      state.fightProgress?[retryStep.key]?.annihilation?.reason == .navigationUnavailable else {
+                    report.fatalError = "没有可确认的剿灭阶段，请刷新活动记录"
+                    emit(.failed, report.fatalError!, 0, .error)
+                    return report
+                }
+                state.fightProgress?[retryStep.key]?.annihilation = FightResult(
+                    status: .unnecessary, stage: "Annihilation", reason: .confirmedWeeklyLimit
+                )
+                emit(.preparing, "已手动确认本周剿灭完成，将继续常规作战", 0, .info)
+            }
+        }
+        do { try stateStore.save(state) }
+        catch {
+            report.fatalError = "无法保存当日记录：\(error.localizedDescription)"
+            emit(.failed, report.fatalError!, 0, .error)
+            return report
+        }
 
         let activeClients = configuration.clients.filter { client in
             client.enabled && client.accounts.contains(where: plan.includes)
@@ -356,6 +401,17 @@ public final class WorkflowRunner {
                 )
                 continue
             }
+            if retryStep == nil, activeAccounts.allSatisfy({ account in
+                plan.enabledTasks.allSatisfy { task in
+                    let key = checkpointKey(plan: plan, client: client, account: account, task: task)
+                    return state.isResolved(key) || state.needsFightConfirmation(key)
+                }
+            }) {
+                visitedSteps += clientStepCount
+                emit(.runningTask, "\(clientText(client))没有可自动续跑的任务，请处理活动记录中的待确认结果",
+                     Double(visitedSteps) / Double(totalSteps), .warning, client: client)
+                continue
+            }
             do {
                 try await launch(client, configuredClients: configuration.clients)
             } catch {
@@ -416,7 +472,7 @@ public final class WorkflowRunner {
                 }
                 let enabledTasks = plan.enabledTasks
                 if resumeToday, enabledTasks.allSatisfy({
-                    state.completedSteps.contains(checkpointKey(plan: plan, client: client, account: account, task: $0))
+                    state.isResolved(checkpointKey(plan: plan, client: client, account: account, task: $0))
                 }) {
                     report.skippedSteps += enabledTasks.count
                     visitedSteps += enabledTasks.count
@@ -477,7 +533,7 @@ public final class WorkflowRunner {
                         break accountLoop
                     }
                     let key = checkpointKey(plan: plan, client: client, account: account, task: task)
-                    if resumeToday, state.completedSteps.contains(key) {
+                    if resumeToday, state.isResolved(key) {
                         report.skippedSteps += 1
                         visitedSteps += 1
                         emit(
@@ -492,15 +548,24 @@ public final class WorkflowRunner {
                         continue
                     }
 
+                    if retryStep == nil, state.needsFightConfirmation(key) {
+                        visitedSteps += 1
+                        emit(.runningTask, "\(accountText(account))：理智作战结果待确认，请在活动记录中重跑本项",
+                             Double(visitedSteps) / Double(totalSteps), .warning, client: client, account: account,
+                             task: task, fightResult: state.fightResults?[key])
+                        continue
+                    }
                     let outcome: TaskRunOutcome
                     do {
-                        outcome = try await runTask(
-                            task,
-                            plan: plan,
-                            account: account,
-                            client: client,
-                            configuration: configuration
-                        )
+                        if task == .fight {
+                            outcome = try await runFight(plan: plan, account: account, client: client,
+                                                        configuration: configuration, state: &state,
+                                                        memory: &fightStageMemory)
+                        } else {
+                            outcome = try await runTask(
+                                task, plan: plan, account: account, client: client, configuration: configuration
+                            )
+                        }
                     } catch {
                         if isCancellation(error) {
                             report.cancelled = true
@@ -512,7 +577,12 @@ public final class WorkflowRunner {
                             emit(.failed, error.localizedDescription, Double(visitedSteps) / Double(totalSteps), .error, client: client)
                             break clientLoop
                         }
-                        report.failedSteps += 1
+                        if error is FightPersistenceError {
+                            report.fatalError = error.localizedDescription
+                            stopAfterClosingClient = true
+                            break accountLoop
+                        }
+                        if state.fightResults?[key]?.status != .unconfirmed { report.failedSteps += 1 }
                         visitedSteps += 1
                         emit(
                             .runningTask,
@@ -557,59 +627,56 @@ public final class WorkflowRunner {
                         }
                     }
                     visitedSteps += 1
-                    if outcome.succeeded {
-                        report.succeededSteps += 1
-                        if task == .fight {
-                            var updatedMemory = fightStageMemory
-                            if updatedMemory.recordSuccessfulFight(
-                                configuration: plan.fight,
-                                reportedStage: outcome.fightSummary?.stage,
-                                completedTimes: outcome.fightSummary?.times,
-                                clientID: client.id,
-                                accountID: account.id
-                            ) {
-                                do {
-                                    try fightStageMemoryStore.save(updatedMemory)
-                                    fightStageMemory = updatedMemory
-                                } catch {
-                                    emit(
-                                        .runningTask,
-                                        "\(accountText(account))：常规关卡记录保存失败",
-                                        Double(visitedSteps) / Double(totalSteps),
-                                        .warning,
-                                        client: client,
-                                        account: account,
-                                        task: task,
-                                        details: error.localizedDescription
-                                    )
-                                }
-                            }
+                    if let result = outcome.fightResult {
+                        state.record(result, for: key)
+                        do { try stateStore.save(state) }
+                        catch {
+                            report.fatalError = "作战记录保存失败，流程已停止：\(error.localizedDescription)"
+                            stopAfterClosingClient = true
+                            break accountLoop
                         }
-                        state.completedSteps.insert(key)
+                        emit(.runningTask, "\(accountText(account))：理智作战\(result.description)",
+                             Double(visitedSteps) / Double(totalSteps), result.isResolved ? .success : result.status == .failed ? .error : .warning,
+                             client: client, account: account, task: task,
+                             details: result.isResolved ? result.totalDrops.map { "总掉落：" + $0 } : outcome.failureDetails,
+                             fightResult: result)
+                        if result.status == .unconfirmed { break accountLoop }
+                    }
+                    if outcome.succeeded {
+                        if outcome.fightResult?.status != .unnecessary { report.succeededSteps += 1 }
+                        if outcome.fightResult == nil { state.completedSteps.insert(key) }
                         state.updatedAt = Date()
-                        try? stateStore.save(state)
-                        emit(
-                            .runningTask,
-                            "\(accountText(account))：\(task.title)\(outcome.recoveredAfterRetry ? "重试后" : "")已完成\(outcome.completionSummary?.messageSuffix ?? "")",
-                            Double(visitedSteps) / Double(totalSteps),
-                            .success,
-                            client: client,
-                            account: account,
-                            task: task,
-                            details: outcome.completionSummary?.details
-                        )
+                        do { try stateStore.save(state) }
+                        catch {
+                            report.fatalError = "完成记录保存失败，流程已停止：\(error.localizedDescription)"
+                            stopAfterClosingClient = true
+                            break accountLoop
+                        }
+                        if outcome.fightResult == nil {
+                            emit(
+                                .runningTask,
+                                "\(accountText(account))：\(task.title)\(outcome.recoveredAfterRetry ? "重试后" : "")已完成",
+                                Double(visitedSteps) / Double(totalSteps),
+                                .success,
+                                client: client,
+                                account: account,
+                                task: task
+                            )
+                        }
                     } else {
                         report.failedSteps += 1
-                        emit(
-                            .runningTask,
-                            "\(accountText(account))：\(task.title)失败",
-                            Double(visitedSteps) / Double(totalSteps),
-                            .error,
-                            client: client,
-                            account: account,
-                            task: task,
-                            details: outcome.failureDetails
-                        )
+                        if outcome.fightResult == nil {
+                            emit(
+                                .runningTask,
+                                "\(accountText(account))：\(task.title)失败",
+                                Double(visitedSteps) / Double(totalSteps),
+                                .error,
+                                client: client,
+                                account: account,
+                                task: task,
+                                details: outcome.failureDetails
+                            )
+                        }
                         if plan.policy.continueAfterStepFailure {
                             do {
                                 try await switchAccount(
@@ -674,7 +741,15 @@ public final class WorkflowRunner {
         let completedSteps = activeClients.reduce(0) { partial, client in
             partial + completedStepCount(plan: plan, client: client, state: state)
         }
-        report.unexecutedSteps = max(0, totalSteps - completedSteps - report.failedSteps)
+        for client in activeClients {
+            for account in client.accounts.filter(plan.includes) where plan.enabledTasks.contains(.fight) {
+                let key = checkpointKey(plan: plan, client: client, account: account, task: .fight)
+                let result = state.fightResults?[key]
+                if state.needsFightConfirmation(key) { report.unconfirmedSteps += 1 }
+                if result?.status == .unnecessary { report.unnecessarySteps += 1 }
+            }
+        }
+        report.unexecutedSteps = max(0, totalSteps - completedSteps - report.failedSteps - report.unconfirmedSteps)
         if let fatalError = report.fatalError {
             emit(.failed, "流程中止：\(fatalError)", Double(visitedSteps) / Double(totalSteps), .error)
         } else if report.cancelled {
@@ -1561,6 +1636,105 @@ public final class WorkflowRunner {
             : "MAA 引擎已更新，识别数据已通过校验"
     }
 
+    private func runFight(
+        plan: AutomationPlan,
+        account: AccountConfiguration,
+        client: ClientConfiguration,
+        configuration: AppConfiguration,
+        state: inout ExecutionState,
+        memory: inout FightStageMemory
+    ) async throws -> TaskRunOutcome {
+        let key = checkpointKey(plan: plan, client: client, account: account, task: .fight)
+        let resolution = FightStagePolicy.resolve(plan.fight, memory: memory, clientID: client.id, accountID: account.id)
+        let stage: String
+        switch resolution {
+        case let .value(value): stage = value
+        case .omitted: stage = ""
+        case .unavailable: throw MAAConfigurationWriterError.invalidConfiguration("缺少后续常规关卡，请先设置备用关卡")
+        }
+        let twoPhases = plan.fight.usesCustomSettings && plan.fight.annihilationFirst
+        var progress = twoPhases ? state.fightProgress?[key] ?? FightProgress(regularStage: stage) : FightProgress(regularStage: stage)
+        var lastOutcome: TaskRunOutcome?
+        for isAnnihilation in (twoPhases ? [true, false] : [false]) {
+            let previous = isAnnihilation ? progress.annihilation : progress.regular
+            if twoPhases, previous?.isResolved == true { continue }
+            guard !Task.isCancelled else { throw RuntimeError.cancelled }
+            var phasePlan = plan
+            phasePlan.fight.annihilationFirst = false
+            if twoPhases {
+                phasePlan.fight.stageStrategy = .fixed
+                phasePlan.fight.stage = isAnnihilation ? "Annihilation" : progress.regularStage
+                if isAnnihilation {
+                    phasePlan.fight.medicine = nil
+                    phasePlan.fight.medicineExpireDays = nil
+                    phasePlan.fight.stone = nil
+                    phasePlan.fight.times = nil
+                    phasePlan.fight.drGrandet = false
+                }
+            }
+            let phaseStage = twoPhases ? phasePlan.fight.stage : stage
+            try MAAConfigurationWriter(directories: directories).writeTask(
+                .fight, plan: phasePlan, account: account, client: client,
+                fightStageResolution: phasePlan.fight.usesCustomSettings ? .value(phaseStage) : .omitted
+            )
+            // A crash or cancellation after dispatch must require an explicit retry.
+            state.record(FightResult(status: .unconfirmed, stage: phaseStage, reason: .missingEvidence), for: key)
+            if twoPhases {
+                if state.fightProgress == nil { state.fightProgress = [:] }
+                if isAnnihilation { progress.annihilation = state.fightResults?[key] }
+                else { progress.regular = state.fightResults?[key] }
+                state.fightProgress?[key] = progress
+            }
+            try persistFightState(state)
+            if twoPhases {
+                emit(.runningTask, "\(accountText(account))：\(isAnnihilation ? "优先剿灭" : "常规作战")",
+                     0, .info, client: client, account: account, task: .fight)
+            }
+            let outcome = try await runTask(.fight, plan: phasePlan, account: account,
+                                            client: client, configuration: configuration)
+            guard let result = outcome.fightResult else { return outcome }
+            lastOutcome = outcome
+            if isAnnihilation { progress.annihilation = result }
+            else { progress.regular = result }
+            if twoPhases { state.fightProgress?[key] = progress }
+            state.record(result, for: key)
+            if twoPhases, isAnnihilation, result.isResolved {
+                state.record(FightResult(status: .unconfirmed, stage: progress.regularStage, reason: .missingEvidence), for: key)
+            }
+            try persistFightState(state)
+            if twoPhases {
+                emit(.runningTask, "\(accountText(account))：\(isAnnihilation ? "剿灭" : "常规作战")\(result.description)",
+                     0, .info, client: client, account: account,
+                     task: .fight, details: result.totalDrops.map { "总掉落：" + $0 })
+            }
+            if result.isResolved, result.times > 0,
+               memory.recordSuccessfulFight(configuration: phasePlan.fight, reportedStage: result.stage,
+                                            completedTimes: result.times, clientID: client.id, accountID: account.id) {
+                do { try fightStageMemoryStore.save(memory) }
+                catch { throw FightPersistenceError(details: error.localizedDescription) }
+            }
+            guard result.isResolved else { return outcome }
+        }
+        if var lastOutcome {
+            if twoPhases, let annihilation = progress.annihilation, annihilation.times > 0,
+               var result = lastOutcome.fightResult, result.isResolved {
+                result.status = .completed
+                result.stage = result.times > 0 ? "剿灭 + \(result.stage ?? progress.regularStage)" : "Annihilation"
+                result.times += annihilation.times
+                lastOutcome.fightResult = result
+            }
+            return lastOutcome
+        }
+        let result = progress.regular ?? FightResult(status: .unconfirmed, reason: .missingEvidence)
+        return TaskRunOutcome(succeeded: result.isResolved, recoveredAfterRetry: false, notices: [],
+                              failureDetails: nil, fightResult: result)
+    }
+
+    private func persistFightState(_ state: ExecutionState) throws {
+        do { try stateStore.save(state) }
+        catch { throw FightPersistenceError(details: error.localizedDescription) }
+    }
+
     private func runTask(
         _ task: TaskKind,
         plan: AutomationPlan,
@@ -1591,12 +1765,34 @@ public final class WorkflowRunner {
                 account: account,
                 task: task
             )
+            let observationRoot = task == .fight
+                ? FileManager.default.temporaryDirectory.appending(path: "automaa-fight-\(UUID())", directoryHint: .isDirectory)
+                : nil
+            if let observationRoot { try FileManager.default.createDirectory(at: observationRoot, withIntermediateDirectories: true) }
+            defer { if let observationRoot { try? FileManager.default.removeItem(at: observationRoot) } }
             let result = await runCommand(
                 executable: configuration.cliPath,
                 arguments: ["run", taskName] + commonArguments(client),
-                timeout: timeout
+                timeout: timeout,
+                environment: observationRoot.map { ["MAA_STATE_DIR": $0.path] } ?? [:]
             )
+            let evidence = if let observationRoot {
+                await Task.detached(priority: .utility) { FightCommandEvidence.read(from: observationRoot) }.value
+            } else { FightCommandEvidence() }
+            let fightResult = task == .fight
+                ? evidence.observation.result(for: result, configuredStage: plan.fight.stageStrategy == .fixed ? plan.fight.stage : nil)
+                : nil
+            if let currentRunID, !evidence.callbacks.isEmpty {
+                diagnosticLogStore.append(
+                    CommandResult(exitCode: result.exitCode, standardOutput: evidence.callbacks, standardError: "", timedOut: result.timedOut),
+                    command: "Fight callbacks", runID: currentRunID, sensitiveValues: currentSensitiveValues
+                )
+            }
             guard !result.cancelled, !Task.isCancelled else { throw RuntimeError.cancelled }
+            if let fightResult {
+                return TaskRunOutcome(succeeded: fightResult.isResolved, recoveredAfterRetry: false, notices: [],
+                                      failureDetails: shortOutput(result), fightResult: fightResult)
+            }
             let outputNotices = workflowNotices(
                 for: task,
                 output: result.combinedOutput,
@@ -1617,15 +1813,10 @@ public final class WorkflowRunner {
                 )
             }
             if result.exitCode == 0, !result.timedOut {
-                let fightSummary = task == .fight
-                    ? MAAOutputSummaryParser.fightSummary(in: result.combinedOutput)
-                    : nil
                 return TaskRunOutcome(
                     succeeded: true,
                     recoveredAfterRetry: attempt > 1,
                     notices: notices,
-                    fightSummary: fightSummary,
-                    completionSummary: completionSummary(for: fightSummary),
                     failureDetails: nil
                 )
             }
@@ -1683,8 +1874,6 @@ public final class WorkflowRunner {
             succeeded: false,
             recoveredAfterRetry: false,
             notices: notices,
-            fightSummary: nil,
-            completionSummary: nil,
             failureDetails: failureDetails
         )
     }
@@ -1714,14 +1903,6 @@ public final class WorkflowRunner {
         }
         guard let output, !output.isEmpty else { return "超时上限：\(limit)" }
         return "超时上限：\(limit)\n\(output)"
-    }
-
-    private func completionSummary(for summary: MAAFightSummary?) -> TaskCompletionSummary? {
-        guard let summary else { return nil }
-        return TaskCompletionSummary(
-            messageSuffix: "（\(summary.stage) × \(summary.times)）",
-            details: summary.totalDrops.map { "总掉落：\($0)" }
-        )
     }
 
     private func workflowNotices(
@@ -1922,7 +2103,7 @@ public final class WorkflowRunner {
     ) -> InterventionImpact {
         let unfinishedSteps = accounts.map { account in
             plan.enabledTasks.count { task in
-                !state.completedSteps.contains(
+                !state.isResolved(
                     checkpointKey(plan: plan, client: client, account: account, task: task)
                 )
             }
@@ -2037,7 +2218,7 @@ public final class WorkflowRunner {
     private func shortOutput(_ result: CommandResult, sensitiveValues: [String] = []) -> String {
         let output = SensitiveDataRedactor.redact(
             result.combinedOutput.trimmingCharacters(in: .whitespacesAndNewlines),
-            sensitiveValues: sensitiveValues
+            sensitiveValues: currentSensitiveValues + sensitiveValues
         )
         if result.timedOut {
             guard !output.isEmpty else { return "执行超时" }
@@ -2059,7 +2240,7 @@ public final class WorkflowRunner {
     private func completedStepCount(plan: AutomationPlan, client: ClientConfiguration, state: ExecutionState) -> Int {
         client.accounts.filter(plan.includes).reduce(0) { count, account in
             count + plan.enabledTasks.filter { task in
-                state.completedSteps.contains(checkpointKey(plan: plan, client: client, account: account, task: task))
+                state.isResolved(checkpointKey(plan: plan, client: client, account: account, task: task))
             }.count
         }
     }
@@ -2074,9 +2255,18 @@ public final class WorkflowRunner {
         task: TaskKind? = nil,
         details: String? = nil,
         runSummary: WorkflowRunSummary? = nil,
-        updateInformation: MAAUpdateInformation? = nil
+        updateInformation: MAAUpdateInformation? = nil,
+        fightResult: FightResult? = nil
     ) {
         let normalizedProgress = runProgress.advance(to: proposedProgress)
+        let message = SensitiveDataRedactor.redact(message, sensitiveValues: currentSensitiveValues)
+        let details = details.map { SensitiveDataRedactor.redact($0, sensitiveValues: currentSensitiveValues) }
+        let fightResult = fightResult.map { original in
+            var result = original
+            result.stage = original.stage.map { SensitiveDataRedactor.redact($0, sensitiveValues: currentSensitiveValues) }
+            result.totalDrops = original.totalDrops.map { SensitiveDataRedactor.redact($0, sensitiveValues: currentSensitiveValues) }
+            return result
+        }
         let log = LogEntry(
             level: level,
             message: message,
@@ -2089,7 +2279,8 @@ public final class WorkflowRunner {
             accountID: account?.id,
             task: task,
             runSummary: runSummary,
-            updateInformation: updateInformation
+            updateInformation: updateInformation,
+            fightResult: fightResult
         )
         historyStore.append(log)
         eventSink(RunnerEvent(phase: phase, message: message, progress: normalizedProgress, log: log))

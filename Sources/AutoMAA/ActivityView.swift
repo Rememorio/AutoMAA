@@ -354,6 +354,10 @@ struct ActivityView: View {
             }
 
             Spacer()
+            if !isCurrent, Calendar.current.isDateInToday(session.startedAt), let planID = session.planID,
+               model.continuation(for: planID).hasStarted, model.continuation(for: planID).pending > 0 {
+                PlanRunButton(planID: planID, controlSize: .small)
+            }
         }
         .padding(.trailing, 8)
     }
@@ -367,6 +371,8 @@ struct ActivityView: View {
             }
             if let summary = session.runSummary {
                 sessionBadge("\(summary.completedSteps)/\(summary.totalSteps) 完成", color: .green)
+                if summary.unnecessarySteps > 0 { sessionBadge("\(summary.unnecessarySteps) 无需执行", color: .secondary) }
+                if summary.unconfirmedSteps > 0 { sessionBadge("\(summary.unconfirmedSteps) 未确认", color: .orange) }
             } else if session.completedTaskCount > 0 {
                 sessionBadge("\(session.completedTaskCount) 完成", color: .green)
             }
@@ -454,6 +460,8 @@ struct ActivityView: View {
 }
 
 private struct ActivityEventRow: View {
+    @EnvironmentObject private var model: AppModel
+    @State private var showsRetryConfirmation = false
     let entry: LogEntry
     let context: String?
     let drawsConnector: Bool
@@ -493,6 +501,22 @@ private struct ActivityEventRow: View {
 
                 if let details = entry.details, !details.isEmpty {
                     DetailDisclosure(details: details)
+                }
+                if let step = model.retryStep(for: entry) {
+                    Button("处理作战结果…") { showsRetryConfirmation = true }
+                        .buttonStyle(.link).font(.caption)
+                        .disabled(!model.canRun(planID: step.planID))
+                        .confirmationDialog("处理这项理智作战", isPresented: $showsRetryConfirmation) {
+                            Button("重跑本项") { model.runPlan(step.planID, retryStep: step) }
+                            if model.canConfirmAnnihilation(step) {
+                                Button("已确认本周剿灭完成，继续常规") {
+                                    model.runPlan(step.planID, retryStep: step, confirmAnnihilation: true)
+                                }
+                            }
+                            Button("取消", role: .cancel) {}
+                        } message: {
+                            Text("\(context ?? "当前账号")。已确认完成的阶段会保留。未确认的阶段可能已消耗理智或道具，请先检查游戏；重跑会再次执行该阶段。")
+                        }
                 }
             }
             .padding(.bottom, drawsConnector ? 8 : 0)

@@ -100,7 +100,9 @@ private actor StubCommandRunner: CommandRunning {
         case "startup":
             return startupResults.isEmpty ? Self.success : startupResults.removeFirst()
         case "run":
-            return taskResults.isEmpty ? Self.success : taskResults.removeFirst()
+            let result = taskResults.isEmpty ? Self.success : taskResults.removeFirst()
+            try writeFightSettlementFixture(result, environment: environment)
+            return result
         default:
             return Self.success
         }
@@ -513,6 +515,7 @@ final class AutoMAAKitTests: XCTestCase {
         )
         var plan = AutomationPlan.lightRoutine
         plan.policy.hotUpdateBeforeRun = false
+        plan.fight.enabled = false
         let configuration = AppConfiguration(cliPath: "/usr/bin/true", clients: [client], plans: [plan])
         let runtime = StubClientRuntime(closesOnForce: closesOnForce)
         let runner = WorkflowRunner(
@@ -541,7 +544,7 @@ final class AutoMAAKitTests: XCTestCase {
 
         XCTAssertEqual(json["settingsMode"] as? String, "custom")
         XCTAssertEqual(json["stageStrategy"] as? String, "gameCurrentOrLast")
-        XCTAssertEqual(Set(json.keys), ["drGrandet", "enabled", "settingsMode", "stage", "stageStrategy"])
+        XCTAssertEqual(Set(json.keys), ["drGrandet", "enabled", "settingsMode", "stage", "stageStrategy", "annihilationFirst"])
 
         let incomplete = Data(#"{"enabled":true,"stage":"","drGrandet":false}"#.utf8)
         XCTAssertThrowsError(try JSONDecoder().decode(FightConfiguration.self, from: incomplete))
@@ -2773,6 +2776,8 @@ final class AutoMAAKitTests: XCTestCase {
         let script = """
         #!/bin/sh
         if [ "$1" = "run" ]; then
+          mkdir -p "$MAA_STATE_DIR/debug"
+          printf '%s\\n' 'Assistant::append_callback | SubTaskExtraInfo {"taskchain":"Fight","what":"StageDrops","details":{"stage":{"stageCode":"TO-5"},"cur_times":2,"drops":[]}}' > "$MAA_STATE_DIR/debug/asst.log"
           printf '%s\\n' \
             'Fight TO-5 2 times, drops:' \
             'total drops: 沿途的点滴 × 156, 装置 × 10, 酮凝集 × 4, 龙门币 × 1872'
@@ -2863,7 +2868,7 @@ final class AutoMAAKitTests: XCTestCase {
             gameController: runtime,
             shutdownPolicy: .immediate,
             commandRunner: StubCommandRunner(taskResults: [
-                CommandResult(exitCode: 0, standardOutput: "", standardError: "", timedOut: false),
+                CommandResult(exitCode: 0, standardOutput: "Fight Annihilation 1 times", standardError: "", timedOut: false),
             ]),
             eventSink: runtime.record
         )
@@ -3069,10 +3074,10 @@ final class AutoMAAKitTests: XCTestCase {
             $0.level == .success && $0.message == "账号「测试账号」重试后已就绪"
         })
         XCTAssertTrue(entries.contains {
-            $0.level == .info && $0.message == "账号「测试账号」：理智作战未完成，正在自动重试（1/1）"
+            $0.level == .info && $0.message == "账号「测试账号」：领取奖励未完成，正在自动重试（1/1）"
         })
         XCTAssertTrue(entries.contains {
-            $0.level == .success && $0.message == "账号「测试账号」：理智作战重试后已完成"
+            $0.level == .success && $0.message == "账号「测试账号」：领取奖励重试后已完成"
         })
     }
 
@@ -3254,7 +3259,8 @@ final class AutoMAAKitTests: XCTestCase {
         plan.recruit.enabled = false
         plan.infrast.enabled = false
         plan.mall.enabled = false
-        plan.award.enabled = false
+        plan.award.enabled = true
+        plan.fight.enabled = false
         plan.policy.hotUpdateBeforeRun = false
         plan.policy.maxRetries = maxRetries
         let configuration = AppConfiguration(cliPath: cli.path, clients: [client], plans: [plan])

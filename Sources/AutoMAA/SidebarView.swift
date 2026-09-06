@@ -182,7 +182,7 @@ struct SidebarView: View {
                     Button {
                         model.runSelectedPlan()
                     } label: {
-                        Label("运行这个方案", systemImage: "play.fill")
+                        Label(model.currentPlanID.map { model.runTitle(for: $0, readyTitle: "运行这个方案") } ?? "运行这个方案", systemImage: "play.fill")
                             .fontWeight(.semibold)
                             .frame(maxWidth: .infinity)
                     }
@@ -190,6 +190,7 @@ struct SidebarView: View {
                     .tint(.maaAction)
                     .controlSize(.large)
                     .help("按当前方案依次执行客户端和账号")
+                    .disabled(model.currentPlanID.map { model.continuation(for: $0).pending == 0 } ?? true)
                 } else {
                     Button {} label: {
                         Label("配置未完成", systemImage: "exclamationmark.circle")

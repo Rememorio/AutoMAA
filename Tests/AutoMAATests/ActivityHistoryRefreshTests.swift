@@ -121,4 +121,47 @@ struct ActivityHistoryRefreshTests {
         #expect(model.activeProgress == 0)
         withExtendedLifetime(lock) {}
     }
+    @Test("continuation and recovery survive a crash without a final result log")
+    @MainActor
+    func recoveryUsesPersistedStateAndOnlyTheLatestTaskEntry() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "automaa-recovery-ui-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        let model = AppModel(directories: directories, launchAgentsDirectory: root.appending(path: "LaunchAgents"),
+                             managesSystemLaunchAgents: false, checksForUpdatesAutomatically: false)
+        let account = AccountConfiguration(name: "测试账号")
+        let client = ClientConfiguration(name: "测试客户端", kind: .yoStarJP, appPath: root.appending(path: "Fake.app").path,
+                                         address: "127.0.0.1:65491", profileName: "recovery-test",
+                                         bundleIdentifier: "dev.automaa.tests.recovery-ui", accounts: [account])
+        var plan = AutomationPlan.lightRoutine
+        plan.stepOrder = [.fight]
+        model.configuration = AppConfiguration(cliPath: "/usr/bin/true", clients: [client], plans: [plan])
+        let step = WorkflowStep(planID: plan.id, clientID: client.id, accountID: account.id, task: .fight)
+        #expect(model.runTitle(for: plan.id) == "运行")
+        let first = LogEntry(level: .info, message: "正在执行理智作战", phase: .runningTask,
+                             planID: plan.id, clientID: client.id, accountID: account.id, task: .fight)
+        HistoryStore(directories: directories).append(first)
+        var state = ExecutionState(dateKey: ExecutionStateStore.todayKey)
+        state.record(FightResult(status: .unconfirmed), for: step.key)
+        try ExecutionStateStore(directories: directories).save(state)
+        model.reloadActivityHistory()
+        #expect(model.runTitle(for: plan.id) == "结果待确认")
+        #expect(model.retryStep(for: first) == step)
+        let last = LogEntry(level: .warning, message: "结果待确认", phase: .runningTask,
+                            planID: plan.id, clientID: client.id, accountID: account.id, task: .fight)
+        HistoryStore(directories: directories).append(last)
+        model.reloadActivityHistory()
+        #expect(model.retryStep(for: first) == nil)
+        #expect(model.retryStep(for: last) == step)
+        state.record(FightResult(status: .failed), for: step.key)
+        try ExecutionStateStore(directories: directories).save(state)
+        model.reloadActivityHistory()
+        #expect(model.runTitle(for: plan.id) == "继续未完成")
+        state.record(FightResult(status: .completed, times: 1), for: step.key)
+        try ExecutionStateStore(directories: directories).save(state)
+        model.reloadActivityHistory()
+        #expect(model.runTitle(for: plan.id) == "今日已完成")
+        #expect(model.retryStep(for: last) == nil)
+    }
+
 }

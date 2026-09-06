@@ -17,7 +17,7 @@
 
 ### 配置版本不兼容时
 
-当前使用 schema v6（自 AutoMAA v0.10.0 起）。schema v5 及更早版本、缺少必要字段或损坏的配置不自动迁移：图形界面会先创建 `config-schema-v*.backup.json`，再恢复空配置；后台 Runner 只报告错误并退出。
+当前使用 schema v6（自 AutoMAA v0.10.0 起）。v0.11.0 新增的剿灭优先开关默认关闭，现有 schema v6 配置继续有效。schema v5 及更早版本、缺少必要字段或损坏的配置不自动迁移：图形界面会先创建 `config-schema-v*.backup.json`，再恢复空配置；后台 Runner 只报告错误并退出。
 
 遇到恢复提示时先保留备份，根据提示重新配置，不要删除唯一副本。备份仍包含账号片段和本机路径，分享前需要脱敏。
 
@@ -26,7 +26,7 @@
 | 文件或目录 | 内容 |
 | --- | --- |
 | `config.json` | 客户端、账号、方案和全局设置 |
-| `execution-state.json` | 各方案当天已成功的任务 |
+| `execution-state.json` | 各方案当天的成功断点、作战结果与剿灭／常规分阶段进度 |
 | `fight-stage-memory.json` | 每个账号的备用常规关卡与剿灭恢复状态 |
 | `history.json` | 活动记录，包括运行结果与 MAA 更新详情 |
 | `release-notes.json` | 更新说明缓存和阅读状态 |
@@ -49,6 +49,7 @@
 | `maaUpdates.automaticallyUpdatesCoreAndResources` | 空闲时自动维护 MAA；具体时机见[更新指南](../guide/updates#自动更新-maa) |
 | `schedule.rules` | 方案的星期集合、小时和分钟；同一个星期不能出现在多条规则中 |
 | `stageStrategy` | `gameCurrentOrLast` 跟随游戏、`rememberedRegular` 剿灭后恢复、`fixed` 固定关卡 |
+| `annihilationFirst` | 自定义作战参数中优先执行当期剿灭；默认关闭，后续关卡与消耗见[理智作战](../tasks/fight#优先完成本周剿灭) |
 
 关卡恢复状态独立于方案保存，行为见[理智作战](../tasks/fight)。方案使用自己的任务参数，账号不保存另一份任务配置。
 

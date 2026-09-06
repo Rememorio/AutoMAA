@@ -244,12 +244,20 @@ struct PlanEditorView: View {
 
     private var fightCard: some View {
         PlanTaskCard(task: .fight, enabled: $plan.fight.enabled, usesCustomSettings: $plan.fight.usesCustomSettings) {
+            Toggle("优先完成本周剿灭", isOn: $plan.fight.annihilationFirst)
+            if plan.fight.annihilationFirst {
+                Text("先使用现有理智执行当期剿灭，再刷下方常规关卡。药品、源石和指定次数仅用于常规作战。无法确认剿灭结果时暂停，可在活动记录中处理。")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Picker("关卡策略", selection: fightStageStrategy) {
                 ForEach(FightStageStrategy.allCases) { strategy in
                     Text(strategy.title).tag(strategy)
                 }
             }
-            Text(plan.fight.stageStrategy.detail)
+            Text(plan.fight.annihilationFirst && plan.fight.stageStrategy != .fixed
+                 ? "剿灭前使用账号最近成功的常规关卡，或手动设置的备用关卡；不会读取剿灭后的上次关卡。"
+                 : plan.fight.stageStrategy.detail)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -270,9 +278,9 @@ struct PlanEditorView: View {
                     }
                 }
                 Toggle("手动输入关卡名", isOn: customFightStage)
-            } else if plan.fight.stageStrategy == .rememberedRegular {
+            } else if plan.fight.stageStrategy == .rememberedRegular || plan.fight.annihilationFirst {
                 VStack(alignment: .leading, spacing: 7) {
-                    Text("账号恢复状态")
+                    Text(plan.fight.annihilationFirst ? "后续常规关卡（运行前确定）" : "账号恢复状态")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                     ForEach(fightStageMemoryRows) { row in

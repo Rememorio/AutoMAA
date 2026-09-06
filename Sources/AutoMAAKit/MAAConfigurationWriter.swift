@@ -82,7 +82,7 @@ public struct MAAConfigurationWriter: Sendable {
         try lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
     }
 
-    private func writeTask(
+    func writeTask(
         _ task: TaskKind,
         plan: AutomationPlan,
         account: AccountConfiguration,

@@ -284,13 +284,16 @@ public struct ExecutionStateStore: Sendable {
     }
 
     public func loadForToday() -> ExecutionState {
-        let today = Self.todayKey
-        guard let data = try? Data(contentsOf: directories.executionState),
-              var state = try? Self.decoder.decode(ExecutionState.self, from: data),
-              state.dateKey == today
-        else { return ExecutionState(dateKey: today) }
-        state.updatedAt = Date()
-        return state
+        (try? loadForExecution()) ?? ExecutionState(dateKey: Self.todayKey)
+    }
+
+    public func loadForExecution() throws -> ExecutionState {
+        guard FileManager.default.fileExists(atPath: directories.executionState.path) else {
+            return ExecutionState(dateKey: Self.todayKey)
+        }
+        let data = try Data(contentsOf: directories.executionState)
+        let state = try Self.decoder.decode(ExecutionState.self, from: data)
+        return state.dateKey == Self.todayKey ? state : ExecutionState(dateKey: Self.todayKey)
     }
 
     public func save(_ state: ExecutionState) throws {
@@ -303,13 +306,15 @@ public struct ExecutionStateStore: Sendable {
         try save(ExecutionState(dateKey: Self.todayKey))
     }
 
-    public static var todayKey: String {
+    public static var todayKey: String { dateKey(for: Date()) }
+
+    public static func dateKey(for date: Date, calendar: Calendar = .current) -> String {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
+        formatter.timeZone = calendar.timeZone
         formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: Date())
+        return formatter.string(from: date)
     }
 
     private static let encoder: JSONEncoder = {

@@ -206,6 +206,9 @@ public enum FightStagePolicy {
         accountID: UUID
     ) -> FightStageResolution {
         guard configuration.usesCustomSettings else { return .omitted }
+        if configuration.annihilationFirst, configuration.stageStrategy != .fixed {
+            return memory.stage(clientID: clientID, accountID: accountID).map(FightStageResolution.value) ?? .unavailable
+        }
         switch configuration.stageStrategy {
         case .gameCurrentOrLast:
             return .value("")
