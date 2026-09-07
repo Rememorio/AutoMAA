@@ -763,10 +763,14 @@ private struct FightStageEditorSheet: View {
                     .frame(minWidth: 220)
             }
             if !stage.isEmpty, normalizedStage == nil {
-                Label(FightStagePolicy.regularStageHint, systemImage: "exclamationmark.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(Color.orange)
-                    .fixedSize(horizontal: false, vertical: true)
+                Label {
+                    Text(FightStagePolicy.regularStageHint)
+                } icon: {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .foregroundStyle(Color.orange)
+                }
+                .font(.caption)
+                .fixedSize(horizontal: false, vertical: true)
             }
             HStack {
                 Spacer()
