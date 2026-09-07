@@ -706,15 +706,9 @@ final class AutoMAAKitTests: XCTestCase {
         let clientID = UUID()
         let accountID = UUID()
         var memory = FightStageMemory()
-        var fixedAnnihilation = FightConfiguration()
-        fixedAnnihilation.stageStrategy = .fixed
-        fixedAnnihilation.stage = FightStagePreset.annihilation.rawValue
-
         memory.remember("AT-4", clientID: clientID, accountID: accountID)
         XCTAssertTrue(memory.recordSuccessfulFight(
-            configuration: fixedAnnihilation,
-            reportedStage: nil,
-            completedTimes: nil,
+            FightResult(status: .completed, times: 1, kind: .annihilation),
             clientID: clientID,
             accountID: accountID
         ))
@@ -722,35 +716,27 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertEqual(memory.stage(clientID: clientID, accountID: accountID), "AT-4")
 
         XCTAssertTrue(memory.recordSuccessfulFight(
-            configuration: fixedAnnihilation,
-            reportedStage: "Unexpected map label",
-            completedTimes: 1,
+            FightResult(status: .completed, stage: "Unexpected map label", times: 1, kind: .annihilation),
             clientID: clientID,
             accountID: accountID
         ))
         XCTAssertTrue(memory.requiresRecovery(clientID: clientID, accountID: accountID))
         XCTAssertEqual(memory.stage(clientID: clientID, accountID: accountID), "AT-4")
 
-        var followsGame = FightConfiguration()
-        followsGame.stageStrategy = .rememberedRegular
         XCTAssertTrue(memory.recordSuccessfulFight(
-            configuration: followsGame,
-            reportedStage: "1-7",
-            completedTimes: 1,
+            FightResult(status: .completed, stage: "1-7", times: 1, kind: .regular),
             clientID: clientID,
             accountID: accountID
         ))
         XCTAssertFalse(memory.requiresRecovery(clientID: clientID, accountID: accountID))
         XCTAssertEqual(memory.stage(clientID: clientID, accountID: accountID), "1-7")
 
-        XCTAssertTrue(memory.recordSuccessfulFight(
-            configuration: followsGame,
-            reportedStage: "Annihilation",
-            completedTimes: 0,
+        XCTAssertFalse(memory.recordSuccessfulFight(
+            FightResult(status: .unnecessary, stage: "Annihilation", times: 0, kind: .annihilation),
             clientID: clientID,
             accountID: accountID
         ))
-        XCTAssertTrue(memory.requiresRecovery(clientID: clientID, accountID: accountID))
+        XCTAssertFalse(memory.requiresRecovery(clientID: clientID, accountID: accountID))
         XCTAssertEqual(memory.stage(clientID: clientID, accountID: accountID), "1-7")
     }
 
@@ -2777,7 +2763,10 @@ final class AutoMAAKitTests: XCTestCase {
         #!/bin/sh
         if [ "$1" = "run" ]; then
           mkdir -p "$MAA_STATE_DIR/debug"
-          printf '%s\\n' 'Assistant::append_callback | SubTaskExtraInfo {"taskchain":"Fight","what":"StageDrops","details":{"stage":{"stageCode":"TO-5"},"cur_times":2,"drops":[]}}' > "$MAA_STATE_DIR/debug/asst.log"
+          printf '%s\\n' \
+            'Assistant::append_callback | SubTaskStart {"taskchain":"Fight","subtask":"ProcessTask","details":{"task":"EndOfAction"}}' \
+            'Assistant::append_callback | SubTaskExtraInfo {"taskchain":"Fight","what":"StageDrops","details":{"stage":{"stageCode":"TO-5"},"cur_times":2,"drops":[]}}' \
+            'Assistant::append_callback | SubTaskCompleted {"taskchain":"Fight","subtask":"ProcessTask","details":{"task":"EndOfAction"}}' > "$MAA_STATE_DIR/debug/asst.log"
           printf '%s\\n' \
             'Fight TO-5 2 times, drops:' \
             'total drops: 沿途的点滴 × 156, 装置 × 10, 酮凝集 × 4, 龙门币 × 1872'

@@ -1273,7 +1273,7 @@ final class AppModel: ObservableObject {
     @discardableResult
     func setFightRecoveryStage(_ stage: String, clientID: UUID, accountID: UUID) -> Bool {
         guard let stage = FightStagePolicy.regularStage(from: stage, times: 1) else {
-            showBanner("恢复关卡必须是 1 到 128 个字符的非剿灭关卡名")
+            showBanner(FightStagePolicy.regularStageHint)
             return false
         }
         return updateFightStageMemory(successMessage: "备用常规关卡已更新为 \(stage)") { memory in

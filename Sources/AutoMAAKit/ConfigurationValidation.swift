@@ -298,7 +298,7 @@ public enum ConfigurationValidator {
         into result: inout [ConfigurationProblem]
     ) {
         let name = plan.displayName
-        if value.annihilationFirst, value.stageStrategy == .fixed, FightStagePolicy.isAnnihilation(value.stage) {
+        if value.annihilationFirst, value.stageStrategy == .fixed, FightStagePolicy.regularStage(from: value.stage, times: 1) == nil {
             result.append(.init(id: "\(prefix)-regular-stage", severity: .error,
                                 message: "「\(name)」启用优先剿灭后，请指定后续常规关卡", scope: .plan(plan.id)))
         }

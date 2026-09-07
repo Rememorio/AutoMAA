@@ -756,16 +756,17 @@ private struct FightStageEditorSheet: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             LabeledContent("关卡") {
-                TextField("关卡", text: $stage, prompt: Text("如 1-7 或活动关卡"))
+                TextField("关卡", text: $stage, prompt: Text("如 1-7、CE-6 或 PR-A-1"))
                     .labelsHidden()
                     .textFieldStyle(.roundedBorder)
                     .focused($fieldFocused)
                     .frame(minWidth: 220)
             }
             if !stage.isEmpty, normalizedStage == nil {
-                Label("请输入 1 到 128 个字符的非剿灭关卡名", systemImage: "exclamationmark.circle.fill")
+                Label(FightStagePolicy.regularStageHint, systemImage: "exclamationmark.circle.fill")
                     .font(.caption)
                     .foregroundStyle(Color.orange)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             HStack {
                 Spacer()

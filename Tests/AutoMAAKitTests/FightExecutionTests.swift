@@ -15,7 +15,85 @@ private let stageDrops = callback("SubTaskExtraInfo", #"{"taskchain":"Fight","wh
 private let noSanity = callback("SubTaskStart", #"{"taskchain":"Fight","first":["FightBegin"],"details":{"task":"NoStone"}}"#)
 private let noAnnihilation = callback("SubTaskError", #"{"taskchain":"Fight","first":["Annihilation"],"pre_task":""}"#)
 
+private func settlementCallbacks(stage: String?, kind: FightKind?, times: Int = 1, weeklyProgress: [Int]? = nil) throws -> String {
+    var lines: [String] = []
+    var completion: String?
+    if let kind {
+        let task = kind == .annihilation ? "EndOfActionAnnihilation" : "EndOfAction"
+        let event: [String: Any] = ["taskchain": "Fight", "subtask": "ProcessTask", "details": ["task": task]]
+        let payload = String(decoding: try JSONSerialization.data(withJSONObject: event), as: UTF8.self)
+        lines.append(callback("SubTaskStart", payload))
+        completion = callback("SubTaskCompleted", payload)
+    }
+    var details: [String: Any] = ["stage": stage.map { ["stageCode": $0] } ?? [:], "cur_times": times, "drops": []]
+    if let weeklyProgress { details["annihilation_weekly_process"] = weeklyProgress }
+    let event: [String: Any] = ["taskchain": "Fight", "what": "StageDrops", "details": details]
+    lines.append(callback("SubTaskExtraInfo", String(decoding: try JSONSerialization.data(withJSONObject: event), as: UTF8.self)))
+    if let completion { lines.append(completion) }
+    return lines.joined(separator: "\n")
+}
+
 final class FightExecutionTests: XCTestCase {
+    func testAnnihilationClassificationDoesNotDependOnServerLanguageOrWeeklyOCR() throws {
+        for name in FightStageMemoryTests.mapNames {
+            for progress: [Int]? in [nil, [320, 1800], [1800, 1800]] {
+                var observation = FightObservation()
+                let callbacks = try settlementCallbacks(stage: name, kind: .annihilation, weeklyProgress: progress)
+                callbacks.components(separatedBy: "\n").forEach { observation.consume($0) }
+                let result = observation.result(for: command(), configuredStage: "")
+                XCTAssertEqual(result.kind, .annihilation, name)
+                XCTAssertEqual(result.status, .completed)
+                XCTAssertEqual(result.reason, progress == [1800, 1800] ? .weeklyLimit : nil)
+                let clientID = UUID(), accountID = UUID()
+                var memory = FightStageMemory(entries: [.init(clientID: clientID, accountID: accountID, stage: "1-7")])
+                XCTAssertTrue(memory.recordSuccessfulFight(result, clientID: clientID, accountID: accountID))
+                XCTAssertEqual(memory.stage(clientID: clientID, accountID: accountID), "1-7")
+                XCTAssertTrue(memory.requiresRecovery(clientID: clientID, accountID: accountID))
+            }
+        }
+    }
+
+    func testWeeklyProgressIdentifiesAnnihilationBeforeTheCapWithoutSettlementTask() throws {
+        var observation = FightObservation()
+        let lines = try settlementCallbacks(stage: "Unknown map", kind: nil, weeklyProgress: [320, 1800])
+        lines.components(separatedBy: "\n").forEach { observation.consume($0) }
+        let result = observation.result(for: command(), configuredStage: nil)
+        XCTAssertEqual(result.kind, .annihilation)
+        XCTAssertNil(result.reason)
+    }
+
+    func testRegularClassificationRequiresItsOwnSettlementAndNeverUsesSummaryStage() throws {
+        var observation = FightObservation()
+        for (stage, kind): (String?, FightKind?) in [("1-7", .regular), ("CE-6", nil), (nil, .regular)] {
+            let lines = try settlementCallbacks(stage: stage, kind: kind)
+            lines.components(separatedBy: "\n").forEach { observation.consume($0) }
+            let result = observation.result(for: command("Fight SR-6 3 times"), configuredStage: "SR-6")
+            XCTAssertEqual(result.kind, kind)
+            XCTAssertEqual(result.stage, stage)
+        }
+    }
+
+    func testUnrelatedAndIncompleteSettlementEventsCannotClassifyRegularFight() throws {
+        let completed = callback("SubTaskStart", #"{"taskchain":"Fight","subtask":"ProcessTask","details":{"task":"Fight@EndOfAction"}}"#)
+        for line in [completed.replacingOccurrences(of: "SubTaskStart", with: "SubTaskCompleted"),
+                     completed.replacingOccurrences(of: "\"Fight\"", with: "\"Mall\""),
+                     completed.replacingOccurrences(of: "ProcessTask", with: "OtherPlugin")] {
+            var observation = FightObservation()
+            observation.consume(line)
+            observation.consume(stageDrops)
+            XCTAssertNil(observation.result(for: command(), configuredStage: "1-7").kind)
+        }
+    }
+
+    func testOldResultsRemainUnknownAndNewKindsRoundTrip() throws {
+        let old = try JSONDecoder().decode(FightResult.self, from: Data(#"{"status":"completed","stage":"1-7","times":2}"#.utf8))
+        XCTAssertNil(old.kind)
+        for kind in [FightKind.regular, .annihilation] {
+            let result = FightResult(status: .completed, stage: "1-7", times: 2, kind: kind)
+            XCTAssertEqual(try JSONDecoder().decode(FightResult.self, from: JSONEncoder().encode(result)), result)
+        }
+    }
+
     func testExitZeroWithoutEvidenceIsUnconfirmed() {
         let result = FightObservation().result(for: command("Fight Completed"), configuredStage: "Annihilation")
         XCTAssertEqual(result.status, .unconfirmed)
@@ -237,6 +315,69 @@ private final class FightFixture {
 
 @MainActor
 final class FightWorkflowTests: XCTestCase {
+    func testFollowingGameRecognizesAnnihilationAndRestoresRegularStageAcrossAllClients() async throws {
+        let names: [ClientKind: String] = [.official: "切尔诺伯格", .bilibili: "切尔诺伯格", .txwy: "切爾諾伯格",
+                                          .yoStarEN: "Chernobog", .yoStarJP: "カズデル", .yoStarKR: "체르노보그"]
+        for kind in ClientKind.allCases {
+            for strategy in [FightStageStrategy.gameCurrentOrLast, .rememberedRegular] {
+                let fixture = try FightFixture()
+                defer { fixture.cleanup() }
+                fixture.client.kind = kind
+                fixture.client.accounts[0].accountSelector = kind.supportsAccountSwitching ? "fixture-selector" : ""
+                fixture.plan.fight.stageStrategy = strategy
+                fixture.plan.fight.stage = ""
+                let store = FightStageMemoryStore(directories: fixture.directories)
+                var memory = FightStageMemory()
+                memory.remember("1-7", clientID: fixture.client.id, accountID: fixture.account.id)
+                try store.save(memory)
+                let callbacks = try settlementCallbacks(stage: names[kind], kind: .annihilation)
+                let (report, calls) = await fixture.run([.init(result: command(), callbacks: callbacks)])
+                XCTAssertTrue(report.isSuccess, kind.rawValue)
+                XCTAssertEqual(calls.count, 1)
+                XCTAssertEqual(fixture.state.fightResults?[fixture.step.key]?.kind, .annihilation)
+                memory = try store.load()
+                XCTAssertEqual(memory.stage(clientID: fixture.client.id, accountID: fixture.account.id), "1-7")
+                XCTAssertTrue(memory.requiresRecovery(clientID: fixture.client.id, accountID: fixture.account.id))
+                if strategy == .rememberedRegular {
+                    try ExecutionStateStore(directories: fixture.directories).save(.init(dateKey: ExecutionStateStore.todayKey))
+                    let (restored, next) = await fixture.run([.init(result: command("Fight 1-7 1 times"))])
+                    XCTAssertTrue(restored.isSuccess)
+                    XCTAssertEqual(try parameters(XCTUnwrap(next.first))["stage"] as? String, "1-7")
+                    XCTAssertFalse(try store.load().requiresRecovery(clientID: fixture.client.id, accountID: fixture.account.id))
+                }
+            }
+        }
+    }
+
+    func testInvalidFrozenStageUsesCorrectedTargetWithoutRepeatingAnnihilation() async throws {
+        let fixture = try FightFixture(priority: true)
+        defer { fixture.cleanup() }
+        var state = ExecutionState(dateKey: ExecutionStateStore.todayKey)
+        var progress = FightProgress(regularStage: "カズデル")
+        progress.annihilation = FightResult(status: .completed, times: 1, kind: .annihilation)
+        progress.regular = FightResult(status: .failed)
+        state.fightProgress = [fixture.step.key: progress]
+        state.record(.init(status: .failed), for: fixture.step.key)
+        try ExecutionStateStore(directories: fixture.directories).save(state)
+        let (report, calls) = await fixture.run([.init(result: command("Fight 1-7 1 times"))])
+        XCTAssertTrue(report.isSuccess)
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(try parameters(XCTUnwrap(calls.first))["stage"] as? String, "1-7")
+        XCTAssertEqual(fixture.state.fightProgress?[fixture.step.key]?.regularStage, "1-7")
+    }
+
+    func testPriorityRejectsMapNamesAsFixedRegularTargetsBeforeLaunching() async throws {
+        let fixture = try FightFixture(priority: true)
+        defer { fixture.cleanup() }
+        for stage in FightStageMemoryTests.mapNames + ["_INVALID_"] {
+            fixture.plan.fight.stage = stage
+            let (report, calls) = await fixture.run([])
+            XCTAssertNotNil(report.fatalError)
+            XCTAssertTrue(calls.isEmpty)
+            XCTAssertEqual(fixture.runtime.launches, 0)
+        }
+    }
+
     func testUnconfirmedFightStopsClientAndExplicitRetryOnlyRunsSelectedTask() async throws {
         let fixture = try FightFixture(award: true)
         defer { fixture.cleanup() }
@@ -480,9 +621,7 @@ func writeFightSettlementFixture(_ result: CommandResult, environment: [String: 
           let summary = MAAOutputSummaryParser.fightSummary(in: result.combinedOutput), summary.times > 0 else { return }
     let root = URL(filePath: path).appending(path: "debug")
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    let event: [String: Any] = ["taskchain": "Fight", "what": "StageDrops", "details": [
-        "stage": ["stageCode": summary.stage], "cur_times": summary.times, "drops": [],
-    ]]
-    let json = String(decoding: try JSONSerialization.data(withJSONObject: event), as: UTF8.self)
-    try (callback("SubTaskExtraInfo", json) + "\n").write(to: root.appending(path: "asst.log"), atomically: true, encoding: .utf8)
+    let lines = try settlementCallbacks(stage: summary.stage,
+        kind: FightStagePolicy.isAnnihilation(summary.stage) ? .annihilation : .regular, times: summary.times)
+    try (lines + "\n").write(to: root.appending(path: "asst.log"), atomically: true, encoding: .utf8)
 }

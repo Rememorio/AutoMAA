@@ -4,6 +4,10 @@ public enum FightResultStatus: String, Codable, Sendable {
     case completed, unnecessary, unconfirmed, failed
 }
 
+public enum FightKind: String, Codable, Sendable {
+    case regular, annihilation
+}
+
 public enum FightStopReason: String, Codable, Sendable {
     case insufficientSanity, weeklyLimit, confirmedWeeklyLimit, navigationUnavailable, interruptedBattle, missingEvidence, commandFailed
 
@@ -26,14 +30,16 @@ public struct FightResult: Codable, Equatable, Sendable {
     public var times: Int
     public var reason: FightStopReason?
     public var totalDrops: String?
+    public var kind: FightKind?
 
     public init(status: FightResultStatus, stage: String? = nil, times: Int = 0,
-                reason: FightStopReason? = nil, totalDrops: String? = nil) {
+                reason: FightStopReason? = nil, totalDrops: String? = nil, kind: FightKind? = nil) {
         self.status = status
         self.stage = stage
         self.times = times
         self.reason = reason
         self.totalDrops = totalDrops
+        self.kind = kind
     }
 
     public var isResolved: Bool { status == .completed || status == .unnecessary }
@@ -84,6 +90,8 @@ struct FightObservation: Sendable {
     private var navigationUnavailable = false
     private var offline = false
     private var chainFailed = false
+    private var settlementKind: FightKind?
+    private var kind: FightKind?
 
     mutating func consume(_ line: String) {
         guard let marker = line.range(of: "Assistant::append_callback | "),
@@ -99,35 +107,47 @@ struct FightObservation: Sendable {
         if kind == "TaskChainError" || kind == "TaskChainStopped" { chainFailed = true }
         if kind == "SubTaskStart" {
             if task == "OfflineConfirm" { offline = true }
-            if task == "StartButton2" || task == "AnnihilationConfirm" { awaitingSettlement = true }
+            if task == "StartButton2" || task == "AnnihilationConfirm" {
+                awaitingSettlement = true
+                settlementKind = nil
+            }
             if inFightLoop, task == "NoStone" || task == "CloseStonePageExceeded" { insufficientSanity = true }
         }
         if kind == "SubTaskError", let first = event["first"] as? [String],
            first == ["Annihilation"], (event["pre_task"] as? String ?? "").isEmpty {
             navigationUnavailable = true
         }
+        // Core's drop plugin runs before SubTaskCompleted is forwarded; capture the recognized settlement at start.
+        if kind == "SubTaskStart", event["subtask"] as? String == "ProcessTask" {
+            if task == "EndOfActionAnnihilation" { settlementKind = .annihilation }
+            if task == "EndOfAction" { settlementKind = .regular }
+        }
         guard kind == "SubTaskExtraInfo" else { return }
         if inFightLoop, event["what"] as? String == "ExceededLimit",
            ["MedicineConfirm", "StoneConfirm"].contains(task) { insufficientSanity = true }
         guard event["what"] as? String == "StageDrops" else { return }
-        if let value = (details["stage"] as? [String: Any])?["stageCode"] as? String, !value.isEmpty {
-            stage = value
-        }
+        let limit = details["annihilation_weekly_process"] as? [Int]
+        let hasWeeklyProgress = limit.map { $0.count == 2 && $0[0] >= 0 && $0[1] > 0 } == true
         if details["stage"] is [String: Any], details["drops"] is [[String: Any]] {
             // cur_times belongs to this settlement; CLI summary times count battle starts.
             times += max(1, details["cur_times"] as? Int ?? 1)
+            let value = (details["stage"] as? [String: Any])?["stageCode"] as? String
+            stage = value?.isEmpty == false ? value : nil
+            self.kind = hasWeeklyProgress ? .annihilation : settlementKind
+            settlementKind = nil
             awaitingSettlement = false
         }
-        if let limit = details["annihilation_weekly_process"] as? [Int],
-           limit.count == 2, limit[1] > 0, limit[0] >= limit[1] { weeklyLimit = true }
+        if hasWeeklyProgress, let limit, limit[0] >= limit[1] { weeklyLimit = true }
     }
 
     func result(for command: CommandResult, configuredStage: String?) -> FightResult {
         let summary = MAAOutputSummaryParser.fightSummary(in: command.combinedOutput)
         let count = times
-        let stage = stage ?? summary?.stage ?? configuredStage
+        let stage = count > 0 ? stage : summary?.stage ?? configuredStage
+        // An explicit annihilation command can conservatively require recovery even on older callbacks.
+        let kind = kind ?? (configuredStage.map(FightStagePolicy.isAnnihilation) == true ? .annihilation : nil)
         func result(_ status: FightResultStatus, _ reason: FightStopReason? = nil) -> FightResult {
-            FightResult(status: status, stage: stage, times: count, reason: reason, totalDrops: summary?.totalDrops)
+            FightResult(status: status, stage: stage, times: count, reason: reason, totalDrops: summary?.totalDrops, kind: kind)
         }
         if command.cancelled || command.timedOut || awaitingSettlement || offline
             || StartupFailureClassifier.isGameOffline(command.combinedOutput) {

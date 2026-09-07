@@ -1654,6 +1654,13 @@ public final class WorkflowRunner {
         }
         let twoPhases = plan.fight.usesCustomSettings && plan.fight.annihilationFirst
         var progress = twoPhases ? state.fightProgress?[key] ?? FightProgress(regularStage: stage) : FightProgress(regularStage: stage)
+        if twoPhases, FightStagePolicy.regularStage(from: progress.regularStage, times: 1) == nil {
+            // Replace only an invalid frozen target; completed annihilation remains checkpointed.
+            guard FightStagePolicy.regularStage(from: stage, times: 1) != nil else {
+                throw MAAConfigurationWriterError.invalidConfiguration("后续常规关卡无效，请设置备用关卡或固定常规关卡")
+            }
+            progress.regularStage = stage
+        }
         var lastOutcome: TaskRunOutcome?
         for isAnnihilation in (twoPhases ? [true, false] : [false]) {
             let previous = isAnnihilation ? progress.annihilation : progress.regular
@@ -1707,9 +1714,7 @@ public final class WorkflowRunner {
                      0, .info, client: client, account: account,
                      task: .fight, details: result.totalDrops.map { "总掉落：" + $0 })
             }
-            if result.isResolved, result.times > 0,
-               memory.recordSuccessfulFight(configuration: phasePlan.fight, reportedStage: result.stage,
-                                            completedTimes: result.times, clientID: client.id, accountID: account.id) {
+            if memory.recordSuccessfulFight(result, clientID: client.id, accountID: account.id) {
                 do { try fightStageMemoryStore.save(memory) }
                 catch { throw FightPersistenceError(details: error.localizedDescription) }
             }
@@ -1721,6 +1726,7 @@ public final class WorkflowRunner {
                 result.status = .completed
                 result.stage = result.times > 0 ? "剿灭 + \(result.stage ?? progress.regularStage)" : "Annihilation"
                 result.times += annihilation.times
+                result.kind = result.times == annihilation.times ? .annihilation : nil
                 lastOutcome.fightResult = result
             }
             return lastOutcome

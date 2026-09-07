@@ -53,6 +53,13 @@ public struct FightStageMemoryEntry: Codable, Equatable, Sendable {
         self.updatedAt = stage == nil ? nil : (updatedAt ?? Date())
         self.recoveryRequiredAt = recoveryRequiredAt
     }
+
+    fileprivate mutating func discardInvalidStage() {
+        guard let stage, FightStagePolicy.regularStage(from: stage, times: 1) != stage else { return }
+        recoveryRequiredAt = recoveryRequiredAt ?? updatedAt ?? .distantPast
+        self.stage = nil
+        updatedAt = nil
+    }
 }
 
 public struct FightStageMemory: Codable, Equatable, Sendable {
@@ -74,9 +81,11 @@ public struct FightStageMemory: Codable, Equatable, Sendable {
     }
 
     public func entry(clientID: UUID, accountID: UUID) -> FightStageMemoryEntry? {
-        entries.first {
+        var entry = entries.first {
             $0.clientID == clientID && $0.accountID == accountID
         }
+        entry?.discardInvalidStage()
+        return entry
     }
 
     public func requiresRecovery(clientID: UUID, accountID: UUID) -> Bool {
@@ -96,25 +105,6 @@ public struct FightStageMemory: Codable, Equatable, Sendable {
         updateEntry(clientID: clientID, accountID: accountID) { entry in
             entry.stage = stage
             entry.updatedAt = date
-        }
-        return true
-    }
-
-    @discardableResult
-    public mutating func rememberSuccessful(
-        stage: String,
-        times: Int,
-        clientID: UUID,
-        accountID: UUID,
-        at date: Date = Date()
-    ) -> Bool {
-        guard let stage = FightStagePolicy.regularStage(from: stage, times: times) else {
-            return false
-        }
-        updateEntry(clientID: clientID, accountID: accountID) { entry in
-            entry.stage = stage
-            entry.updatedAt = date
-            entry.recoveryRequiredAt = nil
         }
         return true
     }
@@ -147,32 +137,27 @@ public struct FightStageMemory: Codable, Equatable, Sendable {
 
     @discardableResult
     public mutating func recordSuccessfulFight(
-        configuration: FightConfiguration,
-        reportedStage: String?,
-        completedTimes: Int?,
+        _ result: FightResult,
         clientID: UUID,
         accountID: UUID,
         at date: Date = Date()
     ) -> Bool {
-        let configuredAnnihilation = configuration.usesCustomSettings
-            && configuration.stageStrategy == .fixed
-            && FightStagePolicy.isAnnihilation(configuration.stage)
-        if configuredAnnihilation
-            || reportedStage.map(FightStagePolicy.isAnnihilation) == true {
+        guard result.status == .completed, result.times > 0 else { return false }
+        switch result.kind {
+        case .annihilation:
             return markRecoveryRequired(clientID: clientID, accountID: accountID, at: date)
-        }
-        if let reportedStage,
-           let completedTimes,
-           rememberSuccessful(
-               stage: reportedStage,
-               times: completedTimes,
-               clientID: clientID,
-               accountID: accountID,
-               at: date
-           ) {
+        case .regular:
+            guard let stage = result.stage,
+                  remember(stage, clientID: clientID, accountID: accountID, at: date) else { return false }
+            clearRecovery(clientID: clientID, accountID: accountID)
             return true
+        case nil:
+            return false
         }
-        return false
+    }
+
+    fileprivate mutating func discardInvalidStages() {
+        for index in entries.indices { entries[index].discardInvalidStage() }
     }
 
     private mutating func updateEntry(
@@ -199,6 +184,8 @@ public struct FightStageMemory: Codable, Equatable, Sendable {
 }
 
 public enum FightStagePolicy {
+    public static let regularStageHint = "请输入常规关卡编号，例如 1-7、CE-6 或 PR-A-1"
+
     public static func resolve(
         _ configuration: FightConfiguration,
         memory: FightStageMemory,
@@ -228,10 +215,9 @@ public enum FightStagePolicy {
     public static func regularStage(from stage: String, times: Int) -> String? {
         let value = stage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard times > 0,
-              !value.isEmpty,
               value.count <= 128,
-              !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains),
-              !isAnnihilation(value)
+              value.range(of: #"^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+$"#, options: .regularExpression) != nil,
+              value.contains(where: { $0.isNumber })
         else { return nil }
         return value
     }
@@ -268,6 +254,12 @@ public struct FightStageMemoryStore: Sendable {
             return FightStageMemory()
         }
         let data = try Data(contentsOf: directories.fightStageMemory)
+        var memory = try decode(data)
+        memory.discardInvalidStages()
+        return memory
+    }
+
+    private func decode(_ data: Data) throws -> FightStageMemory {
         var memory = try Self.decoder.decode(FightStageMemory.self, from: data)
         switch memory.schemaVersion {
         case FightStageMemory.currentSchemaVersion:
@@ -277,7 +269,7 @@ public struct FightStageMemoryStore: Sendable {
         default:
             throw FightStageMemoryStoreError.unsupportedSchema(memory.schemaVersion)
         }
-        try validate(memory)
+        try validate(memory, checkingStages: false)
         return memory
     }
 
@@ -285,10 +277,21 @@ public struct FightStageMemoryStore: Sendable {
         try validate(memory)
         try directories.prepare()
         let data = try Self.encoder.encode(memory)
+        if FileManager.default.fileExists(atPath: directories.fightStageMemory.path) {
+            let original = try Data(contentsOf: directories.fightStageMemory)
+            let previous = try decode(original)
+            var repaired = previous
+            repaired.discardInvalidStages()
+            if repaired != previous {
+                let backup = directories.fightStageMemory.deletingLastPathComponent()
+                    .appending(path: "fight-stage-memory.backup-\(UUID().uuidString).json")
+                try original.write(to: backup, options: .atomic)
+            }
+        }
         try data.write(to: directories.fightStageMemory, options: .atomic)
     }
 
-    private func validate(_ memory: FightStageMemory) throws {
+    private func validate(_ memory: FightStageMemory, checkingStages: Bool = true) throws {
         guard memory.schemaVersion == FightStageMemory.currentSchemaVersion else {
             throw FightStageMemoryStoreError.unsupportedSchema(memory.schemaVersion)
         }
@@ -299,7 +302,7 @@ public struct FightStageMemoryStore: Sendable {
                 FightStagePolicy.regularStage(from: $0, times: 1) == $0
             } ?? true
             guard keys.insert(key).inserted,
-                  validStage,
+                  (!checkingStages || validStage),
                   (entry.stage == nil) == (entry.updatedAt == nil),
                   entry.stage != nil || entry.recoveryRequiredAt != nil else {
                 throw FightStageMemoryStoreError.invalidEntry
