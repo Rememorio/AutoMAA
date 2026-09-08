@@ -256,7 +256,7 @@ struct PlanEditorView: View {
                 }
             }
             Text(plan.fight.annihilationFirst && plan.fight.stageStrategy != .fixed
-                 ? "剿灭前使用账号最近成功的常规关卡，或手动设置的备用关卡；不会读取剿灭后的上次关卡。"
+                 ? "剿灭前使用账号记录的常规关卡，或手动设置的恢复目标；不会读取剿灭后的上次关卡。"
                  : plan.fight.stageStrategy.detail)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -290,6 +290,15 @@ struct PlanEditorView: View {
                 .padding(10)
                 .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
             }
+            LabeledContent("兜底关卡（可选）") {
+                TextField("如 1-7；留空关闭", text: $plan.fight.fallbackStage)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 190)
+                    .accessibilityLabel("兜底关卡，留空关闭")
+            }
+            Text("仅在确认尚未开战、目标无法进入时尝试一次。兜底不会覆盖记录的常规关卡，也不会替代剿灭。建议选择已解锁的常驻关卡。")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             Divider()
             optionalStepper("吃理智药", value: $plan.fight.medicine, defaultValue: 999, range: 0...999)
             optionalStepper("使用临期理智药（天数）", value: $plan.fight.medicineExpireDays, defaultValue: 2, range: 1...365)
@@ -500,7 +509,7 @@ struct PlanEditorView: View {
                     .foregroundStyle(row.recoveryRequired && row.stage == nil ? Color.orange : Color.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
-                Button(row.stage == nil ? "设置备用关卡" : "修改") {
+                Button(row.stage == nil ? "设置恢复关卡" : "修改") {
                     fightStageEditor = FightStageEditorContext(row: row)
                 }
                 .controlSize(.small)
@@ -523,8 +532,8 @@ struct PlanEditorView: View {
             return row.stage.map { "下次理智作战将先恢复到 \($0)" }
                 ?? "缺少恢复关卡，运行前检查会阻止理智作战"
         }
-        return row.stage.map { "备用常规关卡：\($0)；成功作战后自动更新" }
-            ?? "首次成功完成常规作战后会自动记住备用关卡"
+        return row.stage.map { "记录关卡：\($0)；常规作战成功后更新，临时兜底不覆盖" }
+            ?? "首次成功完成常规作战后会自动记录；也可手动设置恢复目标"
     }
 
     private var scheduleInstalled: Bool {
@@ -743,7 +752,7 @@ private struct FightStageEditorSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 5) {
-                Text(context.recoveryRequired ? "设置剿灭恢复关卡" : "设置备用常规关卡")
+                Text(context.recoveryRequired ? "设置恢复关卡" : "设置记录关卡")
                     .font(.title3.weight(.semibold))
                 Text(context.label)
                     .font(.callout)
@@ -776,7 +785,7 @@ private struct FightStageEditorSheet: View {
                 Spacer()
                 Button("取消") { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button(context.recoveryRequired ? "保存恢复关卡" : "保存备用关卡") {
+                Button(context.recoveryRequired ? "保存恢复关卡" : "保存记录关卡") {
                     guard let normalizedStage, onSave(normalizedStage) else { return }
                     dismiss()
                 }

@@ -142,7 +142,7 @@ public struct FightStageMemory: Codable, Equatable, Sendable {
         accountID: UUID,
         at date: Date = Date()
     ) -> Bool {
-        guard result.status == .completed, result.times > 0 else { return false }
+        guard result.status == .completed, result.times > 0, result.fallbackFrom == nil else { return false }
         switch result.kind {
         case .annihilation:
             return markRecoveryRequired(clientID: clientID, accountID: accountID, at: date)
@@ -185,6 +185,13 @@ public struct FightStageMemory: Codable, Equatable, Sendable {
 
 public enum FightStagePolicy {
     public static let regularStageHint = "请输入常规关卡编号，例如 1-7、CE-6 或 PR-A-1"
+
+    public static func fallback(in configuration: FightConfiguration, after result: FightResult, primaryStage: String) -> String? {
+        guard configuration.usesCustomSettings, result.status == .failed, result.reason == .stageUnavailable,
+              result.times == 0, result.fallbackFrom == nil, !isAnnihilation(primaryStage),
+              let stage = regularStage(from: configuration.fallbackStage, times: 1), stage != primaryStage else { return nil }
+        return stage
+    }
 
     public static func resolve(
         _ configuration: FightConfiguration,

@@ -9,7 +9,7 @@ public enum FightKind: String, Codable, Sendable {
 }
 
 public enum FightStopReason: String, Codable, Sendable {
-    case insufficientSanity, timesLimit, weeklyLimit, confirmedWeeklyLimit, navigationUnavailable, interruptedBattle, missingEvidence, commandFailed
+    case insufficientSanity, timesLimit, weeklyLimit, confirmedWeeklyLimit, navigationUnavailable, stageUnavailable, interruptedBattle, missingEvidence, commandFailed
 
     public var title: String {
         switch self {
@@ -18,6 +18,7 @@ public enum FightStopReason: String, Codable, Sendable {
         case .weeklyLimit: "本周剿灭奖励已满"
         case .confirmedWeeklyLimit: "已手动确认本周剿灭完成"
         case .navigationUnavailable: "未能确认剿灭入口；请检查本周奖励或关卡页面"
+        case .stageUnavailable: "无法进入目标关卡；请检查开放情况或更换关卡"
         case .interruptedBattle: "作战被中断，结果未确认；请检查游戏结果"
         case .missingEvidence: "未取得有效作战结果；请检查游戏后重跑本项"
         case .commandFailed: "MAA 执行失败"
@@ -33,10 +34,11 @@ public struct FightResult: Codable, Equatable, Sendable {
     public var totalDrops: String?
     public var kind: FightKind?
     public var unrecognizedSettlements: Int?
+    public var fallbackFrom: String?
 
     public init(status: FightResultStatus, stage: String? = nil, times: Int = 0,
                 reason: FightStopReason? = nil, totalDrops: String? = nil, kind: FightKind? = nil,
-                unrecognizedSettlements: Int? = nil) {
+                unrecognizedSettlements: Int? = nil, fallbackFrom: String? = nil) {
         self.status = status
         self.stage = stage
         self.times = times
@@ -44,6 +46,7 @@ public struct FightResult: Codable, Equatable, Sendable {
         self.totalDrops = totalDrops
         self.kind = kind
         self.unrecognizedSettlements = unrecognizedSettlements
+        self.fallbackFrom = fallbackFrom
     }
 
     public var isResolved: Bool { status == .completed || status == .unnecessary }
@@ -56,7 +59,8 @@ public struct FightResult: Codable, Equatable, Sendable {
         case .failed: "失败"
         }
         let count = times > 0 ? "（\(stage ?? "作战") × \((unrecognizedSettlements ?? 0) > 0 ? "至少 " : "")\(times)）" : ""
-        return label + count + (reason.map { " · \($0.title)" } ?? "")
+        let fallback = fallbackFrom.map { " · 兜底作战（原目标：\($0.isEmpty ? "游戏当前/上次" : $0)）" } ?? ""
+        return label + count + (reason.map { " · \($0.title)" } ?? "") + fallback
     }
 }
 
@@ -64,6 +68,7 @@ public struct FightProgress: Codable, Equatable, Sendable {
     public var regularStage: String
     public var annihilation: FightResult?
     public var regular: FightResult?
+    public var fallbackStage: String?
 
     public init(regularStage: String) { self.regularStage = regularStage }
 }
@@ -102,6 +107,11 @@ struct FightObservation: Sendable {
     private var sanityBeforeStage: Int?
     private var insufficientAtLastCheck = false
     private var timesLimit = false
+    private var enteredFightLoop = false
+    private var navigationFailed = false
+    private var combatScreenObserved = false
+    private var chainStarted = false
+    private var chainStopped = false
 
     mutating func consume(_ line: String) {
         guard let marker = line.range(of: "Assistant::append_callback | "),
@@ -114,6 +124,20 @@ struct FightObservation: Sendable {
         let details = event["details"] as? [String: Any] ?? [:]
         let task = (details["task"] as? String ?? "").split(separator: "@").last.map(String.init) ?? ""
         let inFightLoop = (event["first"] as? [String]) == ["FightBegin"]
+        if kind == "TaskChainStart" { chainStarted = true }
+        if kind == "TaskChainStopped" { chainStopped = true }
+        if inFightLoop || ["FightTimes", "StageDrops"].contains(event["what"] as? String ?? "") { enteredFightLoop = true }
+        if ["StartButton2", "AnnihilationConfirm", "PRTS1", "PRTS2", "PRTS3", "EndOfAction", "EndOfActionAnnihilation"].contains(task) {
+            combatScreenObserved = true
+        }
+        if kind == "SubTaskError" {
+            let first = event["first"] as? [String]
+            let previous = (event["pre_task"] as? String ?? "").split(separator: "@").last.map(String.init)
+            if event["subtask"] as? String == "StageNavigationTask"
+                || (event["subtask"] as? String == "ProcessTask" && first == ["LastOrCurBattleBegin"] && previous == "GoLastBattle") {
+                navigationFailed = true
+            }
+        }
         if kind == "TaskChainError" || kind == "TaskChainStopped" { chainFailed = true }
         if kind == "SubTaskStart" {
             if task == "OfflineConfirm" { offline = true }
@@ -181,9 +205,13 @@ struct FightObservation: Sendable {
             FightResult(status: status, stage: stage, times: count, reason: reason, totalDrops: summary?.totalDrops, kind: kind,
                         unrecognizedSettlements: unrecognizedSettlements > 0 ? unrecognizedSettlements : nil)
         }
-        if command.cancelled || command.timedOut || awaitingSettlement || offline
+        if command.cancelled || command.timedOut || chainStopped || awaitingSettlement || offline
             || StartupFailureClassifier.isGameOffline(command.combinedOutput) {
             return result(.unconfirmed, .interruptedBattle)
+        }
+        if chainStarted, navigationFailed, !enteredFightLoop, !combatScreenObserved, count == 0, (summary?.times ?? 0) == 0,
+           !navigationUnavailable, kind != .annihilation {
+            return result(.failed, .stageUnavailable)
         }
         if command.exitCode != 0 || chainFailed {
             return count > 0 || (summary?.times ?? 0) > 0

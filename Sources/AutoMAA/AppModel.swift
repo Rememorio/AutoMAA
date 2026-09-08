@@ -1276,7 +1276,7 @@ final class AppModel: ObservableObject {
             showBanner(FightStagePolicy.regularStageHint)
             return false
         }
-        return updateFightStageMemory(successMessage: "备用常规关卡已更新为 \(stage)") { memory in
+        return updateFightStageMemory(successMessage: "恢复关卡已更新为 \(stage)") { memory in
             memory.remember(stage, clientID: clientID, accountID: accountID)
         }
     }

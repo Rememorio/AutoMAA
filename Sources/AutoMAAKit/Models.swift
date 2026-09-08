@@ -247,6 +247,7 @@ public struct FightConfiguration: Codable, Equatable, Sendable {
     public var settingsMode = TaskSettingsMode.custom
     public var stageStrategy = FightStageStrategy.gameCurrentOrLast
     public var stage = ""
+    public var fallbackStage = ""
     public var annihilationFirst = false
     public var medicine: Int?
     public var medicineExpireDays: Int?
@@ -263,6 +264,7 @@ public struct FightConfiguration: Codable, Equatable, Sendable {
         settingsMode = try values.decode(TaskSettingsMode.self, forKey: .settingsMode)
         stageStrategy = try values.decode(FightStageStrategy.self, forKey: .stageStrategy)
         stage = try values.decode(String.self, forKey: .stage)
+        fallbackStage = try values.decodeIfPresent(String.self, forKey: .fallbackStage) ?? ""
         annihilationFirst = try values.decodeIfPresent(Bool.self, forKey: .annihilationFirst) ?? false
         medicine = try values.decodeIfPresent(Int.self, forKey: .medicine)
         medicineExpireDays = try values.decodeIfPresent(Int.self, forKey: .medicineExpireDays)

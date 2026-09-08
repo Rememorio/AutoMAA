@@ -544,7 +544,7 @@ final class AutoMAAKitTests: XCTestCase {
 
         XCTAssertEqual(json["settingsMode"] as? String, "custom")
         XCTAssertEqual(json["stageStrategy"] as? String, "gameCurrentOrLast")
-        XCTAssertEqual(Set(json.keys), ["drGrandet", "enabled", "settingsMode", "stage", "stageStrategy", "annihilationFirst"])
+        XCTAssertEqual(Set(json.keys), ["drGrandet", "enabled", "settingsMode", "stage", "stageStrategy", "annihilationFirst", "fallbackStage"])
 
         let incomplete = Data(#"{"enabled":true,"stage":"","drGrandet":false}"#.utf8)
         XCTAssertThrowsError(try JSONDecoder().decode(FightConfiguration.self, from: incomplete))

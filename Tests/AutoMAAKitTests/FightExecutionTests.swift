@@ -14,6 +14,9 @@ private let battleStart = callback("SubTaskStart", #"{"taskchain":"Fight","first
 private let stageDrops = callback("SubTaskExtraInfo", #"{"taskchain":"Fight","what":"StageDrops","details":{"stage":{"stageCode":"1-7"},"cur_times":1,"drops":[]}}"#)
 private let noSanity = callback("SubTaskStart", #"{"taskchain":"Fight","first":["FightBegin"],"details":{"task":"NoStone"}}"#)
 private let noAnnihilation = callback("SubTaskError", #"{"taskchain":"Fight","first":["Annihilation"],"pre_task":""}"#)
+private let chainStart = callback("TaskChainStart", #"{"taskchain":"Fight"}"#)
+private let navigationFailure = chainStart + "\n" + callback("SubTaskError", #"{"taskchain":"Fight","subtask":"StageNavigationTask"}"#)
+private let lastStageFailure = chainStart + "\n" + callback("SubTaskError", #"{"taskchain":"Fight","subtask":"ProcessTask","first":["LastOrCurBattleBegin"],"pre_task":"Fight@GoLastBattle"}"#)
 
 private func settlementCallbacks(stage: String?, kind: FightKind?, times: Int = 1, weeklyProgress: [Int]? = nil) throws -> String {
     var lines: [String] = []
@@ -34,6 +37,47 @@ private func settlementCallbacks(stage: String?, kind: FightKind?, times: Int = 
 }
 
 final class FightExecutionTests: XCTestCase {
+    func testUnavailableStageRequiresNavigationFailureBeforeAnyFightEvidence() {
+        for failure in [navigationFailure, lastStageFailure] {
+            var observation = FightObservation()
+            failure.components(separatedBy: .newlines).forEach { observation.consume($0) }
+            XCTAssertEqual(observation.result(for: command(exit: 1), configuredStage: "AP-5").reason, .stageUnavailable)
+            XCTAssertNotEqual(observation.result(for: command(timeout: true), configuredStage: "AP-5").reason, .stageUnavailable)
+            XCTAssertNotEqual(observation.result(for: command("GameOffline", exit: 1), configuredStage: "AP-5").reason, .stageUnavailable)
+            XCTAssertNotEqual(observation.result(for: command("Fight AP-5 1 times", exit: 1), configuredStage: "AP-5").reason, .stageUnavailable)
+            XCTAssertNotEqual(observation.result(for: command(exit: 1), configuredStage: "Annihilation").reason, .stageUnavailable)
+            for evidence in [battleStart, stageDrops, noSanity,
+                             callback("SubTaskExtraInfo", #"{"taskchain":"Fight","what":"FightTimes","details":{}}"#),
+                             callback("SubTaskExtraInfo", #"{"taskchain":"Fight","what":"ExceededLimit","details":{"task":"PRTS1"}}"#)] {
+                var unsafe = observation
+                unsafe.consume(evidence)
+                XCTAssertNotEqual(unsafe.result(for: command(exit: 1), configuredStage: "AP-5").reason, .stageUnavailable)
+            }
+        }
+        var unknown = FightObservation()
+        lastStageFailure.replacingOccurrences(of: "Fight@GoLastBattle", with: "ToTerminal")
+            .components(separatedBy: .newlines).forEach { unknown.consume($0) }
+        XCTAssertNotEqual(unknown.result(for: command(exit: 1), configuredStage: nil).reason, .stageUnavailable)
+    }
+
+    func testFallbackPolicyRequiresAnUnusedDistinctRegularTargetAndNoBattle() {
+        var configuration = FightConfiguration()
+        configuration.fallbackStage = " 1-7 "
+        let unavailable = FightResult(status: .failed, reason: .stageUnavailable)
+        XCTAssertEqual(FightStagePolicy.fallback(in: configuration, after: unavailable, primaryStage: "AP-5"), "1-7")
+        for primary in ["1-7", "Annihilation"] {
+            XCTAssertNil(FightStagePolicy.fallback(in: configuration, after: unavailable, primaryStage: primary))
+        }
+        for result in [FightResult(status: .failed, reason: .commandFailed), .init(status: .unconfirmed, reason: .stageUnavailable),
+                       .init(status: .failed, times: 1, reason: .stageUnavailable),
+                       .init(status: .failed, reason: .stageUnavailable, fallbackFrom: "AP-5"),
+                       .init(status: .unnecessary, reason: .insufficientSanity)] {
+            XCTAssertNil(FightStagePolicy.fallback(in: configuration, after: result, primaryStage: "AP-5"))
+        }
+        configuration.usesCustomSettings = false
+        XCTAssertNil(FightStagePolicy.fallback(in: configuration, after: unavailable, primaryStage: "AP-5"))
+    }
+
     func testBatchSizeIsCountedOnlyAfterSettlementWhenDropOCRHasNoCount() {
         var observation = FightObservation()
         let drops = stageDrops.replacingOccurrences(of: "\"cur_times\":1,", with: "")
@@ -393,6 +437,96 @@ private final class FightFixture {
 
 @MainActor
 final class FightWorkflowTests: XCTestCase {
+    func testFallbackUsesTheSameWorkflowForEveryClientAndStageStrategy() async throws {
+        for kind in ClientKind.allCases {
+            for strategy in FightStageStrategy.allCases {
+                let fixture = try FightFixture()
+                defer { fixture.cleanup() }
+                fixture.client.kind = kind
+                fixture.client.accounts[0].accountSelector = kind.supportsAccountSwitching ? "fixture-selector" : ""
+                fixture.plan.fight.stageStrategy = strategy
+                fixture.plan.fight.stage = "AP-5"
+                fixture.plan.fight.fallbackStage = "1-7"
+                fixture.plan.fight.times = 2
+                let store = FightStageMemoryStore(directories: fixture.directories)
+                var memory = FightStageMemory()
+                memory.remember("AP-5", clientID: fixture.client.id, accountID: fixture.account.id)
+                if strategy == .rememberedRegular { memory.markRecoveryRequired(clientID: fixture.client.id, accountID: fixture.account.id) }
+                try store.save(memory)
+                let failure = strategy == .gameCurrentOrLast ? lastStageFailure : navigationFailure
+                let (report, calls) = await fixture.run([.init(result: command(exit: 1), callbacks: failure),
+                                                       .init(result: command("Fight 1-7 2 times"))])
+                XCTAssertTrue(report.isSuccess, "\(kind) / \(strategy)")
+                XCTAssertEqual(calls.count, 2)
+                XCTAssertEqual(try parameters(calls[1])["stage"] as? String, "1-7")
+                XCTAssertEqual(try parameters(calls[1])["times"] as? Int, 2)
+                XCTAssertNil(try parameters(calls[1])["fallbackStage"])
+                let result = try XCTUnwrap(fixture.state.fightResults?[fixture.step.key])
+                XCTAssertEqual(result.fallbackFrom, strategy == .gameCurrentOrLast ? "" : "AP-5")
+                XCTAssertEqual(result.stage, "1-7")
+                XCTAssertTrue(result.description.contains("兜底作战"))
+                XCTAssertEqual(try store.load().stage(clientID: fixture.client.id, accountID: fixture.account.id), "AP-5")
+                XCTAssertEqual(calls[1].stateBeforeDispatch.fightProgress?[fixture.step.key]?.fallbackStage, "1-7")
+                XCTAssertTrue(calls[1].stateBeforeDispatch.needsFightConfirmation(fixture.step.key))
+                XCTAssertFalse(fixture.runtime.running)
+            }
+        }
+    }
+
+    func testTemporaryFallbackPreservesRecoveryUntilThePrimaryStageSucceeds() async throws {
+        let fixture = try FightFixture(priority: true)
+        defer { fixture.cleanup() }
+        fixture.plan.fight.stageStrategy = .rememberedRegular
+        fixture.plan.fight.fallbackStage = "1-7"
+        let store = FightStageMemoryStore(directories: fixture.directories)
+        var memory = FightStageMemory()
+        memory.remember("AP-5", clientID: fixture.client.id, accountID: fixture.account.id)
+        try store.save(memory)
+        let weekly = callback("SubTaskExtraInfo", #"{"taskchain":"Fight","what":"StageDrops","details":{"annihilation_weekly_process":[1800,1800]}}"#)
+        let (report, calls) = await fixture.run([.init(result: command(), callbacks: weekly),
+                                               .init(result: command(exit: 1), callbacks: navigationFailure),
+                                               .init(result: command("Fight 1-7 2 times"))])
+        XCTAssertTrue(report.isSuccess)
+        XCTAssertEqual(calls.count, 3)
+        XCTAssertEqual(fixture.state.fightProgress?[fixture.step.key]?.regularStage, "AP-5")
+        XCTAssertTrue(try store.load().requiresRecovery(clientID: fixture.client.id, accountID: fixture.account.id))
+        fixture.plan.fight.annihilationFirst = false
+        try ExecutionStateStore(directories: fixture.directories).save(.init(dateKey: ExecutionStateStore.todayKey))
+        let (restored, next) = await fixture.run([.init(result: command("Fight AP-5 1 times"))])
+        XCTAssertTrue(restored.isSuccess)
+        XCTAssertEqual(try parameters(next[0])["stage"] as? String, "AP-5")
+        XCTAssertFalse(try store.load().requiresRecovery(clientID: fixture.client.id, accountID: fixture.account.id))
+    }
+
+    func testFallbackIsNeverRepeatedWithinOneRunAndNoSanityDoesNotSwitchStages() async throws {
+        for reply in [FightTestCommands.Reply(result: command(exit: 1), callbacks: navigationFailure),
+                      .init(result: command(), callbacks: noSanity), .init(result: command(timeout: true))] {
+            let fixture = try FightFixture()
+            defer { fixture.cleanup() }
+            fixture.plan.fight.stage = "AP-5"
+            fixture.plan.fight.fallbackStage = "1-7"
+            let (_, calls) = await fixture.run([reply, reply, reply])
+            XCTAssertEqual(calls.count, reply.callbacks == navigationFailure ? 2 : 1)
+            XCTAssertFalse(fixture.runtime.running)
+        }
+    }
+
+    func testInvalidFallbackIsRejectedBeforeLaunchingAndDormantValuesArePreserved() async throws {
+        let fixture = try FightFixture()
+        defer { fixture.cleanup() }
+        for stage in ["Annihilation", "../1-7", "カズデル", "_INVALID_"] {
+            fixture.plan.fight.fallbackStage = stage
+            let (report, calls) = await fixture.run([])
+            XCTAssertNotNil(report.fatalError)
+            XCTAssertTrue(calls.isEmpty)
+            XCTAssertEqual(fixture.runtime.launches, 0)
+        }
+        fixture.plan.fight.usesCustomSettings = false
+        XCTAssertTrue(ConfigurationValidator.structuralProblems(in: fixture.configuration).isEmpty)
+        let value = try JSONDecoder().decode(FightConfiguration.self, from: JSONEncoder().encode(fixture.plan.fight))
+        XCTAssertEqual(value.fallbackStage, "_INVALID_")
+    }
+
     func testFollowingGameRecognizesAnnihilationAndRestoresRegularStageAcrossAllClients() async throws {
         let names: [ClientKind: String] = [.official: "切尔诺伯格", .bilibili: "切尔诺伯格", .txwy: "切爾諾伯格",
                                           .yoStarEN: "Chernobog", .yoStarJP: "カズデル", .yoStarKR: "체르노보그"]
@@ -660,7 +794,8 @@ final class FightWorkflowTests: XCTestCase {
         XCTAssertEqual(calls.count, 1)
         XCTAssertNil(try parameters(calls[0])["stage"])
         XCTAssertTrue(fixture.plan.fight.annihilationFirst)
-        XCTAssertNil(fixture.state.fightProgress)
+        XCTAssertNil(fixture.state.fightProgress?[fixture.step.key]?.annihilation)
+        XCTAssertNil(fixture.state.fightProgress?[fixture.step.key]?.fallbackStage)
     }
 
     func testCheckpointWriteFailurePreventsFightDispatchAndClosesClient() async throws {

@@ -1650,70 +1650,44 @@ public final class WorkflowRunner {
         switch resolution {
         case let .value(value): stage = value
         case .omitted: stage = ""
-        case .unavailable: throw MAAConfigurationWriterError.invalidConfiguration("缺少后续常规关卡，请先设置备用关卡")
+        case .unavailable: throw MAAConfigurationWriterError.invalidConfiguration("缺少后续常规关卡，请先设置恢复关卡")
         }
         let twoPhases = plan.fight.usesCustomSettings && plan.fight.annihilationFirst
-        var progress = twoPhases ? state.fightProgress?[key] ?? FightProgress(regularStage: stage) : FightProgress(regularStage: stage)
+        var progress = state.fightProgress?[key] ?? FightProgress(regularStage: stage)
         if twoPhases, FightStagePolicy.regularStage(from: progress.regularStage, times: 1) == nil {
-            // Replace only an invalid frozen target; completed annihilation remains checkpointed.
             guard FightStagePolicy.regularStage(from: stage, times: 1) != nil else {
-                throw MAAConfigurationWriterError.invalidConfiguration("后续常规关卡无效，请设置备用关卡或固定常规关卡")
+                throw MAAConfigurationWriterError.invalidConfiguration("后续常规关卡无效，请设置恢复关卡或固定常规关卡")
             }
             progress.regularStage = stage
         }
         var lastOutcome: TaskRunOutcome?
         for isAnnihilation in (twoPhases ? [true, false] : [false]) {
             let previous = isAnnihilation ? progress.annihilation : progress.regular
-            if twoPhases, previous?.isResolved == true { continue }
-            guard !Task.isCancelled else { throw RuntimeError.cancelled }
-            var phasePlan = plan
-            phasePlan.fight.annihilationFirst = false
-            if twoPhases {
-                phasePlan.fight.stageStrategy = .fixed
-                phasePlan.fight.stage = isAnnihilation ? "Annihilation" : progress.regularStage
-                if isAnnihilation {
-                    phasePlan.fight.medicine = nil
-                    phasePlan.fight.medicineExpireDays = nil
-                    phasePlan.fight.stone = nil
-                    phasePlan.fight.times = nil
-                    phasePlan.fight.drGrandet = false
-                }
-            }
-            let phaseStage = twoPhases ? phasePlan.fight.stage : stage
-            try MAAConfigurationWriter(directories: directories).writeTask(
-                .fight, plan: phasePlan, account: account, client: client,
-                fightStageResolution: phasePlan.fight.usesCustomSettings ? .value(phaseStage) : .omitted
+            if previous?.isResolved == true { continue }
+            var outcome = try await runFightPhase(
+                isAnnihilation: isAnnihilation, plan: plan, account: account, client: client,
+                configuration: configuration, progress: &progress, state: &state
             )
-            // A crash or cancellation after dispatch must require an explicit retry.
-            state.record(FightResult(status: .unconfirmed, stage: phaseStage, reason: .missingEvidence), for: key)
-            if twoPhases {
-                if state.fightProgress == nil { state.fightProgress = [:] }
-                if isAnnihilation { progress.annihilation = state.fightResults?[key] }
-                else { progress.regular = state.fightResults?[key] }
-                state.fightProgress?[key] = progress
+            if !isAnnihilation, let result = outcome.fightResult,
+               let fallback = FightStagePolicy.fallback(in: plan.fight, after: result, primaryStage: progress.regularStage) {
+                emit(.runningTask, "\(accountText(account))：\(progress.regularStage.isEmpty ? "游戏当前/上次关卡" : progress.regularStage)无法进入，准备改用兜底关卡 \(fallback)",
+                     0, .warning, client: client, account: account, task: .fight, fightResult: result)
+                // Re-establish the same account's ready state before navigating elsewhere.
+                try await switchAccount(account, client: client, configuration: configuration, policy: plan.policy)
+                progress.fallbackStage = fallback
+                if !progress.regularStage.isEmpty, plan.fight.stageStrategy != .fixed,
+                   memory.stage(clientID: client.id, accountID: account.id) == progress.regularStage {
+                    memory.markRecoveryRequired(clientID: client.id, accountID: account.id)
+                    do { try fightStageMemoryStore.save(memory) }
+                    catch { throw FightPersistenceError(details: error.localizedDescription) }
+                }
+                outcome = try await runFightPhase(
+                    isAnnihilation: false, plan: plan, account: account, client: client,
+                    configuration: configuration, progress: &progress, state: &state
+                )
             }
-            try persistFightState(state)
-            if twoPhases {
-                emit(.runningTask, "\(accountText(account))：\(isAnnihilation ? "优先剿灭" : "常规作战")",
-                     0, .info, client: client, account: account, task: .fight)
-            }
-            let outcome = try await runTask(.fight, plan: phasePlan, account: account,
-                                            client: client, configuration: configuration)
-            guard let result = outcome.fightResult else { return outcome }
             lastOutcome = outcome
-            if isAnnihilation { progress.annihilation = result }
-            else { progress.regular = result }
-            if twoPhases { state.fightProgress?[key] = progress }
-            state.record(result, for: key)
-            if twoPhases, isAnnihilation, result.isResolved {
-                state.record(FightResult(status: .unconfirmed, stage: progress.regularStage, reason: .missingEvidence), for: key)
-            }
-            try persistFightState(state)
-            if twoPhases {
-                emit(.runningTask, "\(accountText(account))：\(isAnnihilation ? "剿灭" : "常规作战")\(result.description)",
-                     0, .info, client: client, account: account,
-                     task: .fight, details: result.totalDrops.map { "总掉落：" + $0 })
-            }
+            guard let result = outcome.fightResult else { return outcome }
             if memory.recordSuccessfulFight(result, clientID: client.id, accountID: account.id) {
                 do { try fightStageMemoryStore.save(memory) }
                 catch { throw FightPersistenceError(details: error.localizedDescription) }
@@ -1736,6 +1710,65 @@ public final class WorkflowRunner {
         let result = progress.regular ?? FightResult(status: .unconfirmed, reason: .missingEvidence)
         return TaskRunOutcome(succeeded: result.isResolved, recoveredAfterRetry: false, notices: [],
                               failureDetails: nil, fightResult: result)
+    }
+
+    private func runFightPhase(
+        isAnnihilation: Bool,
+        plan: AutomationPlan,
+        account: AccountConfiguration,
+        client: ClientConfiguration,
+        configuration: AppConfiguration,
+        progress: inout FightProgress,
+        state: inout ExecutionState
+    ) async throws -> TaskRunOutcome {
+        guard !Task.isCancelled else { throw RuntimeError.cancelled }
+        let key = checkpointKey(plan: plan, client: client, account: account, task: .fight)
+        let stage = isAnnihilation ? "Annihilation" : progress.fallbackStage ?? progress.regularStage
+        let fallbackFrom = !isAnnihilation && progress.fallbackStage != nil ? progress.regularStage : nil
+        var phasePlan = plan
+        phasePlan.fight.annihilationFirst = false
+        phasePlan.fight.stageStrategy = stage.isEmpty ? .gameCurrentOrLast : .fixed
+        phasePlan.fight.stage = stage
+        if isAnnihilation {
+            phasePlan.fight.medicine = nil
+            phasePlan.fight.medicineExpireDays = nil
+            phasePlan.fight.stone = nil
+            phasePlan.fight.times = nil
+            phasePlan.fight.drGrandet = false
+        }
+        try MAAConfigurationWriter(directories: directories).writeTask(
+            .fight, plan: phasePlan, account: account, client: client,
+            fightStageResolution: phasePlan.fight.usesCustomSettings ? .value(stage) : .omitted
+        )
+        func record(_ result: FightResult) {
+            if isAnnihilation { progress.annihilation = result }
+            else { progress.regular = result }
+            if state.fightProgress == nil { state.fightProgress = [:] }
+            state.fightProgress?[key] = progress
+            state.record(result, for: key)
+        }
+        // Persist the exact attempt before dispatch, including a selected fallback.
+        record(FightResult(status: .unconfirmed, stage: stage, reason: .missingEvidence, fallbackFrom: fallbackFrom))
+        try persistFightState(state)
+        if plan.fight.usesCustomSettings && plan.fight.annihilationFirst {
+            emit(.runningTask, "\(accountText(account))：\(isAnnihilation ? "优先剿灭" : "常规作战")",
+                 0, .info, client: client, account: account, task: .fight)
+        }
+        var outcome = try await runTask(.fight, plan: phasePlan, account: account, client: client, configuration: configuration)
+        guard var result = outcome.fightResult else { return outcome }
+        result.fallbackFrom = fallbackFrom
+        outcome.fightResult = result
+        record(result)
+        if isAnnihilation, result.isResolved {
+            state.record(FightResult(status: .unconfirmed, stage: progress.regularStage, reason: .missingEvidence), for: key)
+        }
+        try persistFightState(state)
+        if plan.fight.usesCustomSettings && plan.fight.annihilationFirst {
+            emit(.runningTask, "\(accountText(account))：\(isAnnihilation ? "剿灭" : "常规作战")\(result.description)",
+                 0, .info, client: client, account: account, task: .fight,
+                 details: result.totalDrops.map { "总掉落：" + $0 })
+        }
+        return outcome
     }
 
     private func persistFightState(_ state: ExecutionState) throws {

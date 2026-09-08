@@ -29,9 +29,11 @@ open .build/AutoMAA.app --args --data-directory /tmp/automaa-development
 
 修改配置通常从 `Models.swift` 与 `ConfigurationValidation.swift` 开始，任务参数转换位于 `MAAConfigurationWriter.swift`，运行顺序、重试和断点位于 `WorkflowRunner.swift`。可测试逻辑应留在 `AutoMAAKit`，避免在界面层重复实现。
 
-作战结果判定与续跑状态位于 `FightExecution.swift`，关卡记忆位于 `FightStageMemory.swift`。当前实现对照 MaaCore v6.17.2 和 maa-cli v0.7.5：每次作战命令通过 `MAA_STATE_DIR` 使用独立 Core 日志，结算依据 `StageDrops` 回调，`cur_times` 按每次结算累加。maa-cli 摘要的次数在开打时增加，不能单独证明完成；剿灭导航失败也不能证明周奖励已满。
+作战结果判定与续跑状态位于 `FightExecution.swift`，关卡记忆位于 `FightStageMemory.swift`。当前实现对照 MaaCore v6.17.2 和 maa-cli v0.7.5：每次作战命令通过 `MAA_STATE_DIR` 使用独立 Core 日志，结算依据 `StageDrops` 回调，`cur_times` 按每次结算累加；缺少该值时使用由 `FightTimes.series` 绑定到对应开战与结算的批次倍率，两者均未知时显示次数下限。`SanityBeforeStage` 与紧随其后的消耗、倍率共同判断单局理智不足，不以整批连战消耗代替单局消耗。maa-cli 摘要的次数在开打时增加，不能单独证明完成；剿灭导航失败也不能证明周奖励已满。
 
 作战类型与显示名称分开保存。`ProcessTask` 开始处理 `EndOfAction` 或 `EndOfActionAnnihilation` 时记录结算类型，再与对应的掉落结果关联；有效周奖励进度也能证明是剿灭，不要求达到上限。Core 先运行掉落插件，再转发 `SubTaskCompleted`，因此不能等待完成事件再判断前面的掉落。未知类型、无效编号和不完整结果不会覆盖常规关卡记忆。上游依据见 [StageDropsTaskPlugin](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/v6.17.2/src/MaaCore/Task/Fight/StageDropsTaskPlugin.cpp)、[AbstractTask 回调顺序](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/v6.17.2/src/MaaCore/Task/AbstractTask.cpp#L123-L151)、[StageNavigationTask](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/v6.17.2/src/MaaCore/Task/Fight/StageNavigationTask.cpp) 和 [maa-cli 作战摘要](https://github.com/MaaAssistantArknights/maa-cli/blob/v0.7.5/crates/maa-cli/src/run/callback/summary.rs)。对应行为使用隔离回调样例与工作流测试覆盖。
+
+常规兜底只接受作战前的 `StageNavigationTask` 失败，或已点击上次作战入口后的导航失败；进入 `FightBegin`、发现战斗画面、超时或掉线都会阻止自动换关。选关与各次尝试在 `WorkflowRunner` 中串行执行，已选兜底在派发前持久化。兜底结果与原目标分开保存，不能更新恢复记录；所有服务器共享这套判断。
 
 ## 修改与验证
 

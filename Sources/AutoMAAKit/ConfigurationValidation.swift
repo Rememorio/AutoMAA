@@ -235,8 +235,8 @@ public enum ConfigurationValidator {
                         id: "plan-\(plan.id)-fight-memory-\(client.id)-\(account.id)",
                         severity: .error,
                         message: plan.fight.annihilationFirst
-                            ? "「\(planName)」需要在剿灭前确定\(clientName) / \(account.displayName)的常规关卡；请设置备用关卡，或改用固定常规关卡"
-                            : "「\(planName)」需要为\(clientName) / \(account.displayName)从剿灭恢复，但尚无备用常规关卡；请设置恢复关卡，或确认游戏已手动切回后继续跟随",
+                            ? "「\(planName)」需要在剿灭前确定\(clientName) / \(account.displayName)的常规关卡；请设置恢复关卡，或改用固定常规关卡"
+                            : "「\(planName)」需要为\(clientName) / \(account.displayName)从剿灭恢复，但尚无记录的常规关卡；请设置恢复关卡，或确认游戏已手动切回后继续跟随",
                         scope: .plan(plan.id)
                     ))
                 }
@@ -298,6 +298,11 @@ public enum ConfigurationValidator {
         into result: inout [ConfigurationProblem]
     ) {
         let name = plan.displayName
+        if !value.fallbackStage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           FightStagePolicy.regularStage(from: value.fallbackStage, times: 1) == nil {
+            result.append(.init(id: "\(prefix)-fallback-stage", severity: .error,
+                                message: "「\(name)」的兜底关卡必须是常规关卡编号，例如 1-7", scope: .plan(plan.id)))
+        }
         if value.annihilationFirst, value.stageStrategy == .fixed, FightStagePolicy.regularStage(from: value.stage, times: 1) == nil {
             result.append(.init(id: "\(prefix)-regular-stage", severity: .error,
                                 message: "「\(name)」启用优先剿灭后，请指定后续常规关卡", scope: .plan(plan.id)))
