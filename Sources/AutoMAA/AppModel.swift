@@ -495,6 +495,18 @@ final class AppModel: ObservableObject {
             && executionState.fightProgress?[step.key]?.annihilation?.reason == .navigationUnavailable
     }
 
+    func fightRetryHint(_ step: WorkflowStep) -> String {
+        if let progress = executionState.fightProgress?[step.key] {
+            if progress.canReselectRegularStage {
+                return "上次选关失败且未开战。可以先在方案中修改关卡或兜底设置，重跑将采用当前设置；已完成的剿灭会保留。"
+            }
+            let stage = progress.pendingStage
+            let target = stage.isEmpty ? "游戏当前/上次关卡" : stage
+            return "将重跑上次保留的目标：\(target)。已完成阶段保留；未确认阶段可能已消耗理智或道具，请先检查游戏。"
+        }
+        return "已完成阶段保留。未确认阶段可能已消耗理智或道具，请先检查游戏；重跑会再次执行该阶段。"
+    }
+
     func runPlan(_ planID: UUID, resumeToday: Bool = true, retryStep: WorkflowStep? = nil,
                  confirmAnnihilation: Bool = false) {
         reloadActivityHistory()

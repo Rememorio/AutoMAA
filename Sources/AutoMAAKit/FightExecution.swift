@@ -71,6 +71,22 @@ public struct FightProgress: Codable, Equatable, Sendable {
     public var fallbackStage: String?
 
     public init(regularStage: String) { self.regularStage = regularStage }
+
+    public var canReselectRegularStage: Bool {
+        regular?.status == .failed && regular?.reason == .stageUnavailable && regular?.times == 0
+    }
+
+    public var pendingStage: String {
+        if let annihilation, !annihilation.isResolved { return "Annihilation" }
+        return fallbackStage ?? regularStage
+    }
+
+    public mutating func reselectRegularStage(_ stage: String) {
+        guard canReselectRegularStage else { return }
+        regularStage = stage
+        fallbackStage = nil
+        regular = nil
+    }
 }
 
 public struct WorkflowStep: Codable, Hashable, Sendable {

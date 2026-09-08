@@ -515,7 +515,7 @@ private struct ActivityEventRow: View {
                             }
                             Button("取消", role: .cancel) {}
                         } message: {
-                            Text("\(context ?? "当前账号")。已确认完成的阶段会保留。未确认的阶段可能已消耗理智或道具，请先检查游戏；重跑会再次执行该阶段。")
+                            Text("\(context ?? "当前账号")。\(model.fightRetryHint(step))")
                         }
                 }
             }

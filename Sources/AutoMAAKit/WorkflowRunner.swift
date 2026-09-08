@@ -1654,6 +1654,11 @@ public final class WorkflowRunner {
         }
         let twoPhases = plan.fight.usesCustomSettings && plan.fight.annihilationFirst
         var progress = state.fightProgress?[key] ?? FightProgress(regularStage: stage)
+        if progress.canReselectRegularStage {
+            progress.reselectRegularStage(stage)
+            emit(.runningTask, "\(accountText(account))：上次选关失败且未开战，本次使用当前方案的关卡与兜底设置；已完成阶段保留",
+                 0, .info, client: client, account: account, task: .fight)
+        }
         if twoPhases, FightStagePolicy.regularStage(from: progress.regularStage, times: 1) == nil {
             guard FightStagePolicy.regularStage(from: stage, times: 1) != nil else {
                 throw MAAConfigurationWriterError.invalidConfiguration("后续常规关卡无效，请设置恢复关卡或固定常规关卡")

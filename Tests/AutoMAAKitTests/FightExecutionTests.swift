@@ -437,6 +437,58 @@ private final class FightFixture {
 
 @MainActor
 final class FightWorkflowTests: XCTestCase {
+    func testUnavailableRegularStageCanChangeWithoutRepeatingAnnihilation() async throws {
+        let fixture = try FightFixture(priority: true)
+        defer { fixture.cleanup() }
+        fixture.plan.fight.stage = "AP-5"
+        _ = await fixture.run([.init(result: command("Fight Annihilation 1 times")),
+                               .init(result: command(exit: 1), callbacks: navigationFailure)])
+        XCTAssertTrue(fixture.state.fightProgress?[fixture.step.key]?.canReselectRegularStage == true)
+        fixture.plan.fight.stage = "CE-6"
+        let (report, calls) = await fixture.run([.init(result: command("Fight CE-6 1 times"))])
+        XCTAssertTrue(report.isSuccess)
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(try parameters(calls[0])["stage"] as? String, "CE-6")
+        XCTAssertEqual(fixture.state.fightProgress?[fixture.step.key]?.annihilation?.times, 1)
+    }
+
+    func testUnconfirmedFallbackKeepsItsDispatchedTargetDespiteConfigurationChanges() async throws {
+        let fixture = try FightFixture(priority: true)
+        defer { fixture.cleanup() }
+        fixture.plan.fight.stage = "AP-5"
+        fixture.plan.fight.fallbackStage = "1-7"
+        _ = await fixture.run([.init(result: command("Fight Annihilation 1 times")),
+                               .init(result: command(exit: 1), callbacks: navigationFailure),
+                               .init(result: command(timeout: true), callbacks: battleStart)])
+        XCTAssertEqual(fixture.state.fightProgress?[fixture.step.key]?.pendingStage, "1-7")
+        XCTAssertFalse(fixture.state.fightProgress?[fixture.step.key]?.canReselectRegularStage == true)
+        fixture.plan.fight.stage = "CE-6"
+        fixture.plan.fight.fallbackStage = ""
+        let (_, automatic) = await fixture.run([])
+        XCTAssertTrue(automatic.isEmpty)
+        let (report, calls) = await fixture.run([.init(result: command("Fight 1-7 1 times"))], retry: true)
+        XCTAssertTrue(report.isSuccess)
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(try parameters(calls[0])["stage"] as? String, "1-7")
+        XCTAssertEqual(fixture.state.fightResults?[fixture.step.key]?.fallbackFrom, "AP-5")
+    }
+
+    func testUnavailableFallbackCanUseNewSettingsOnContinuation() async throws {
+        let fixture = try FightFixture()
+        defer { fixture.cleanup() }
+        fixture.plan.fight.stage = "AP-5"
+        fixture.plan.fight.fallbackStage = "CE-6"
+        _ = await fixture.run([.init(result: command(exit: 1), callbacks: navigationFailure),
+                               .init(result: command(exit: 1), callbacks: navigationFailure)])
+        XCTAssertTrue(fixture.state.fightProgress?[fixture.step.key]?.canReselectRegularStage == true)
+        fixture.plan.fight.fallbackStage = "1-7"
+        let (report, calls) = await fixture.run([.init(result: command(exit: 1), callbacks: navigationFailure),
+                                               .init(result: command("Fight 1-7 1 times"))])
+        XCTAssertTrue(report.isSuccess)
+        XCTAssertEqual(calls.count, 2)
+        XCTAssertEqual(try parameters(calls[1])["stage"] as? String, "1-7")
+    }
+
     func testFallbackUsesTheSameWorkflowForEveryClientAndStageStrategy() async throws {
         for kind in ClientKind.allCases {
             for strategy in FightStageStrategy.allCases {
