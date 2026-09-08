@@ -224,17 +224,16 @@ public enum ConfigurationValidator {
             let enabledAccounts = client.accounts.filter(\.enabled)
             let targetAccounts = client.accounts.filter(plan.includes)
             if plan.fight.enabled,
-               plan.fight.usesCustomSettings,
-               (plan.fight.stageStrategy == .rememberedRegular || plan.fight.annihilationFirst),
-               plan.fight.stageStrategy != .fixed {
-                for account in targetAccounts where (plan.fight.annihilationFirst || fightStageMemory.requiresRecovery(
+               (plan.fight.weeklyAnnihilation.enabled || (plan.fight.usesCustomSettings && plan.fight.stageStrategy == .rememberedRegular)),
+               (!plan.fight.usesCustomSettings || plan.fight.stageStrategy != .fixed) {
+                for account in targetAccounts where (plan.fight.weeklyAnnihilation.enabled || fightStageMemory.requiresRecovery(
                     clientID: client.id,
                     accountID: account.id
                 )) && fightStageMemory.stage(clientID: client.id, accountID: account.id) == nil {
                     result.append(.init(
                         id: "plan-\(plan.id)-fight-memory-\(client.id)-\(account.id)",
                         severity: .error,
-                        message: plan.fight.annihilationFirst
+                        message: plan.fight.weeklyAnnihilation.enabled
                             ? "「\(planName)」需要在剿灭前确定\(clientName) / \(account.displayName)的常规关卡；请设置恢复关卡，或改用固定常规关卡"
                             : "「\(planName)」需要为\(clientName) / \(account.displayName)从剿灭恢复，但尚无记录的常规关卡；请设置恢复关卡，或确认游戏已手动切回后继续跟随",
                         scope: .plan(plan.id)
@@ -303,7 +302,7 @@ public enum ConfigurationValidator {
             result.append(.init(id: "\(prefix)-fallback-stage", severity: .error,
                                 message: "「\(name)」的兜底关卡必须是常规关卡编号，例如 1-7", scope: .plan(plan.id)))
         }
-        if value.annihilationFirst, value.stageStrategy == .fixed, FightStagePolicy.regularStage(from: value.stage, times: 1) == nil {
+        if value.weeklyAnnihilation.enabled, value.stageStrategy == .fixed, FightStagePolicy.regularStage(from: value.stage, times: 1) == nil {
             result.append(.init(id: "\(prefix)-regular-stage", severity: .error,
                                 message: "「\(name)」启用优先剿灭后，请指定后续常规关卡", scope: .plan(plan.id)))
         }

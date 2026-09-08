@@ -108,6 +108,8 @@ The macOS sidebar is the persistent navigation model. Panels organize dashboards
 
 Data entry uses native controls and keeps validation near the affected setting. A controlling strategy choice precedes its conditional fields. Confirmation dialogs are reserved for destructive or consequential actions. Banners summarize save and run results in a bounded overlay; details remain in readiness or activity views. Banner and editable-name transitions respect Reduce Motion. Shared behavior and native-control ownership are documented in [UX-CONTRACT.md](UX-CONTRACT.md).
 
+Task orchestration settings precede the MAA parameter mode in the same task card. Weekly annihilation uses `SettingsToggleRow` and a native weekday `Picker`, followed by compact account status and recovery controls. The strategy remains available in both parameter modes; account status wraps rather than clipping long labels. `FightRecoveryButton` owns the same confirmation flow in plan settings and activity history.
+
 ### Update behavior
 
 `UpdateProgressRow` owns pending update feedback in Settings: native indeterminate progress, named stage, elapsed time, the shared limit from `UpdatePolicy`, and a consistently labeled “取消更新” action. Automatic and manual work use the same controls. Cancellation remains busy until cleanup finishes; errors remain beside the owning update action and in MAA activity history. `AppModel.startMAAUpdate` owns both automatic and manual MAA task lifecycle. `WorkflowRunner` owns staged validation and activation; the UI never infers compatibility.

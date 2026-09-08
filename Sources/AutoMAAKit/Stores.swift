@@ -33,6 +33,7 @@ public struct AppDirectories: Sendable {
     public let history: URL
     public let executionState: URL
     public let fightStageMemory: URL
+    public let weeklyAnnihilation: URL
     public let maaMaintenanceState: URL
     public let generatedManifest: URL
     public let lock: URL
@@ -47,6 +48,7 @@ public struct AppDirectories: Sendable {
         history = resolvedRoot.appending(path: "history.json")
         executionState = resolvedRoot.appending(path: "execution-state.json")
         fightStageMemory = resolvedRoot.appending(path: "fight-stage-memory.json")
+        weeklyAnnihilation = resolvedRoot.appending(path: "weekly-annihilation.json")
         maaMaintenanceState = resolvedRoot.appending(path: "maa-maintenance.json")
         generatedManifest = resolvedRoot.appending(path: "generated-files.json")
         lock = resolvedRoot.appending(path: "runner.lock")

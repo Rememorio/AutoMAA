@@ -108,6 +108,8 @@ final class AppModel: ObservableObject {
     @Published var bannerMessage: String?
     @Published var installedPlanIDs: Set<UUID>
     @Published private(set) var fightStageMemory: FightStageMemory
+    @Published private(set) var weeklyAnnihilation: WeeklyAnnihilationState
+    @Published private(set) var currentDate = Date()
     @Published private(set) var executionState: ExecutionState
     @Published var lastReport: WorkflowReport?
     @Published private(set) var isSynchronizingSchedules = false
@@ -135,6 +137,7 @@ final class AppModel: ObservableObject {
     private let historyStore: HistoryStore
     private let executionStateStore: ExecutionStateStore
     private let fightStageMemoryStore: FightStageMemoryStore
+    private let weeklyAnnihilationStore: WeeklyAnnihilationStore
     private let launchAgentManager: LaunchAgentManager
     private let softwareUpdateService: any SoftwareUpdateServing
     private let softwareUpdateResultStore: SoftwareUpdateResultStore
@@ -185,6 +188,7 @@ final class AppModel: ObservableObject {
         executionStateStore = ExecutionStateStore(directories: directories)
         executionState = ExecutionStateStore(directories: directories).loadForToday()
         fightStageMemoryStore = FightStageMemoryStore(directories: directories)
+        weeklyAnnihilationStore = WeeklyAnnihilationStore(directories: directories)
         let applicationVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
             ?? "开发构建"
         let applicationBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
@@ -229,6 +233,11 @@ final class AppModel: ObservableObject {
         } catch {
             fightStageMemory = .init()
             startupMessages.append("读取常规关卡记录失败：\(error.localizedDescription)")
+        }
+        do { weeklyAnnihilation = try weeklyAnnihilationStore.load() }
+        catch {
+            weeklyAnnihilation = .init()
+            startupMessages.append("读取每周剿灭记录失败：\(error.localizedDescription)")
         }
         startupNotice = startupMessages.isEmpty ? nil : startupMessages.joined(separator: "；")
         activityEntries = historyStore.load()
@@ -463,7 +472,8 @@ final class AppModel: ObservableObject {
     }
 
     func continuation(for planID: UUID) -> PlanContinuation {
-        PlanContinuation(configuration: configuration, planID: planID, state: executionState, history: activityEntries)
+        PlanContinuation(configuration: configuration, planID: planID, state: executionState, history: activityEntries,
+                         weeklyAnnihilation: weeklyAnnihilation, now: currentDate)
     }
 
     func runTitle(for planID: UUID, readyTitle: String = "运行") -> String {
@@ -490,12 +500,18 @@ final class AppModel: ObservableObject {
     }
 
     func canConfirmAnnihilation(_ step: WorkflowStep) -> Bool {
-        guard let fight = configuration.plans.first(where: { $0.id == step.planID })?.fight else { return false }
-        return fight.usesCustomSettings && fight.annihilationFirst
-            && executionState.fightProgress?[step.key]?.annihilation?.reason == .navigationUnavailable
+        guard let fight = configuration.plans.first(where: { $0.id == step.planID })?.fight,
+              let client = configuration.clients.first(where: { $0.id == step.clientID }) else { return false }
+        return fight.weeklyAnnihilation.enabled && weeklyAnnihilation.canConfirmComplete(client: client, accountID: step.accountID)
     }
 
     func fightRetryHint(_ step: WorkflowStep) -> String {
+        if weeklyAnnihilation.entry(clientID: step.clientID, accountID: step.accountID)?.result.status == .unconfirmed {
+            if executionState.fightProgress?[step.key]?.regular?.status == .unconfirmed {
+                return "该账号的剿灭和本方案的常规作战均有待确认结果。请先检查游戏；重跑会再次执行未确认阶段，常规作战仍使用本方案的消耗设置。"
+            }
+            return "该账号的剿灭结果尚未确认。请先检查游戏；重跑会再次尝试剿灭，只使用自然理智。各方案已完成的常规任务保留。"
+        }
         if let progress = executionState.fightProgress?[step.key] {
             if progress.canReselectRegularStage {
                 return "上次选关失败且未开战。可以先在方案中修改关卡或兜底设置，重跑将采用当前设置；已完成的剿灭会保留。"
@@ -1267,6 +1283,7 @@ final class AppModel: ObservableObject {
     }
 
     func reloadActivityHistory() {
+        currentDate = Date()
         let state = executionStateStore.loadForToday()
         if state != executionState { executionState = state }
         let entries = historyStore.load()
@@ -1278,6 +1295,7 @@ final class AppModel: ObservableObject {
     }
 
     private func reloadFightStageMemory() {
+        if let weekly = try? weeklyAnnihilationStore.load(), weekly != weeklyAnnihilation { weeklyAnnihilation = weekly }
         guard let memory = try? fightStageMemoryStore.load(), memory != fightStageMemory else { return }
         fightStageMemory = memory
     }

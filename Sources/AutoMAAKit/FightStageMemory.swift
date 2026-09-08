@@ -197,12 +197,15 @@ public enum FightStagePolicy {
         _ configuration: FightConfiguration,
         memory: FightStageMemory,
         clientID: UUID,
-        accountID: UUID
+        accountID: UUID,
+        preparingAnnihilation: Bool = false
     ) -> FightStageResolution {
-        guard configuration.usesCustomSettings else { return .omitted }
-        if configuration.annihilationFirst, configuration.stageStrategy != .fixed {
+        if configuration.weeklyAnnihilation.enabled,
+           preparingAnnihilation || memory.requiresRecovery(clientID: clientID, accountID: accountID),
+           !configuration.usesCustomSettings || configuration.stageStrategy != .fixed {
             return memory.stage(clientID: clientID, accountID: accountID).map(FightStageResolution.value) ?? .unavailable
         }
+        guard configuration.usesCustomSettings else { return .omitted }
         switch configuration.stageStrategy {
         case .gameCurrentOrLast:
             return .value("")

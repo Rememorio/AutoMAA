@@ -461,7 +461,6 @@ struct ActivityView: View {
 
 private struct ActivityEventRow: View {
     @EnvironmentObject private var model: AppModel
-    @State private var showsRetryConfirmation = false
     let entry: LogEntry
     let context: String?
     let drawsConnector: Bool
@@ -503,20 +502,7 @@ private struct ActivityEventRow: View {
                     DetailDisclosure(details: details)
                 }
                 if let step = model.retryStep(for: entry) {
-                    Button("处理作战结果…") { showsRetryConfirmation = true }
-                        .buttonStyle(.link).font(.caption)
-                        .disabled(!model.canRun(planID: step.planID))
-                        .confirmationDialog("处理这项理智作战", isPresented: $showsRetryConfirmation) {
-                            Button("重跑本项") { model.runPlan(step.planID, retryStep: step) }
-                            if model.canConfirmAnnihilation(step) {
-                                Button("已确认本周剿灭完成，继续常规") {
-                                    model.runPlan(step.planID, retryStep: step, confirmAnnihilation: true)
-                                }
-                            }
-                            Button("取消", role: .cancel) {}
-                        } message: {
-                            Text("\(context ?? "当前账号")。\(model.fightRetryHint(step))")
-                        }
+                    FightRecoveryButton(step: step, context: context ?? "当前账号")
                 }
             }
             .padding(.bottom, drawsConnector ? 8 : 0)

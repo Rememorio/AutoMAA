@@ -96,13 +96,13 @@ public struct MAAConfigurationWriter: Sendable {
                 "server": client.kind.serverCode,
                 "client_type": client.kind.maaTaskClientType,
             ]
+            if case let .value(stage) = fightStageResolution { value["stage"] = stage }
             if plan.fight.usesCustomSettings {
-                guard case let .value(stage) = fightStageResolution else {
+                guard case .value = fightStageResolution else {
                     throw MAAConfigurationWriterError.invalidConfiguration(
                         "「\(plan.displayName)」缺少\(client.displayName) / \(account.displayName)的常规关卡记录"
                     )
                 }
-                value["stage"] = stage
                 if let medicine = plan.fight.medicine { value["medicine"] = medicine }
                 if let medicineExpireDays = plan.fight.medicineExpireDays {
                     value["medicine_expire_days"] = medicineExpireDays

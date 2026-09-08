@@ -248,7 +248,7 @@ public struct FightConfiguration: Codable, Equatable, Sendable {
     public var stageStrategy = FightStageStrategy.gameCurrentOrLast
     public var stage = ""
     public var fallbackStage = ""
-    public var annihilationFirst = false
+    public var weeklyAnnihilation = WeeklyAnnihilationConfiguration()
     public var medicine: Int?
     public var medicineExpireDays: Int?
     public var stone: Int?
@@ -265,7 +265,7 @@ public struct FightConfiguration: Codable, Equatable, Sendable {
         stageStrategy = try values.decode(FightStageStrategy.self, forKey: .stageStrategy)
         stage = try values.decode(String.self, forKey: .stage)
         fallbackStage = try values.decodeIfPresent(String.self, forKey: .fallbackStage) ?? ""
-        annihilationFirst = try values.decodeIfPresent(Bool.self, forKey: .annihilationFirst) ?? false
+        weeklyAnnihilation = try values.decode(WeeklyAnnihilationConfiguration.self, forKey: .weeklyAnnihilation)
         medicine = try values.decodeIfPresent(Int.self, forKey: .medicine)
         medicineExpireDays = try values.decodeIfPresent(Int.self, forKey: .medicineExpireDays)
         stone = try values.decodeIfPresent(Int.self, forKey: .stone)
@@ -562,7 +562,7 @@ public struct MAAUpdateConfiguration: Codable, Equatable, Sendable {
 }
 
 public struct AppConfiguration: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = 6
+    public static let currentSchemaVersion = 7
 
     public var schemaVersion: Int
     public var cliPath: String

@@ -299,10 +299,12 @@ public struct PlanContinuation: Equatable, Sendable {
     public var hasStarted = false
 
     public init(configuration: AppConfiguration, planID: UUID, state: ExecutionState, history: [LogEntry],
+                weeklyAnnihilation: WeeklyAnnihilationState = .init(),
                 now: Date = Date(), calendar: Calendar = .current) {
         guard let plan = configuration.plans.first(where: { $0.id == planID }) else { return }
-        let state = state.dateKey == ExecutionStateStore.dateKey(for: now, calendar: calendar)
+        var state = state.dateKey == ExecutionStateStore.dateKey(for: now, calendar: calendar)
             ? state : ExecutionState(dateKey: "")
+        state.prepareWeeklyAnnihilation(plan: plan, clients: configuration.clients, weekly: weeklyAnnihilation, at: now)
         hasStarted = history.contains {
             $0.planID == planID && $0.phase == .preparing && calendar.isDate($0.timestamp, inSameDayAs: now)
         }

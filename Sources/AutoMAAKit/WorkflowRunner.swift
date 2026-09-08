@@ -123,6 +123,8 @@ public final class WorkflowRunner {
     private let diagnosticLogStore: DiagnosticLogStore
     private let stateStore: ExecutionStateStore
     private let fightStageMemoryStore: FightStageMemoryStore
+    private let weeklyAnnihilationStore: WeeklyAnnihilationStore
+    private let now: @MainActor @Sendable () -> Date
     private let noticeSink: NoticeSink?
     private let eventSink: EventSink
     private var currentPlanID: UUID?
@@ -174,6 +176,7 @@ public final class WorkflowRunner {
         maintenanceRetryDelay: Duration = UpdatePolicy.retryDelay,
         resourceProbeExecutable: URL? = nil,
         coreReleaseManifestFetcher: any MAACoreReleaseManifestFetching = MAACoreReleaseManifestClient(),
+        now: @escaping @MainActor @Sendable () -> Date = { Date() },
         noticeSink: NoticeSink? = nil,
         eventSink: @escaping EventSink = { _ in }
     ) {
@@ -190,6 +193,8 @@ public final class WorkflowRunner {
         diagnosticLogStore = DiagnosticLogStore(directories: directories)
         stateStore = ExecutionStateStore(directories: directories)
         fightStageMemoryStore = FightStageMemoryStore(directories: directories)
+        weeklyAnnihilationStore = WeeklyAnnihilationStore(directories: directories)
+        self.now = now
         self.noticeSink = noticeSink
         self.eventSink = eventSink
     }
@@ -276,9 +281,13 @@ public final class WorkflowRunner {
         _ = lease
 
         var state: ExecutionState
-        do { state = try stateStore.loadForExecution() }
+        var weeklyAnnihilation: WeeklyAnnihilationState
+        do {
+            state = try stateStore.loadForExecution()
+            weeklyAnnihilation = try weeklyAnnihilationStore.load()
+        }
         catch {
-            report.fatalError = "无法读取当日记录，请检查文件或在设置中重置断点：\(error.localizedDescription)"
+            report.fatalError = "无法读取执行记录，请检查记录文件：\(error.localizedDescription)"
             emit(.failed, report.fatalError!, 0, .error)
             return report
         }
@@ -288,6 +297,7 @@ public final class WorkflowRunner {
             state.fightResults = state.fightResults?.filter { !$0.key.hasPrefix(prefix) }
             state.fightProgress = state.fightProgress?.filter { !$0.key.hasPrefix(prefix) }
         }
+        state.prepareWeeklyAnnihilation(plan: plan, clients: configuration.clients, weekly: weeklyAnnihilation, at: now())
         if let retryStep {
             guard !state.isResolved(retryStep.key) else {
                 report.fatalError = "本项今日已处理完成，请刷新活动记录"
@@ -295,15 +305,24 @@ public final class WorkflowRunner {
                 return report
             }
             if confirmAnnihilation {
-                guard retryStep.task == .fight, plan.fight.usesCustomSettings, plan.fight.annihilationFirst,
-                      state.fightProgress?[retryStep.key]?.annihilation?.reason == .navigationUnavailable else {
+                guard retryStep.task == .fight, plan.fight.weeklyAnnihilation.enabled,
+                      let client = configuration.clients.first(where: { $0.id == retryStep.clientID }),
+                      weeklyAnnihilation.canConfirmComplete(client: client, accountID: retryStep.accountID, at: now()) else {
                     report.fatalError = "没有可确认的剿灭阶段，请刷新活动记录"
                     emit(.failed, report.fatalError!, 0, .error)
                     return report
                 }
-                state.fightProgress?[retryStep.key]?.annihilation = FightResult(
+                let confirmed = FightResult(
                     status: .unnecessary, stage: "Annihilation", reason: .confirmedWeeklyLimit
                 )
+                weeklyAnnihilation.record(confirmed, client: client, accountID: retryStep.accountID,
+                                          weekStart: GameWeek(client: client.kind, at: now()).start, at: now())
+                do { try weeklyAnnihilationStore.save(weeklyAnnihilation) }
+                catch {
+                    report.fatalError = "无法保存剿灭确认：\(error.localizedDescription)"
+                    return report
+                }
+                state.prepareWeeklyAnnihilation(plan: plan, clients: configuration.clients, weekly: weeklyAnnihilation, at: now())
                 emit(.preparing, "已手动确认本周剿灭完成，将继续常规作战", 0, .info)
             }
         }
@@ -560,7 +579,7 @@ public final class WorkflowRunner {
                         if task == .fight {
                             outcome = try await runFight(plan: plan, account: account, client: client,
                                                         configuration: configuration, state: &state,
-                                                        memory: &fightStageMemory)
+                                                        memory: &fightStageMemory, weekly: &weeklyAnnihilation)
                         } else {
                             outcome = try await runTask(
                                 task, plan: plan, account: account, client: client, configuration: configuration
@@ -1642,36 +1661,49 @@ public final class WorkflowRunner {
         client: ClientConfiguration,
         configuration: AppConfiguration,
         state: inout ExecutionState,
-        memory: inout FightStageMemory
+        memory: inout FightStageMemory,
+        weekly: inout WeeklyAnnihilationState
     ) async throws -> TaskRunOutcome {
         let key = checkpointKey(plan: plan, client: client, account: account, task: .fight)
-        let resolution = FightStagePolicy.resolve(plan.fight, memory: memory, clientID: client.id, accountID: account.id)
+        let weeklyStatus = weekly.status(for: plan.fight.weeklyAnnihilation, client: client, accountID: account.id, at: now())
+        let previous = state.fightProgress?[key]
+        let continuingRegular = previous?.annihilation?.isResolved == true && previous?.regular?.isResolved != true
+        let needsAnnihilation = (weeklyStatus == .pending || weeklyStatus == .unconfirmed) && !continuingRegular
+        let needsRegularTarget = needsAnnihilation || (previous?.annihilation != nil && previous?.regular?.isResolved != true)
+        let resolution = FightStagePolicy.resolve(plan.fight, memory: memory, clientID: client.id, accountID: account.id,
+                                                  preparingAnnihilation: needsRegularTarget)
         let stage: String
         switch resolution {
         case let .value(value): stage = value
         case .omitted: stage = ""
         case .unavailable: throw MAAConfigurationWriterError.invalidConfiguration("缺少后续常规关卡，请先设置恢复关卡")
         }
-        let twoPhases = plan.fight.usesCustomSettings && plan.fight.annihilationFirst
-        var progress = state.fightProgress?[key] ?? FightProgress(regularStage: stage)
+        var progress = previous ?? FightProgress(regularStage: stage)
         if progress.canReselectRegularStage {
             progress.reselectRegularStage(stage)
             emit(.runningTask, "\(accountText(account))：上次选关失败且未开战，本次使用当前方案的关卡与兜底设置；已完成阶段保留",
                  0, .info, client: client, account: account, task: .fight)
         }
-        if twoPhases, FightStagePolicy.regularStage(from: progress.regularStage, times: 1) == nil {
+        if needsRegularTarget,
+           FightStagePolicy.regularStage(from: progress.regularStage, times: 1) == nil {
             guard FightStagePolicy.regularStage(from: stage, times: 1) != nil else {
                 throw MAAConfigurationWriterError.invalidConfiguration("后续常规关卡无效，请设置恢复关卡或固定常规关卡")
             }
             progress.regularStage = stage
         }
         var lastOutcome: TaskRunOutcome?
-        for isAnnihilation in (twoPhases ? [true, false] : [false]) {
+        var ranRegular = false
+        for isAnnihilation in (needsAnnihilation ? [true, false] : [false]) {
             let previous = isAnnihilation ? progress.annihilation : progress.regular
             if previous?.isResolved == true { continue }
+            if isAnnihilation {
+                memory.markRecoveryRequired(clientID: client.id, accountID: account.id)
+                do { try fightStageMemoryStore.save(memory) }
+                catch { throw FightPersistenceError(details: error.localizedDescription) }
+            } else { ranRegular = true }
             var outcome = try await runFightPhase(
                 isAnnihilation: isAnnihilation, plan: plan, account: account, client: client,
-                configuration: configuration, progress: &progress, state: &state
+                configuration: configuration, progress: &progress, state: &state, weekly: &weekly
             )
             if !isAnnihilation, let result = outcome.fightResult,
                let fallback = FightStagePolicy.fallback(in: plan.fight, after: result, primaryStage: progress.regularStage) {
@@ -1688,7 +1720,7 @@ public final class WorkflowRunner {
                 }
                 outcome = try await runFightPhase(
                     isAnnihilation: false, plan: plan, account: account, client: client,
-                    configuration: configuration, progress: &progress, state: &state
+                    configuration: configuration, progress: &progress, state: &state, weekly: &weekly
                 )
             }
             lastOutcome = outcome
@@ -1699,8 +1731,12 @@ public final class WorkflowRunner {
             }
             guard result.isResolved else { return outcome }
         }
+        if needsAnnihilation, weekly.status(for: plan.fight.weeklyAnnihilation, client: client, accountID: account.id, at: now()) == .pending {
+            emit(.runningTask, "\(accountText(account))：本周剿灭尚未确认打满，后续运行将继续补打；已完成的常规任务保留",
+                 0, .info, client: client, account: account, task: .fight)
+        }
         if var lastOutcome {
-            if twoPhases, let annihilation = progress.annihilation, annihilation.times > 0,
+            if ranRegular, let annihilation = progress.annihilation, annihilation.times > 0,
                var result = lastOutcome.fightResult, result.isResolved {
                 result.status = .completed
                 result.stage = result.times > 0 ? "剿灭 + \(result.stage ?? progress.regularStage)" : "Annihilation"
@@ -1724,26 +1760,24 @@ public final class WorkflowRunner {
         client: ClientConfiguration,
         configuration: AppConfiguration,
         progress: inout FightProgress,
-        state: inout ExecutionState
+        state: inout ExecutionState,
+        weekly: inout WeeklyAnnihilationState
     ) async throws -> TaskRunOutcome {
         guard !Task.isCancelled else { throw RuntimeError.cancelled }
         let key = checkpointKey(plan: plan, client: client, account: account, task: .fight)
         let stage = isAnnihilation ? "Annihilation" : progress.fallbackStage ?? progress.regularStage
         let fallbackFrom = !isAnnihilation && progress.fallbackStage != nil ? progress.regularStage : nil
+        let weekStart = GameWeek(client: client.kind, at: now()).start
         var phasePlan = plan
-        phasePlan.fight.annihilationFirst = false
+        if isAnnihilation {
+            phasePlan.fight = FightConfiguration()
+        }
+        phasePlan.fight.weeklyAnnihilation.enabled = false
         phasePlan.fight.stageStrategy = stage.isEmpty ? .gameCurrentOrLast : .fixed
         phasePlan.fight.stage = stage
-        if isAnnihilation {
-            phasePlan.fight.medicine = nil
-            phasePlan.fight.medicineExpireDays = nil
-            phasePlan.fight.stone = nil
-            phasePlan.fight.times = nil
-            phasePlan.fight.drGrandet = false
-        }
         try MAAConfigurationWriter(directories: directories).writeTask(
             .fight, plan: phasePlan, account: account, client: client,
-            fightStageResolution: phasePlan.fight.usesCustomSettings ? .value(stage) : .omitted
+            fightStageResolution: phasePlan.fight.usesCustomSettings || !stage.isEmpty ? .value(stage) : .omitted
         )
         func record(_ result: FightResult) {
             if isAnnihilation { progress.annihilation = result }
@@ -1753,9 +1787,15 @@ public final class WorkflowRunner {
             state.record(result, for: key)
         }
         // Persist the exact attempt before dispatch, including a selected fallback.
-        record(FightResult(status: .unconfirmed, stage: stage, reason: .missingEvidence, fallbackFrom: fallbackFrom))
+        let dispatched = FightResult(status: .unconfirmed, stage: stage, reason: .missingEvidence, fallbackFrom: fallbackFrom)
+        record(dispatched)
         try persistFightState(state)
-        if plan.fight.usesCustomSettings && plan.fight.annihilationFirst {
+        if isAnnihilation || FightStagePolicy.isAnnihilation(stage) {
+            weekly.record(dispatched, client: client, accountID: account.id, weekStart: weekStart, at: now())
+            do { try weeklyAnnihilationStore.save(weekly) }
+            catch { throw FightPersistenceError(details: error.localizedDescription) }
+        }
+        if plan.fight.weeklyAnnihilation.enabled {
             emit(.runningTask, "\(accountText(account))：\(isAnnihilation ? "优先剿灭" : "常规作战")",
                  0, .info, client: client, account: account, task: .fight)
         }
@@ -1764,11 +1804,16 @@ public final class WorkflowRunner {
         result.fallbackFrom = fallbackFrom
         outcome.fightResult = result
         record(result)
-        if isAnnihilation, result.isResolved {
+        if isAnnihilation || result.kind == .annihilation || FightStagePolicy.isAnnihilation(stage) {
+            weekly.record(result, client: client, accountID: account.id, weekStart: weekStart, at: now())
+            do { try weeklyAnnihilationStore.save(weekly) }
+            catch { throw FightPersistenceError(details: error.localizedDescription) }
+        }
+        if isAnnihilation, result.isResolved, progress.regular?.isResolved != true {
             state.record(FightResult(status: .unconfirmed, stage: progress.regularStage, reason: .missingEvidence), for: key)
         }
         try persistFightState(state)
-        if plan.fight.usesCustomSettings && plan.fight.annihilationFirst {
+        if plan.fight.weeklyAnnihilation.enabled {
             emit(.runningTask, "\(accountText(account))：\(isAnnihilation ? "剿灭" : "常规作战")\(result.description)",
                  0, .info, client: client, account: account, task: .fight,
                  details: result.totalDrops.map { "总掉落：" + $0 })

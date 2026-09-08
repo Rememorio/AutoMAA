@@ -243,19 +243,14 @@ struct PlanEditorView: View {
     }
 
     private var fightCard: some View {
-        PlanTaskCard(task: .fight, enabled: $plan.fight.enabled, usesCustomSettings: $plan.fight.usesCustomSettings) {
-            Toggle("优先完成本周剿灭", isOn: $plan.fight.annihilationFirst)
-            if plan.fight.annihilationFirst {
-                Text("先使用现有理智执行当期剿灭，再刷下方常规关卡。药品、源石和指定次数仅用于常规作战。无法确认剿灭结果时暂停，可在活动记录中处理。")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+        PlanTaskCard(task: .fight, enabled: $plan.fight.enabled, usesCustomSettings: $plan.fight.usesCustomSettings,
+                     strategy: { weeklyAnnihilationSettings }) {
             Picker("关卡策略", selection: fightStageStrategy) {
                 ForEach(FightStageStrategy.allCases) { strategy in
                     Text(strategy.title).tag(strategy)
                 }
             }
-            Text(plan.fight.annihilationFirst && plan.fight.stageStrategy != .fixed
+            Text(plan.fight.weeklyAnnihilation.enabled && plan.fight.stageStrategy != .fixed
                  ? "剿灭前使用账号记录的常规关卡，或手动设置的恢复目标；不会读取剿灭后的上次关卡。"
                  : plan.fight.stageStrategy.detail)
                 .font(.caption)
@@ -278,17 +273,8 @@ struct PlanEditorView: View {
                     }
                 }
                 Toggle("手动输入关卡名", isOn: customFightStage)
-            } else if plan.fight.stageStrategy == .rememberedRegular || plan.fight.annihilationFirst {
-                VStack(alignment: .leading, spacing: 7) {
-                    Text(plan.fight.annihilationFirst ? "后续常规关卡（运行前确定）" : "账号恢复状态")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    ForEach(fightStageMemoryRows) { row in
-                        fightStageMemoryRow(row)
-                    }
-                }
-                .padding(10)
-                .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            } else if plan.fight.stageStrategy == .rememberedRegular && !plan.fight.weeklyAnnihilation.enabled {
+                fightRecoverySettings
             }
             LabeledContent("兜底关卡（可选）") {
                 TextField("如 1-7；留空关闭", text: $plan.fight.fallbackStage)
@@ -315,6 +301,47 @@ struct PlanEditorView: View {
             Divider()
             Toggle("博朗台碎石模式", isOn: $plan.fight.drGrandet)
         }
+    }
+
+    private var weeklyAnnihilationSettings: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            SettingsToggleRow(title: "每周优先剿灭", detail: "与其他参与方案共享本周完成状态", isOn: $plan.fight.weeklyAnnihilation.enabled)
+            if plan.fight.weeklyAnnihilation.enabled {
+                Picker("本周开始日", selection: $plan.fight.weeklyAnnihilation.startDay) {
+                    ForEach(ScheduleWeekday.allCases) { day in Text(day.title).tag(day) }
+                }
+                Text("按各服游戏日计算。从指定日开始，每次运行本方案时优先补打；确认本周奖励已满后跳过。剿灭只使用自然理智，不使用药品或源石。")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                ForEach(model.configuration.clients.filter(\.enabled)) { client in
+                    ForEach(client.accounts.filter(plan.includes)) { account in
+                        let status = model.weeklyAnnihilation.status(for: plan.fight.weeklyAnnihilation,
+                                                                  client: client, accountID: account.id, at: model.currentDate)
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("\(client.displayName) / \(account.displayName) · \(status.title)")
+                                .font(.caption)
+                                .foregroundStyle(status == .unconfirmed ? Color.orange : Color.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            if status == .unconfirmed {
+                                FightRecoveryButton(step: .init(planID: plan.id, clientID: client.id, accountID: account.id, task: .fight),
+                                                    context: "\(client.displayName) / \(account.displayName)")
+                            }
+                        }
+                    }
+                }
+                if !plan.fight.usesCustomSettings || plan.fight.stageStrategy != .fixed { fightRecoverySettings }
+            }
+        }
+    }
+
+    private var fightRecoverySettings: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(plan.fight.weeklyAnnihilation.enabled ? "后续常规关卡（剿灭前确定）" : "账号恢复状态")
+                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            ForEach(fightStageMemoryRows) { row in fightStageMemoryRow(row) }
+        }
+        .padding(10)
+        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
     }
 
     private var recruitCard: some View {
@@ -456,7 +483,7 @@ struct PlanEditorView: View {
                 Toggle("运行前更新识别数据", isOn: $plan.policy.hotUpdateBeforeRun)
                 Stepper("单步骤失败重试：\(plan.policy.maxRetries) 次", value: $plan.policy.maxRetries, in: 0...3)
                 Toggle("某一步失败后继续后续步骤", isOn: $plan.policy.continueAfterStepFailure)
-                Text("同一方案当天重跑会跳过已成功步骤；不同方案的完成状态彼此隔离。")
+                Text("日常完成记录按方案隔离；每周剿灭按账号共享状态，未满时可继续补打。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -799,22 +826,25 @@ private struct FightStageEditorSheet: View {
     }
 }
 
-private struct PlanTaskCard<Content: View>: View {
+private struct PlanTaskCard<Content: View, Strategy: View>: View {
     let task: TaskKind
     @Binding var enabled: Bool
     @Binding var usesCustomSettings: Bool
     let content: Content
+    let strategy: Strategy
 
     init(
         task: TaskKind,
         enabled: Binding<Bool>,
         usesCustomSettings: Binding<Bool>,
+        @ViewBuilder strategy: () -> Strategy,
         @ViewBuilder content: () -> Content
     ) {
         self.task = task
         _enabled = enabled
         _usesCustomSettings = usesCustomSettings
         self.content = content()
+        self.strategy = strategy()
     }
 
     var body: some View {
@@ -834,6 +864,7 @@ private struct PlanTaskCard<Content: View>: View {
                 }
                 VStack(alignment: .leading, spacing: 11) {
                     Divider()
+                    strategy
                     HStack {
                         Text("参数")
                             .font(.caption.weight(.semibold))
@@ -860,11 +891,17 @@ private struct PlanTaskCard<Content: View>: View {
 
     private var defaultSummary: String {
         switch task {
-        case .fight: "MAA 推荐默认：当前/上次关卡，不使用理智药或源石，不限制次数。"
+        case .fight: "MAA 推荐：不使用理智药或源石，不限制次数；未指定恢复目标时跟随游戏。"
         case .recruit: "MAA 推荐默认：4 次、不加急，自动确认 3★/4★/5★并保留支援机械。"
         case .infrast: "MAA 推荐默认：对全部设施执行常规换班，不使用无人机，上岗最低心情为 30%。"
         case .mall: "MAA 推荐默认：访友领信用并按推荐清单购物。"
         case .award: "MAA 推荐默认：只领取每日与每周任务奖励。"
         }
+    }
+}
+
+extension PlanTaskCard where Strategy == EmptyView {
+    init(task: TaskKind, enabled: Binding<Bool>, usesCustomSettings: Binding<Bool>, @ViewBuilder content: () -> Content) {
+        self.init(task: task, enabled: enabled, usesCustomSettings: usesCustomSettings, strategy: { EmptyView() }, content: content)
     }
 }

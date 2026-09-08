@@ -302,15 +302,13 @@ final class FightExecutionTests: XCTestCase {
         XCTAssertFalse(evidence.callbacks.contains("unrelated OCR text"))
     }
 
-    func testOldConfigurationAndHistoryDecodeWithoutChangingSchema() throws {
+    func testWeeklyPolicyRequiresNewSchemaWhileHistoryRemainsReadable() throws {
         let data = Data(#"{"enabled":true,"settingsMode":"custom","stageStrategy":"fixed","stage":"1-7","drGrandet":false}"#.utf8)
-        let configuration = try JSONDecoder().decode(FightConfiguration.self, from: data)
-        XCTAssertFalse(configuration.annihilationFirst)
-        XCTAssertEqual(configuration.stage, "1-7")
+        XCTAssertThrowsError(try JSONDecoder().decode(FightConfiguration.self, from: data))
         let summary = try JSONDecoder().decode(WorkflowRunSummary.self, from: Data(#"{"completedSteps":1,"failedSteps":0,"unexecutedSteps":0,"totalSteps":1}"#.utf8))
         XCTAssertEqual(summary.unconfirmedSteps, 0)
         XCTAssertEqual(summary.unnecessarySteps, 0)
-        XCTAssertEqual(AppConfiguration.currentSchemaVersion, 6)
+        XCTAssertEqual(AppConfiguration.currentSchemaVersion, 7)
     }
 
     func testNoOpDoesNotBecomeSuccessfulCheckpoint() throws {
@@ -342,16 +340,19 @@ private actor FightTestCommands: CommandRunning {
         let taskJSON: Data
         let statePath: String?
         let stateBeforeDispatch: ExecutionState
+        let weeklyBeforeDispatch: WeeklyAnnihilationState
     }
     var replies: [Reply]
     var calls: [Call] = []
     let directories: AppDirectories
     let blockStateSave: Bool
+    let blockWeeklySave: Bool
 
-    init(_ replies: [Reply], directories: AppDirectories, blockStateSave: Bool) {
+    init(_ replies: [Reply], directories: AppDirectories, blockStateSave: Bool, blockWeeklySave: Bool) {
         self.replies = replies
         self.directories = directories
         self.blockStateSave = blockStateSave
+        self.blockWeeklySave = blockWeeklySave
     }
 
     func run(executable: String, arguments: [String], environment: [String: String], timeout: TimeInterval,
@@ -360,11 +361,15 @@ private actor FightTestCommands: CommandRunning {
             try FileManager.default.removeItem(at: directories.executionState)
             try FileManager.default.createDirectory(at: directories.executionState, withIntermediateDirectories: true)
         }
+        if arguments.first == "startup", blockWeeklySave {
+            try FileManager.default.createDirectory(at: directories.weeklyAnnihilation, withIntermediateDirectories: true)
+        }
         guard arguments.first == "run" else { return command(exit: arguments.first == "dir" ? 1 : 0) }
         let name = arguments[1]
         let data = try Data(contentsOf: directories.maaConfig.appending(path: "tasks/\(name).json"))
         calls.append(Call(name: name, taskJSON: data, statePath: environment["MAA_STATE_DIR"],
-                          stateBeforeDispatch: ExecutionStateStore(directories: directories).loadForToday()))
+                          stateBeforeDispatch: ExecutionStateStore(directories: directories).loadForToday(),
+                          weeklyBeforeDispatch: try WeeklyAnnihilationStore(directories: directories).load()))
         let reply = replies.isEmpty ? Reply(result: command()) : replies.removeFirst()
         if let callbacks = reply.callbacks, let path = environment["MAA_STATE_DIR"] {
             let root = URL(filePath: path).appending(path: "debug")
@@ -400,6 +405,7 @@ private final class FightFixture {
     let account = AccountConfiguration(name: "测试账号")
     var client: ClientConfiguration
     var plan = AutomationPlan.lightRoutine
+    var now = ISO8601DateFormatter().date(from: "2026-09-09T00:00:00Z")!
     let runtime = FightTestRuntime()
     var directories: AppDirectories { AppDirectories(root: root) }
     var configuration: AppConfiguration { AppConfiguration(cliPath: "/usr/bin/true", clients: [client], plans: [plan]) }
@@ -418,18 +424,19 @@ private final class FightFixture {
         plan.award.enabled = award
         plan.fight.stageStrategy = .fixed
         plan.fight.stage = "1-7"
-        plan.fight.annihilationFirst = priority
+        plan.fight.weeklyAnnihilation.enabled = priority
         plan.policy.hotUpdateBeforeRun = false
         plan.policy.maxRetries = 2
     }
 
     func cleanup() { try? FileManager.default.removeItem(at: root) }
 
-    func run(_ replies: [FightTestCommands.Reply], retry: Bool = false, confirm: Bool = false, blockStateSave: Bool = false) async -> (WorkflowReport, [FightTestCommands.Call]) {
-        let commands = FightTestCommands(replies, directories: directories, blockStateSave: blockStateSave)
+    func run(_ replies: [FightTestCommands.Reply], retry: Bool = false, confirm: Bool = false, blockStateSave: Bool = false,
+             blockWeeklySave: Bool = false) async -> (WorkflowReport, [FightTestCommands.Call]) {
+        let commands = FightTestCommands(replies, directories: directories, blockStateSave: blockStateSave, blockWeeklySave: blockWeeklySave)
         let runner = WorkflowRunner(directories: directories, portProbe: runtime, gameController: runtime,
                                     shutdownPolicy: ClientShutdownPolicy(maaGracePeriod: 0, systemGracePeriod: 0, forcedGracePeriod: 0),
-                                    commandRunner: commands, eventSink: runtime.record)
+                                    commandRunner: commands, now: { [self] in now }, eventSink: runtime.record)
         let report = await runner.run(configuration, planID: plan.id, retryStep: retry ? step : nil, confirmAnnihilation: confirm)
         return (report, await commands.recordedCalls())
     }
@@ -437,6 +444,146 @@ private final class FightFixture {
 
 @MainActor
 final class FightWorkflowTests: XCTestCase {
+    func testWeeklyWriteFailurePreventsDispatchAndClosesTheClient() async throws {
+        let fixture = try FightFixture(priority: true)
+        defer { fixture.cleanup() }
+        let (report, calls) = await fixture.run([], blockWeeklySave: true)
+        XCTAssertNotNil(report.fatalError)
+        XCTAssertTrue(calls.isEmpty)
+        XCTAssertFalse(fixture.runtime.running)
+        XCTAssertTrue(fixture.state.needsFightConfirmation(fixture.step.key))
+    }
+    func testNoSanityCanBeRetriedWithoutRepeatingDailyRegularOrAward() async throws {
+        let fixture = try FightFixture(priority: true, award: true)
+        defer { fixture.cleanup() }
+        let (first, initial) = await fixture.run([.init(result: command(), callbacks: noSanity),
+                                                .init(result: command("Fight 1-7 1 times")), .init(result: command())])
+        XCTAssertTrue(first.isSuccess)
+        XCTAssertEqual(initial.count, 3)
+        let award = WorkflowStep(planID: fixture.plan.id, clientID: fixture.client.id, accountID: fixture.account.id, task: .award)
+        XCTAssertTrue(fixture.state.isResolved(award.key))
+        let weekly = callback("SubTaskExtraInfo", #"{"taskchain":"Fight","what":"StageDrops","details":{"annihilation_weekly_process":[1800,1800]}}"#)
+        let (second, resumed) = await fixture.run([.init(result: command(), callbacks: weekly)])
+        XCTAssertTrue(second.isSuccess)
+        XCTAssertEqual(resumed.count, 1)
+        XCTAssertEqual(try parameters(XCTUnwrap(resumed.first))["stage"] as? String, "Annihilation")
+        XCTAssertTrue(fixture.state.isResolved(award.key))
+        XCTAssertEqual(fixture.state.fightProgress?[fixture.step.key]?.regular?.times, 1)
+        let (_, third) = await fixture.run([])
+        XCTAssertTrue(third.isEmpty)
+    }
+
+    func testLightAndFullPlansShareWeeklyGoalAcrossEveryServer() async throws {
+        for kind in ClientKind.allCases {
+            let fixture = try FightFixture(priority: true)
+            defer { fixture.cleanup() }
+            fixture.client.kind = kind
+            let light = fixture.plan
+            let partial = try settlementCallbacks(stage: "Map", kind: .annihilation, weeklyProgress: [400, 1800]) + "\n" + noSanity
+            let (morning, _) = await fixture.run([.init(result: command(), callbacks: partial), .init(result: command("Fight 1-7 1 times"))])
+            XCTAssertTrue(morning.isSuccess, "\(kind)")
+            let store = WeeklyAnnihilationStore(directories: fixture.directories)
+            XCTAssertEqual(try store.load().status(for: light.fight.weeklyAnnihilation, client: fixture.client,
+                                                  accountID: fixture.account.id, at: fixture.now), .pending)
+            fixture.plan.id = UUID()
+            fixture.plan.name = "完整日常"
+            fixture.plan.fight.stage = "CE-6"
+            let full = try settlementCallbacks(stage: "Map", kind: .annihilation, weeklyProgress: [1800, 1800])
+            let (evening, calls) = await fixture.run([.init(result: command(), callbacks: full), .init(result: command("Fight CE-6 1 times"))])
+            XCTAssertTrue(evening.isSuccess, "\(kind)")
+            XCTAssertEqual(calls.count, 2)
+            let dispatched = try XCTUnwrap(calls.first).weeklyBeforeDispatch.entry(clientID: fixture.client.id, accountID: fixture.account.id)
+            XCTAssertEqual(dispatched?.result.status, .unconfirmed)
+            XCTAssertEqual(try store.load().status(for: light.fight.weeklyAnnihilation, client: fixture.client,
+                                                  accountID: fixture.account.id, at: fixture.now), .completed)
+            fixture.plan = light
+            let (_, morningAgain) = await fixture.run([])
+            XCTAssertTrue(morningAgain.isEmpty)
+            try ExecutionStateStore(directories: fixture.directories).reset()
+            let (tomorrow, next) = await fixture.run([.init(result: command("Fight 1-7 1 times"))])
+            XCTAssertTrue(tomorrow.isSuccess)
+            XCTAssertEqual(next.count, 1)
+            XCTAssertEqual(try parameters(XCTUnwrap(next.first))["stage"] as? String, "1-7")
+        }
+    }
+
+    func testUnconfirmedWeeklyAttemptBlocksAnotherPlanAndSurvivesDailyReset() async throws {
+        let fixture = try FightFixture(priority: true)
+        defer { fixture.cleanup() }
+        _ = await fixture.run([.init(result: command(timeout: true))])
+        fixture.plan.id = UUID()
+        try ExecutionStateStore(directories: fixture.directories).reset()
+        let before = fixture.runtime.launches
+        let (_, blocked) = await fixture.run([])
+        XCTAssertTrue(blocked.isEmpty)
+        XCTAssertEqual(fixture.runtime.launches, before)
+        XCTAssertTrue(fixture.state.needsFightConfirmation(fixture.step.key))
+        let (retried, calls) = await fixture.run([.init(result: command(), callbacks: noSanity),
+                                                .init(result: command("Fight 1-7 1 times"))], retry: true)
+        XCTAssertTrue(retried.isSuccess)
+        XCTAssertEqual(calls.count, 2)
+    }
+
+    func testConfirmingWeeklyLimitFromAnotherPlanIsSharedWithOriginalPlan() async throws {
+        let fixture = try FightFixture(priority: true)
+        defer { fixture.cleanup() }
+        let firstPlan = fixture.plan
+        _ = await fixture.run([.init(result: command(), callbacks: noAnnihilation)])
+        fixture.plan.id = UUID()
+        let (confirmed, calls) = await fixture.run([.init(result: command("Fight 1-7 1 times"))], retry: true, confirm: true)
+        XCTAssertTrue(confirmed.isSuccess)
+        XCTAssertEqual(calls.count, 1)
+        fixture.plan = firstPlan
+        let (original, remaining) = await fixture.run([.init(result: command("Fight 1-7 1 times"))])
+        XCTAssertTrue(original.isSuccess)
+        XCTAssertEqual(remaining.count, 1)
+        XCTAssertEqual(try parameters(XCTUnwrap(remaining.first))["stage"] as? String, "1-7")
+    }
+
+    func testBeforeStartDayRunsRegularAndNextWeekDoesNotReuseCompletion() async throws {
+        let fixture = try FightFixture(priority: true)
+        defer { fixture.cleanup() }
+        fixture.plan.fight.weeklyAnnihilation.startDay = .friday
+        let (before, first) = await fixture.run([.init(result: command("Fight 1-7 1 times"))])
+        XCTAssertTrue(before.isSuccess)
+        XCTAssertEqual(first.count, 1)
+        let store = WeeklyAnnihilationStore(directories: fixture.directories)
+        XCTAssertTrue(try store.load().entries.isEmpty)
+        fixture.now = ISO8601DateFormatter().date(from: "2026-09-11T00:00:00Z")!
+        let full = try settlementCallbacks(stage: "Map", kind: .annihilation, weeklyProgress: [1800, 1800])
+        let (_, friday) = await fixture.run([.init(result: command(), callbacks: full)])
+        XCTAssertEqual(friday.count, 1)
+        fixture.now = fixture.now.addingTimeInterval(7 * 86400)
+        try ExecutionStateStore(directories: fixture.directories).reset()
+        let (newWeek, next) = await fixture.run([.init(result: command(), callbacks: noSanity), .init(result: command("Fight 1-7 1 times"))])
+        XCTAssertTrue(newWeek.isSuccess)
+        XCTAssertEqual(next.count, 2)
+        XCTAssertEqual(try store.load().status(for: fixture.plan.fight.weeklyAnnihilation, client: fixture.client,
+                                              accountID: fixture.account.id, at: fixture.now), .pending)
+    }
+
+    func testDisabledPlanDoesNotTakeOverPendingWeeklyWork() async throws {
+        let fixture = try FightFixture(priority: true)
+        defer { fixture.cleanup() }
+        _ = await fixture.run([.init(result: command(), callbacks: noSanity), .init(result: command("Fight 1-7 1 times"))])
+        fixture.plan.id = UUID()
+        fixture.plan.fight.weeklyAnnihilation.enabled = false
+        let (_, calls) = await fixture.run([.init(result: command("Fight 1-7 1 times"))])
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(try parameters(XCTUnwrap(calls.first))["stage"] as? String, "1-7")
+    }
+
+    func testUnreadableWeeklyStateStopsBeforeLaunchingAnyClient() async throws {
+        let fixture = try FightFixture(priority: true)
+        defer { fixture.cleanup() }
+        try fixture.directories.prepare()
+        try Data("invalid".utf8).write(to: fixture.directories.weeklyAnnihilation)
+        let (report, calls) = await fixture.run([])
+        XCTAssertNotNil(report.fatalError)
+        XCTAssertTrue(calls.isEmpty)
+        XCTAssertEqual(fixture.runtime.launches, 0)
+    }
+
     func testUnavailableRegularStageCanChangeWithoutRepeatingAnnihilation() async throws {
         let fixture = try FightFixture(priority: true)
         defer { fixture.cleanup() }
@@ -542,7 +689,7 @@ final class FightWorkflowTests: XCTestCase {
         XCTAssertEqual(calls.count, 3)
         XCTAssertEqual(fixture.state.fightProgress?[fixture.step.key]?.regularStage, "AP-5")
         XCTAssertTrue(try store.load().requiresRecovery(clientID: fixture.client.id, accountID: fixture.account.id))
-        fixture.plan.fight.annihilationFirst = false
+        fixture.plan.fight.weeklyAnnihilation.enabled = false
         try ExecutionStateStore(directories: fixture.directories).save(.init(dateKey: ExecutionStateStore.todayKey))
         let (restored, next) = await fixture.run([.init(result: command("Fight AP-5 1 times"))])
         XCTAssertTrue(restored.isSuccess)
@@ -837,16 +984,26 @@ final class FightWorkflowTests: XCTestCase {
         XCTAssertEqual(fixture.runtime.launches, 0)
     }
 
-    func testRecommendedModePreservesPriorityOptionWithoutRunningTwoPhases() async throws {
+    func testRecommendedModeRunsWeeklyPolicyWithoutUsingDormantCustomParameters() async throws {
         let fixture = try FightFixture(priority: true)
         defer { fixture.cleanup() }
         fixture.plan.fight.usesCustomSettings = false
-        let (report, calls) = await fixture.run([.init(result: command("Fight 1-7 1 times"))])
+        fixture.plan.fight.medicine = -1
+        fixture.plan.fight.stone = -1
+        fixture.plan.fight.times = -1
+        var memory = FightStageMemory()
+        memory.remember("1-7", clientID: fixture.client.id, accountID: fixture.account.id)
+        try FightStageMemoryStore(directories: fixture.directories).save(memory)
+        let (report, calls) = await fixture.run([.init(result: command(), callbacks: noSanity), .init(result: command("Fight 1-7 1 times"))])
         XCTAssertTrue(report.isSuccess)
-        XCTAssertEqual(calls.count, 1)
-        XCTAssertNil(try parameters(calls[0])["stage"])
-        XCTAssertTrue(fixture.plan.fight.annihilationFirst)
-        XCTAssertNil(fixture.state.fightProgress?[fixture.step.key]?.annihilation)
+        XCTAssertEqual(calls.count, 2)
+        XCTAssertEqual(try parameters(XCTUnwrap(calls.first))["stage"] as? String, "Annihilation")
+        XCTAssertEqual(try parameters(XCTUnwrap(calls.last))["stage"] as? String, "1-7")
+        for call in calls {
+            for field in ["medicine", "medicine_expire_days", "stone", "times", "series"] { XCTAssertNil(try parameters(call)[field]) }
+        }
+        XCTAssertTrue(fixture.plan.fight.weeklyAnnihilation.enabled)
+        XCTAssertEqual(fixture.state.fightProgress?[fixture.step.key]?.annihilation?.reason, .insufficientSanity)
         XCTAssertNil(fixture.state.fightProgress?[fixture.step.key]?.fallbackStage)
     }
 
