@@ -1726,6 +1726,8 @@ public final class WorkflowRunner {
                 result.status = .completed
                 result.stage = result.times > 0 ? "剿灭 + \(result.stage ?? progress.regularStage)" : "Annihilation"
                 result.times += annihilation.times
+                let unrecognized = (result.unrecognizedSettlements ?? 0) + (annihilation.unrecognizedSettlements ?? 0)
+                result.unrecognizedSettlements = unrecognized > 0 ? unrecognized : nil
                 result.kind = result.times == annihilation.times ? .annihilation : nil
                 lastOutcome.fightResult = result
             }

@@ -34,6 +34,84 @@ private func settlementCallbacks(stage: String?, kind: FightKind?, times: Int = 
 }
 
 final class FightExecutionTests: XCTestCase {
+    func testBatchSizeIsCountedOnlyAfterSettlementWhenDropOCRHasNoCount() {
+        var observation = FightObservation()
+        let drops = stageDrops.replacingOccurrences(of: "\"cur_times\":1,", with: "")
+        for _ in 0..<3 {
+            observation.consume(callback("SubTaskExtraInfo", #"{"taskchain":"Fight","what":"FightTimes","details":{"series":6}}"#))
+            observation.consume(battleStart)
+            observation.consume(drops)
+        }
+        let result = observation.result(for: command("Fight 1-7 18 times"), configuredStage: "1-7")
+        XCTAssertEqual(result.times, 18)
+        XCTAssertNil(result.unrecognizedSettlements)
+        XCTAssertEqual(result.status, .completed)
+        observation.consume(callback("SubTaskExtraInfo", #"{"taskchain":"Fight","what":"FightTimes","details":{"series":6}}"#))
+        observation.consume(battleStart)
+        let interrupted = observation.result(for: command("Fight 1-7 24 times"), configuredStage: "1-7")
+        XCTAssertEqual(interrupted.times, 18)
+        XCTAssertEqual(interrupted.status, .unconfirmed)
+    }
+
+    func testSettlementOCRWinsOverSelectedSeriesAndBatchSizeDoesNotLeak() {
+        var observation = FightObservation()
+        observation.consume(callback("SubTaskExtraInfo", #"{"taskchain":"Fight","what":"FightTimes","details":{"series":6}}"#))
+        observation.consume(battleStart)
+        observation.consume(stageDrops.replacingOccurrences(of: "\"cur_times\":1", with: "\"cur_times\":3"))
+        observation.consume(battleStart)
+        observation.consume(stageDrops.replacingOccurrences(of: "\"cur_times\":1,", with: ""))
+        let result = observation.result(for: command(), configuredStage: nil)
+        XCTAssertEqual(result.times, 4)
+        XCTAssertEqual(result.unrecognizedSettlements, 1)
+        XCTAssertTrue(result.description.contains("至少 4"))
+    }
+
+    func testUnrecognizedOrInvalidSeriesNeverPretendsToBeAnExactSingleBattle() {
+        for series in [-1, 0, 11] {
+            var observation = FightObservation()
+            observation.consume(callback("SubTaskExtraInfo", "{\"taskchain\":\"Fight\",\"what\":\"FightTimes\",\"details\":{\"series\":\(series)}}"))
+            observation.consume(battleStart)
+            observation.consume(stageDrops.replacingOccurrences(of: "\"cur_times\":1,", with: ""))
+            let result = observation.result(for: command(), configuredStage: nil)
+            XCTAssertEqual(result.status, .completed)
+            XCTAssertEqual(result.unrecognizedSettlements, 1)
+        }
+    }
+
+    func testSeriesSelectionReportsInsufficientSanityWithoutNoStoneCallback() {
+        for (sanity, cost, series) in [(27, 90, 3), (1, 36, 6)] {
+            var observation = FightObservation()
+            observation.consume(stageDrops)
+            observation.consume(callback("SubTaskExtraInfo", "{\"taskchain\":\"Fight\",\"what\":\"SanityBeforeStage\",\"details\":{\"current_sanity\":\(sanity)}}"))
+            observation.consume(callback("SubTaskExtraInfo", "{\"taskchain\":\"Fight\",\"what\":\"FightTimes\",\"details\":{\"sanity_cost\":\(cost),\"series\":\(series)}}"))
+            XCTAssertEqual(observation.result(for: command(), configuredStage: nil).reason, .insufficientSanity)
+            XCTAssertEqual(observation.result(for: command(timeout: true), configuredStage: nil).status, .unconfirmed)
+        }
+    }
+
+    func testInsufficientSanityUsesSingleBattleCostAndFreshPairedObservations() {
+        var observation = FightObservation()
+        let sanity = callback("SubTaskExtraInfo", #"{"taskchain":"Fight","what":"SanityBeforeStage","details":{"current_sanity":27}}"#)
+        let batch = callback("SubTaskExtraInfo", #"{"taskchain":"Fight","what":"FightTimes","details":{"sanity_cost":36,"series":6}}"#)
+        observation.consume(sanity)
+        observation.consume(batch)
+        XCTAssertNotEqual(observation.result(for: command(), configuredStage: nil).reason, .insufficientSanity)
+        observation.consume(sanity.replacingOccurrences(of: ":27", with: ":1"))
+        observation.consume(batch)
+        XCTAssertEqual(observation.result(for: command(), configuredStage: nil).status, .unnecessary)
+        observation.consume(batch)
+        XCTAssertEqual(observation.result(for: command(), configuredStage: nil).status, .unconfirmed)
+    }
+
+    func testFinishedCountWithoutSettlementNeverBecomesSuccessfulCheckpoint() {
+        var observation = FightObservation()
+        observation.consume(callback("SubTaskExtraInfo", #"{"taskchain":"Fight","what":"FightTimes","details":{"times_finished":6}}"#))
+        XCTAssertEqual(observation.result(for: command(), configuredStage: nil).status, .unconfirmed)
+        observation.consume(stageDrops)
+        observation.consume(callback("SubTaskExtraInfo", #"{"taskchain":"Fight","what":"FightTimes","details":{"times_finished":1,"finished":true}}"#))
+        XCTAssertEqual(observation.result(for: command(), configuredStage: nil).reason, .timesLimit)
+    }
+
     func testAnnihilationClassificationDoesNotDependOnServerLanguageOrWeeklyOCR() throws {
         for name in FightStageMemoryTests.mapNames {
             for progress: [Int]? in [nil, [320, 1800], [1800, 1800]] {

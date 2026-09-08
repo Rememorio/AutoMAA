@@ -9,11 +9,12 @@ public enum FightKind: String, Codable, Sendable {
 }
 
 public enum FightStopReason: String, Codable, Sendable {
-    case insufficientSanity, weeklyLimit, confirmedWeeklyLimit, navigationUnavailable, interruptedBattle, missingEvidence, commandFailed
+    case insufficientSanity, timesLimit, weeklyLimit, confirmedWeeklyLimit, navigationUnavailable, interruptedBattle, missingEvidence, commandFailed
 
     public var title: String {
         switch self {
         case .insufficientSanity: "理智不足"
+        case .timesLimit: "已达到指定次数"
         case .weeklyLimit: "本周剿灭奖励已满"
         case .confirmedWeeklyLimit: "已手动确认本周剿灭完成"
         case .navigationUnavailable: "未能确认剿灭入口；请检查本周奖励或关卡页面"
@@ -31,15 +32,18 @@ public struct FightResult: Codable, Equatable, Sendable {
     public var reason: FightStopReason?
     public var totalDrops: String?
     public var kind: FightKind?
+    public var unrecognizedSettlements: Int?
 
     public init(status: FightResultStatus, stage: String? = nil, times: Int = 0,
-                reason: FightStopReason? = nil, totalDrops: String? = nil, kind: FightKind? = nil) {
+                reason: FightStopReason? = nil, totalDrops: String? = nil, kind: FightKind? = nil,
+                unrecognizedSettlements: Int? = nil) {
         self.status = status
         self.stage = stage
         self.times = times
         self.reason = reason
         self.totalDrops = totalDrops
         self.kind = kind
+        self.unrecognizedSettlements = unrecognizedSettlements
     }
 
     public var isResolved: Bool { status == .completed || status == .unnecessary }
@@ -51,7 +55,7 @@ public struct FightResult: Codable, Equatable, Sendable {
         case .unconfirmed: "结果未确认"
         case .failed: "失败"
         }
-        let count = times > 0 ? "（\(stage ?? "作战") × \(times)）" : ""
+        let count = times > 0 ? "（\(stage ?? "作战") × \((unrecognizedSettlements ?? 0) > 0 ? "至少 " : "")\(times)）" : ""
         return label + count + (reason.map { " · \($0.title)" } ?? "")
     }
 }
@@ -92,6 +96,12 @@ struct FightObservation: Sendable {
     private var chainFailed = false
     private var settlementKind: FightKind?
     private var kind: FightKind?
+    private var nextSeries: Int?
+    private var activeSeries: Int?
+    private var unrecognizedSettlements = 0
+    private var sanityBeforeStage: Int?
+    private var insufficientAtLastCheck = false
+    private var timesLimit = false
 
     mutating func consume(_ line: String) {
         guard let marker = line.range(of: "Assistant::append_callback | "),
@@ -110,6 +120,9 @@ struct FightObservation: Sendable {
             if task == "StartButton2" || task == "AnnihilationConfirm" {
                 awaitingSettlement = true
                 settlementKind = nil
+                activeSeries = nextSeries
+                nextSeries = nil
+                insufficientAtLastCheck = false
             }
             if inFightLoop, task == "NoStone" || task == "CloseStonePageExceeded" { insufficientSanity = true }
         }
@@ -123,19 +136,37 @@ struct FightObservation: Sendable {
             if task == "EndOfAction" { settlementKind = .regular }
         }
         guard kind == "SubTaskExtraInfo" else { return }
+        if event["what"] as? String == "SanityBeforeStage" {
+            sanityBeforeStage = (details["current_sanity"] as? Int).flatMap { $0 >= 0 ? $0 : nil }
+            insufficientAtLastCheck = false
+        }
+        if event["what"] as? String == "FightTimes" {
+            insufficientAtLastCheck = false
+            nextSeries = (details["series"] as? Int).flatMap { (1...10).contains($0) ? $0 : nil }
+            if let sanity = sanityBeforeStage, let series = nextSeries,
+               let cost = details["sanity_cost"] as? Int, cost > 0, cost % series == 0 {
+                insufficientAtLastCheck = sanity < cost / series
+            }
+            sanityBeforeStage = nil
+            timesLimit = details["finished"] as? Bool == true
+        }
         if inFightLoop, event["what"] as? String == "ExceededLimit",
            ["MedicineConfirm", "StoneConfirm"].contains(task) { insufficientSanity = true }
         guard event["what"] as? String == "StageDrops" else { return }
         let limit = details["annihilation_weekly_process"] as? [Int]
         let hasWeeklyProgress = limit.map { $0.count == 2 && $0[0] >= 0 && $0[1] > 0 } == true
         if details["stage"] is [String: Any], details["drops"] is [[String: Any]] {
-            // cur_times belongs to this settlement; CLI summary times count battle starts.
-            times += max(1, details["cur_times"] as? Int ?? 1)
+            // Pair the batch size with its settlement; a CLI start count alone is never completion evidence.
+            let recognized = (details["cur_times"] as? Int).flatMap { (1...10).contains($0) ? $0 : nil }
+            let count = recognized ?? activeSeries ?? (hasWeeklyProgress || settlementKind == .annihilation ? 1 : nil)
+            times += count ?? 1
+            if count == nil { unrecognizedSettlements += 1 }
             let value = (details["stage"] as? [String: Any])?["stageCode"] as? String
             stage = value?.isEmpty == false ? value : nil
             self.kind = hasWeeklyProgress ? .annihilation : settlementKind
             settlementKind = nil
             awaitingSettlement = false
+            activeSeries = nil
         }
         if hasWeeklyProgress, let limit, limit[0] >= limit[1] { weeklyLimit = true }
     }
@@ -147,7 +178,8 @@ struct FightObservation: Sendable {
         // An explicit annihilation command can conservatively require recovery even on older callbacks.
         let kind = kind ?? (configuredStage.map(FightStagePolicy.isAnnihilation) == true ? .annihilation : nil)
         func result(_ status: FightResultStatus, _ reason: FightStopReason? = nil) -> FightResult {
-            FightResult(status: status, stage: stage, times: count, reason: reason, totalDrops: summary?.totalDrops, kind: kind)
+            FightResult(status: status, stage: stage, times: count, reason: reason, totalDrops: summary?.totalDrops, kind: kind,
+                        unrecognizedSettlements: unrecognizedSettlements > 0 ? unrecognizedSettlements : nil)
         }
         if command.cancelled || command.timedOut || awaitingSettlement || offline
             || StartupFailureClassifier.isGameOffline(command.combinedOutput) {
@@ -158,9 +190,11 @@ struct FightObservation: Sendable {
                 ? result(.unconfirmed, .interruptedBattle) : result(.failed, .commandFailed)
         }
         if navigationUnavailable { return result(.unconfirmed, .navigationUnavailable) }
-        if count > 0 { return result(.completed, weeklyLimit ? .weeklyLimit : insufficientSanity ? .insufficientSanity : nil) }
+        let insufficient = insufficientSanity || insufficientAtLastCheck
+        if count > 0 { return result(.completed, weeklyLimit ? .weeklyLimit : timesLimit ? .timesLimit : insufficient ? .insufficientSanity : nil) }
         if weeklyLimit { return result(.unnecessary, .weeklyLimit) }
-        if insufficientSanity { return result(.unnecessary, .insufficientSanity) }
+        if timesLimit { return result(.unnecessary, .timesLimit) }
+        if insufficient { return result(.unnecessary, .insufficientSanity) }
         return result(.unconfirmed, .missingEvidence)
     }
 }
