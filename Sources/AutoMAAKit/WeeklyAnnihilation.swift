@@ -84,7 +84,8 @@ public struct WeeklyAnnihilationState: Codable, Equatable, Sendable {
     public func canConfirmComplete(client: ClientConfiguration, accountID: UUID, at date: Date = Date()) -> Bool {
         guard let entry = entry(clientID: client.id, accountID: accountID) else { return false }
         return entry.clientKind == client.kind && entry.weekStart == GameWeek(client: client.kind, at: date).start
-            && entry.result.status == .unconfirmed && entry.result.reason == .navigationUnavailable
+            && [.unconfirmed, .unnecessary].contains(entry.result.status)
+            && entry.result.times == 0 && entry.result.reason == .navigationUnavailable
     }
 
     public mutating func record(_ result: FightResult, client: ClientConfiguration, accountID: UUID,
@@ -119,6 +120,23 @@ public struct WeeklyAnnihilationStore: Sendable {
         try encoder.encode(state).write(to: directories.weeklyAnnihilation, options: .atomic)
     }
 
+    /// A confirmation updates only the weekly record; it never dispatches a workflow.
+    @discardableResult
+    public func confirmComplete(client: ClientConfiguration, accountID: UUID, at date: Date = Date()) throws -> WeeklyAnnihilationState {
+        try directories.prepare()
+        let lock = try ProcessLock(url: directories.lock)
+        return try withExtendedLifetime(lock) {
+            var state = try load()
+            guard state.canConfirmComplete(client: client, accountID: accountID, at: date) else {
+                throw WeeklyAnnihilationConfirmationError.noCurrentAttempt
+            }
+            state.record(.init(status: .unnecessary, stage: "Annihilation", reason: .confirmedWeeklyLimit),
+                         client: client, accountID: accountID, weekStart: GameWeek(client: client.kind, at: date).start, at: date)
+            try save(state)
+            return state
+        }
+    }
+
     private func validate(_ state: WeeklyAnnihilationState) throws {
         var keys: Set<String> = []
         for entry in state.entries {
@@ -129,6 +147,12 @@ public struct WeeklyAnnihilationStore: Sendable {
             }
         }
     }
+}
+
+public enum WeeklyAnnihilationConfirmationError: LocalizedError {
+    case noCurrentAttempt
+
+    public var errorDescription: String? { "本周剿灭状态已变化，请刷新后重新检查" }
 }
 
 extension ExecutionState {

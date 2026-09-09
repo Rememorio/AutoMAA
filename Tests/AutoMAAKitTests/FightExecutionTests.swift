@@ -15,6 +15,8 @@ private let stageDrops = callback("SubTaskExtraInfo", #"{"taskchain":"Fight","wh
 private let noSanity = callback("SubTaskStart", #"{"taskchain":"Fight","first":["FightBegin"],"details":{"task":"NoStone"}}"#)
 private let noAnnihilation = callback("SubTaskError", #"{"taskchain":"Fight","first":["Annihilation"],"pre_task":""}"#)
 private let chainStart = callback("TaskChainStart", #"{"taskchain":"Fight"}"#)
+private let closedAnnihilationEntrance = chainStart + "\n" + noAnnihilation + "\n"
+    + callback("TaskChainCompleted", #"{"taskchain":"Fight"}"#)
 private let navigationFailure = chainStart + "\n" + callback("SubTaskError", #"{"taskchain":"Fight","subtask":"StageNavigationTask"}"#)
 private let lastStageFailure = chainStart + "\n" + callback("SubTaskError", #"{"taskchain":"Fight","subtask":"ProcessTask","first":["LastOrCurBattleBegin"],"pre_task":"Fight@GoLastBattle"}"#)
 
@@ -37,6 +39,23 @@ private func settlementCallbacks(stage: String?, kind: FightKind?, times: Int = 
 }
 
 final class FightExecutionTests: XCTestCase {
+    func testClosedAnnihilationEntranceOnlySkipsWhenTheCompleteAttemptNeverEnteredBattle() {
+        var observation = FightObservation()
+        closedAnnihilationEntrance.components(separatedBy: .newlines).forEach { observation.consume($0) }
+        let result = observation.result(for: command(), configuredStage: "Annihilation")
+        XCTAssertEqual(result.status, .unnecessary)
+        XCTAssertEqual(result.reason, .navigationUnavailable)
+        for evidence in [battleStart, stageDrops, noSanity,
+                         callback("SubTaskStart", #"{"taskchain":"Fight","details":{"task":"PRTS1"}}"#)] {
+            var unsafe = observation
+            unsafe.consume(evidence)
+            XCTAssertEqual(unsafe.result(for: command(), configuredStage: "Annihilation").status, .unconfirmed)
+        }
+        for command in [command(timeout: true), command(cancelled: true), command("GameOffline"),
+                        command("Fight Annihilation 1 times")] {
+            XCTAssertEqual(observation.result(for: command, configuredStage: "Annihilation").status, .unconfirmed)
+        }
+    }
     func testUnavailableStageRequiresNavigationFailureBeforeAnyFightEvidence() {
         for failure in [navigationFailure, lastStageFailure] {
             var observation = FightObservation()
@@ -431,19 +450,41 @@ private final class FightFixture {
 
     func cleanup() { try? FileManager.default.removeItem(at: root) }
 
-    func run(_ replies: [FightTestCommands.Reply], retry: Bool = false, confirm: Bool = false, blockStateSave: Bool = false,
+    func run(_ replies: [FightTestCommands.Reply], retry: Bool = false, blockStateSave: Bool = false,
              blockWeeklySave: Bool = false) async -> (WorkflowReport, [FightTestCommands.Call]) {
         let commands = FightTestCommands(replies, directories: directories, blockStateSave: blockStateSave, blockWeeklySave: blockWeeklySave)
         let runner = WorkflowRunner(directories: directories, portProbe: runtime, gameController: runtime,
                                     shutdownPolicy: ClientShutdownPolicy(maaGracePeriod: 0, systemGracePeriod: 0, forcedGracePeriod: 0),
                                     commandRunner: commands, now: { [self] in now }, eventSink: runtime.record)
-        let report = await runner.run(configuration, planID: plan.id, retryStep: retry ? step : nil, confirmAnnihilation: confirm)
+        let report = await runner.run(configuration, planID: plan.id, retryStep: retry ? step : nil)
         return (report, await commands.recordedCalls())
     }
 }
 
 @MainActor
 final class FightWorkflowTests: XCTestCase {
+    func testClosedEntranceContinuesRegularAndOtherTasksWithoutCompletingTheWeek() async throws {
+        for kind in ClientKind.allCases {
+            let fixture = try FightFixture(priority: true, award: true)
+            defer { fixture.cleanup() }
+            fixture.client.kind = kind
+            let (report, calls) = await fixture.run([
+                .init(result: command(), callbacks: closedAnnihilationEntrance),
+                .init(result: command("Fight 1-7 1 times")), .init(result: command())
+            ])
+            XCTAssertTrue(report.isSuccess)
+            XCTAssertEqual(calls.count, 3)
+            XCTAssertFalse(fixture.runtime.running)
+            XCTAssertTrue(fixture.runtime.events.contains { $0.log.level == .warning && $0.log.message.contains("剿灭本次跳过") })
+            let weekly = try WeeklyAnnihilationStore(directories: fixture.directories).load()
+            XCTAssertEqual(weekly.status(for: fixture.plan.fight.weeklyAnnihilation, client: fixture.client,
+                                         accountID: fixture.account.id, at: fixture.now), .pending)
+            XCTAssertTrue(weekly.canConfirmComplete(client: fixture.client, accountID: fixture.account.id, at: fixture.now))
+            let (_, retry) = await fixture.run([.init(result: command(), callbacks: closedAnnihilationEntrance)])
+            XCTAssertEqual(retry.count, 1)
+            XCTAssertEqual(try parameters(XCTUnwrap(retry.first))["stage"] as? String, "Annihilation")
+        }
+    }
     func testWeeklyWriteFailurePreventsDispatchAndClosesTheClient() async throws {
         let fixture = try FightFixture(priority: true)
         defer { fixture.cleanup() }
@@ -530,7 +571,8 @@ final class FightWorkflowTests: XCTestCase {
         let firstPlan = fixture.plan
         _ = await fixture.run([.init(result: command(), callbacks: noAnnihilation)])
         fixture.plan.id = UUID()
-        let (confirmed, calls) = await fixture.run([.init(result: command("Fight 1-7 1 times"))], retry: true, confirm: true)
+        try WeeklyAnnihilationStore(directories: fixture.directories).confirmComplete(client: fixture.client, accountID: fixture.account.id, at: fixture.now)
+        let (confirmed, calls) = await fixture.run([.init(result: command("Fight 1-7 1 times"))])
         XCTAssertTrue(confirmed.isSuccess)
         XCTAssertEqual(calls.count, 1)
         fixture.plan = firstPlan
@@ -880,7 +922,8 @@ final class FightWorkflowTests: XCTestCase {
         let (initial, calls) = await fixture.run([.init(result: command(), callbacks: noAnnihilation)])
         XCTAssertEqual(initial.unconfirmedSteps, 1)
         XCTAssertEqual(calls.count, 1)
-        let (confirmed, remaining) = await fixture.run([.init(result: command("Fight 1-7 1 times"))], retry: true, confirm: true)
+        try WeeklyAnnihilationStore(directories: fixture.directories).confirmComplete(client: fixture.client, accountID: fixture.account.id, at: fixture.now)
+        let (confirmed, remaining) = await fixture.run([.init(result: command("Fight 1-7 1 times"))])
         XCTAssertTrue(confirmed.isSuccess)
         XCTAssertEqual(remaining.count, 1)
         XCTAssertEqual(try parameters(remaining[0])["stage"] as? String, "1-7")
@@ -921,9 +964,10 @@ final class FightWorkflowTests: XCTestCase {
         let fixture = try FightFixture(priority: true)
         defer { fixture.cleanup() }
         _ = await fixture.run([.init(result: command(timeout: true))])
-        let (report, calls) = await fixture.run([], retry: true, confirm: true)
-        XCTAssertNotNil(report.fatalError)
-        XCTAssertTrue(calls.isEmpty)
+        let launches = fixture.runtime.launches
+        XCTAssertThrowsError(try WeeklyAnnihilationStore(directories: fixture.directories).confirmComplete(
+            client: fixture.client, accountID: fixture.account.id, at: fixture.now))
+        XCTAssertEqual(fixture.runtime.launches, launches)
     }
 
     func testContinuationIncludesUnattemptedFailuresAndIgnoresOtherDaysAndPlans() throws {

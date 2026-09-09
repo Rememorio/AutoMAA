@@ -121,15 +121,19 @@ struct ActivityView: View {
     private var activityContent: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: PageLayout.sectionSpacing) {
-                explanation
+                if let planID = model.currentPlanID { currentPlanProgress(planID) }
 
                 if model.isWorkflowRunning {
                     currentActivity
                     if !displayedSessions.isEmpty {
-                        Text("历史运行")
+                        Text("历史记录")
                             .font(.headline)
                             .padding(.top, 4)
                     }
+                }
+
+                if !model.isWorkflowRunning, !displayedSessions.isEmpty {
+                    Text("历史记录").font(.headline)
                 }
 
                 if displayedSessions.isEmpty {
@@ -171,17 +175,54 @@ struct ActivityView: View {
         }
     }
 
-    private var explanation: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "info.circle.fill")
-                .foregroundStyle(Color.maaAccent)
-                .padding(.top, 1)
-            Text("按每次运行整理进度与结果。“需留意”仅显示警告和错误，完整输出可从右上角“更多”查看诊断日志。")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+    private func currentPlanProgress(_ planID: UUID) -> some View {
+        let progress = model.continuation(for: planID)
+        return Panel {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("当前待办").font(.headline)
+                    Spacer()
+                    Picker("方案", selection: Binding(get: { planID }, set: { model.selectCurrentPlan($0) })) {
+                        ForEach(model.configuration.plans) { plan in Text(plan.displayName).tag(plan.id) }
+                    }
+                    .fixedSize()
+                    .disabled(model.isWorkflowRunning)
+                }
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 14) {
+                        progressDescription(progress)
+                        Spacer()
+                        PlanRunButton(planID: planID)
+                    }
+                    VStack(alignment: .leading, spacing: 10) {
+                        progressDescription(progress)
+                        PlanRunButton(planID: planID)
+                    }
+                }
+                ForEach(progress.fightRecoveryItems) { item in
+                    Divider()
+                    FightRecoveryRow(item: item, context: recoveryContext(item.step))
+                }
+            }
+        }
+    }
+
+    private func progressDescription(_ progress: PlanContinuation) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("\(progress.resolved) 项已处理 · \(progress.pending) 项可继续 · \(progress.unconfirmed) 项待确认")
+                .font(.callout).monospacedDigit()
+            Text(progress.unconfirmed > 0
+                 ? "继续其他任务会保留待确认作战。可先核实下方结果，再决定是否继续。"
+                 : "保留今日已处理的任务，每周剿灭按账号共享进度。")
+                .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func recoveryContext(_ step: WorkflowStep) -> String {
+        guard let client = model.configuration.clients.first(where: { $0.id == step.clientID }),
+              let account = client.accounts.first(where: { $0.id == step.accountID }) else { return "当前账号" }
+        return "\(client.displayName) / \(account.displayName)"
     }
 
     private var currentActivity: some View {
@@ -354,36 +395,33 @@ struct ActivityView: View {
             }
 
             Spacer()
-            if !isCurrent, Calendar.current.isDateInToday(session.startedAt), let planID = session.planID,
-               model.continuation(for: planID).hasStarted, model.continuation(for: planID).pending > 0 {
-                PlanRunButton(planID: planID, controlSize: .small)
-            }
         }
         .padding(.trailing, 8)
     }
 
     private func sessionBadges(_ session: ActivitySession) -> some View {
-        HStack(spacing: 6) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), alignment: .leading)], alignment: .leading, spacing: 6) {
             if let information = session.updateInformation {
                 Button("更新内容") { model.updateDetailsRequest = .maa(information) }
                     .buttonStyle(.link)
                     .font(.caption)
             }
             if let summary = session.runSummary {
-                sessionBadge("\(summary.completedSteps)/\(summary.totalSteps) 完成", color: .green)
+                sessionBadge("\(summary.completedSteps + summary.unnecessarySteps)/\(summary.totalSteps) 已处理", color: .secondary)
                 if summary.unnecessarySteps > 0 { sessionBadge("\(summary.unnecessarySteps) 无需执行", color: .secondary) }
                 if summary.unconfirmedSteps > 0 { sessionBadge("\(summary.unconfirmedSteps) 未确认", color: .orange) }
+                if summary.failedSteps > 0 { sessionBadge("\(summary.failedSteps) 失败", color: .red) }
             } else if session.completedTaskCount > 0 {
                 sessionBadge("\(session.completedTaskCount) 完成", color: .green)
             }
             if session.unexecutedTaskCount > 0 {
                 sessionBadge("\(session.unexecutedTaskCount) 未执行", color: .orange)
             }
-            if session.warningCount > 0 {
-                sessionBadge("\(session.warningCount) 警告", color: .orange)
+            if session.warningCount > 0, session.runSummary?.isPartial != true {
+                sessionBadge("有提醒", color: .orange)
             }
-            if session.errorCount > 0 {
-                sessionBadge("\(session.errorCount) 错误", color: .red)
+            if session.errorCount > 0, (session.runSummary?.failedSteps ?? 0) == 0 {
+                sessionBadge("有错误", color: .red)
             }
         }
     }
@@ -427,7 +465,7 @@ struct ActivityView: View {
     }
 
     private func sessionStatus(session: ActivitySession, phase: RunnerPhase?, level: LogLevel) -> String {
-        if session.runSummary?.isPartial == true { return "部分完成，需处理" }
+        if session.runSummary?.isPartial == true { return "当次部分完成" }
         if phase == .completed, level == .warning { return "完成，需留意" }
         if let phase { return phase.displayName }
         return switch level {
@@ -460,7 +498,6 @@ struct ActivityView: View {
 }
 
 private struct ActivityEventRow: View {
-    @EnvironmentObject private var model: AppModel
     let entry: LogEntry
     let context: String?
     let drawsConnector: Bool
@@ -500,9 +537,6 @@ private struct ActivityEventRow: View {
 
                 if let details = entry.details, !details.isEmpty {
                     DetailDisclosure(details: details)
-                }
-                if let step = model.retryStep(for: entry) {
-                    FightRecoveryButton(step: step, context: context ?? "当前账号")
                 }
             }
             .padding(.bottom, drawsConnector ? 8 : 0)

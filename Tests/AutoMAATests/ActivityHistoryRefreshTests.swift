@@ -5,6 +5,53 @@ import Testing
 
 @Suite("Activity history refresh")
 struct ActivityHistoryRefreshTests {
+    @Test("weekly recovery stays visible while other tasks run and confirmation never launches a workflow")
+    @MainActor
+    func weeklyRecoveryDoesNotDependOnRunCompletionOrHistory() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "automaa-weekly-recovery-ui-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        let model = AppModel(directories: directories, launchAgentsDirectory: root.appending(path: "LaunchAgents"),
+                             managesSystemLaunchAgents: false, checksForUpdatesAutomatically: false)
+        let account = AccountConfiguration(name: "测试账号")
+        let client = ClientConfiguration(name: "测试客户端", kind: .yoStarJP, appPath: root.appending(path: "Fake.app").path,
+                                         address: "127.0.0.1:65491", profileName: "weekly-recovery",
+                                         bundleIdentifier: "dev.automaa.tests.weekly-recovery", accounts: [account])
+        var plan = AutomationPlan.lightRoutine
+        plan.stepOrder = [.fight, .recruit]
+        plan.fight.weeklyAnnihilation.enabled = true
+        plan.fight.stageStrategy = .fixed
+        plan.fight.stage = "1-7"
+        model.configuration = AppConfiguration(cliPath: "/usr/bin/true", clients: [client], plans: [plan])
+        let step = WorkflowStep(planID: plan.id, clientID: client.id, accountID: account.id, task: .fight)
+        let now = Date()
+        var weekly = WeeklyAnnihilationState()
+        weekly.record(.init(status: .unconfirmed, reason: .navigationUnavailable), client: client, accountID: account.id,
+                      weekStart: GameWeek(client: client.kind, at: now).start, at: now)
+        let store = WeeklyAnnihilationStore(directories: directories)
+        try store.save(weekly)
+        weekly = try store.load()
+        model.reloadActivityHistory()
+        #expect(model.activityEntries.isEmpty)
+        #expect(model.runTitle(for: plan.id) == "继续其他任务")
+        #expect(model.continuation(for: plan.id).fightRecoveryItems.first?.canConfirmWeeklyCompletion == true)
+        var lock: ProcessLock? = try ProcessLock(url: directories.lock)
+        #expect(lock != nil)
+        model.reloadActivityHistory()
+        #expect(model.isWorkflowRunning)
+        #expect(model.continuation(for: plan.id).fightRecoveryItems.map(\.step) == [step])
+        model.confirmWeeklyAnnihilation(step)
+        #expect(try store.load() == weekly)
+        lock = nil
+        model.reloadActivityHistory()
+        model.confirmWeeklyAnnihilation(step)
+        #expect(!model.isWorkflowRunning)
+        #expect(model.activeRunID == nil)
+        #expect(model.continuation(for: plan.id).fightRecoveryItems.isEmpty)
+        #expect(model.continuation(for: plan.id).pending == 2)
+        #expect(try store.load().status(for: plan.fight.weeklyAnnihilation, client: client, accountID: account.id) == .completed)
+    }
+
     @Test("reloads activity written by the background runner")
     @MainActor
     func reloadsExternalHistory() throws {
@@ -121,9 +168,9 @@ struct ActivityHistoryRefreshTests {
         #expect(model.activeProgress == 0)
         withExtendedLifetime(lock) {}
     }
-    @Test("continuation and recovery survive a crash without a final result log")
+    @Test("recovery is derived from current state independently of history")
     @MainActor
-    func recoveryUsesPersistedStateAndOnlyTheLatestTaskEntry() throws {
+    func recoveryUsesPersistedStateIndependentlyOfHistory() throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "automaa-recovery-ui-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
         let directories = AppDirectories(root: root)
@@ -146,13 +193,14 @@ struct ActivityHistoryRefreshTests {
         try ExecutionStateStore(directories: directories).save(state)
         model.reloadActivityHistory()
         #expect(model.runTitle(for: plan.id) == "结果待确认")
-        #expect(model.retryStep(for: first) == step)
+        #expect(model.continuation(for: plan.id).fightRecoveryItems.map(\.step) == [step])
         let last = LogEntry(level: .warning, message: "结果待确认", phase: .runningTask,
                             planID: plan.id, clientID: client.id, accountID: account.id, task: .fight)
         HistoryStore(directories: directories).append(last)
         model.reloadActivityHistory()
-        #expect(model.retryStep(for: first) == nil)
-        #expect(model.retryStep(for: last) == step)
+        try HistoryStore(directories: directories).clear()
+        model.reloadActivityHistory()
+        #expect(model.continuation(for: plan.id).fightRecoveryItems.map(\.step) == [step])
         state.record(FightResult(status: .failed), for: step.key)
         try ExecutionStateStore(directories: directories).save(state)
         model.reloadActivityHistory()
@@ -161,7 +209,7 @@ struct ActivityHistoryRefreshTests {
         try ExecutionStateStore(directories: directories).save(state)
         model.reloadActivityHistory()
         #expect(model.runTitle(for: plan.id) == "今日已完成")
-        #expect(model.retryStep(for: last) == nil)
+        #expect(model.continuation(for: plan.id).fightRecoveryItems.isEmpty)
     }
 
 }

@@ -3,6 +3,46 @@ import XCTest
 @testable import AutoMAAKit
 
 final class WeeklyAnnihilationTests: XCTestCase {
+    func testClosedEntranceResetsNextWeekAndConfirmationRespectsTheRunnerLock() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "weekly-confirm-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        let store = WeeklyAnnihilationStore(directories: directories)
+        let client = client(.yoStarJP), account = UUID(), now = date("2026-09-09T00:00:00Z")
+        var weekly = WeeklyAnnihilationState()
+        weekly.record(.init(status: .unnecessary, reason: .navigationUnavailable), client: client, accountID: account,
+                      weekStart: GameWeek(client: client.kind, at: now).start, at: now)
+        try store.save(weekly)
+        XCTAssertEqual(weekly.status(for: policy, client: client, accountID: account, at: now.addingTimeInterval(7 * 86400)), .pending)
+        XCTAssertFalse(weekly.canConfirmComplete(client: client, accountID: account, at: now.addingTimeInterval(7 * 86400)))
+        let lock = try ProcessLock(url: directories.lock)
+        try withExtendedLifetime(lock) {
+            XCTAssertThrowsError(try store.confirmComplete(client: client, accountID: account, at: now))
+            XCTAssertEqual(try store.load(), weekly)
+        }
+    }
+
+    func testConfirmationSavesOnlyCurrentWeeklyStateAndRejectsStaleRepeatedActions() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "weekly-confirm-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root), client = client(.yoStarJP)
+        let store = WeeklyAnnihilationStore(directories: directories)
+        let account = UUID(), now = date("2026-09-09T00:00:00Z")
+        var weekly = WeeklyAnnihilationState()
+        weekly.record(.init(status: .unnecessary, reason: .navigationUnavailable), client: client, accountID: account,
+                      weekStart: GameWeek(client: client.kind, at: now).start, at: now)
+        try store.save(weekly)
+        let daily = Data("unchanged".utf8)
+        try daily.write(to: directories.executionState)
+        let confirmed = try store.confirmComplete(client: client, accountID: account, at: now)
+        XCTAssertEqual(confirmed.status(for: policy, client: client, accountID: account, at: now), .completed)
+        XCTAssertEqual(try Data(contentsOf: directories.executionState), daily)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directories.fightStageMemory.path))
+        XCTAssertThrowsError(try store.confirmComplete(client: client, accountID: account, at: now))
+        try store.save(weekly)
+        XCTAssertThrowsError(try store.confirmComplete(client: client, accountID: account, at: now.addingTimeInterval(7 * 86400)))
+        XCTAssertEqual(try store.load(), weekly)
+    }
     private func date(_ value: String) -> Date { ISO8601DateFormatter().date(from: value)! }
     private func client(_ kind: ClientKind) -> ClientConfiguration {
         .init(name: "Client", kind: kind, appPath: "/test/Game.app", address: "127.0.0.1:65491", profileName: "weekly-test", bundleIdentifier: "dev.automaa.tests.weekly", accounts: [])

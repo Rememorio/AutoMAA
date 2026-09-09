@@ -203,8 +203,7 @@ public final class WorkflowRunner {
         _ configuration: AppConfiguration,
         planID: UUID,
         resumeToday: Bool = true,
-        retryStep: WorkflowStep? = nil,
-        confirmAnnihilation: Bool = false
+        retryStep: WorkflowStep? = nil
     ) async -> WorkflowReport {
         var report = WorkflowReport()
         var lock: ProcessLock?
@@ -304,27 +303,7 @@ public final class WorkflowRunner {
                 emit(.failed, report.fatalError!, 0, .error)
                 return report
             }
-            if confirmAnnihilation {
-                guard retryStep.task == .fight, plan.fight.weeklyAnnihilation.enabled,
-                      let client = configuration.clients.first(where: { $0.id == retryStep.clientID }),
-                      weeklyAnnihilation.canConfirmComplete(client: client, accountID: retryStep.accountID, at: now()) else {
-                    report.fatalError = "没有可确认的剿灭阶段，请刷新活动记录"
-                    emit(.failed, report.fatalError!, 0, .error)
-                    return report
-                }
-                let confirmed = FightResult(
-                    status: .unnecessary, stage: "Annihilation", reason: .confirmedWeeklyLimit
-                )
-                weeklyAnnihilation.record(confirmed, client: client, accountID: retryStep.accountID,
-                                          weekStart: GameWeek(client: client.kind, at: now()).start, at: now())
-                do { try weeklyAnnihilationStore.save(weeklyAnnihilation) }
-                catch {
-                    report.fatalError = "无法保存剿灭确认：\(error.localizedDescription)"
-                    return report
-                }
-                state.prepareWeeklyAnnihilation(plan: plan, clients: configuration.clients, weekly: weeklyAnnihilation, at: now())
-                emit(.preparing, "已手动确认本周剿灭完成，将继续常规作战", 0, .info)
-            }
+
         }
         do { try stateStore.save(state) }
         catch {
@@ -569,7 +548,7 @@ public final class WorkflowRunner {
 
                     if retryStep == nil, state.needsFightConfirmation(key) {
                         visitedSteps += 1
-                        emit(.runningTask, "\(accountText(account))：理智作战结果待确认，请在活动记录中重跑本项",
+                        emit(.runningTask, "\(accountText(account))：保留待确认作战，继续其他任务；请在活动记录的当前待办中处理",
                              Double(visitedSteps) / Double(totalSteps), .warning, client: client, account: account,
                              task: task, fightResult: state.fightResults?[key])
                         continue
@@ -655,7 +634,7 @@ public final class WorkflowRunner {
                             break accountLoop
                         }
                         emit(.runningTask, "\(accountText(account))：理智作战\(result.description)",
-                             Double(visitedSteps) / Double(totalSteps), result.isResolved ? .success : result.status == .failed ? .error : .warning,
+                             Double(visitedSteps) / Double(totalSteps), result.reason == .navigationUnavailable ? .warning : result.isResolved ? .success : result.status == .failed ? .error : .warning,
                              client: client, account: account, task: task,
                              details: result.isResolved ? result.totalDrops.map { "总掉落：" + $0 } : outcome.failureDetails,
                              fightResult: result)
@@ -1667,8 +1646,7 @@ public final class WorkflowRunner {
         let key = checkpointKey(plan: plan, client: client, account: account, task: .fight)
         let weeklyStatus = weekly.status(for: plan.fight.weeklyAnnihilation, client: client, accountID: account.id, at: now())
         let previous = state.fightProgress?[key]
-        let continuingRegular = previous?.annihilation?.isResolved == true && previous?.regular?.isResolved != true
-        let needsAnnihilation = (weeklyStatus == .pending || weeklyStatus == .unconfirmed) && !continuingRegular
+        let needsAnnihilation = FightProgress.needsAnnihilation(previous, weeklyStatus: weeklyStatus)
         let needsRegularTarget = needsAnnihilation || (previous?.annihilation != nil && previous?.regular?.isResolved != true)
         let resolution = FightStagePolicy.resolve(plan.fight, memory: memory, clientID: client.id, accountID: account.id,
                                                   preparingAnnihilation: needsRegularTarget)
@@ -1815,7 +1793,7 @@ public final class WorkflowRunner {
         try persistFightState(state)
         if plan.fight.weeklyAnnihilation.enabled {
             emit(.runningTask, "\(accountText(account))：\(isAnnihilation ? "剿灭" : "常规作战")\(result.description)",
-                 0, .info, client: client, account: account, task: .fight,
+                 0, result.reason == .navigationUnavailable ? .warning : .info, client: client, account: account, task: .fight,
                  details: result.totalDrops.map { "总掉落：" + $0 })
         }
         return outcome

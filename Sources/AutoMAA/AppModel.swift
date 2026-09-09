@@ -479,38 +479,37 @@ final class AppModel: ObservableObject {
     func runTitle(for planID: UUID, readyTitle: String = "运行") -> String {
         let state = continuation(for: planID)
         if state.pending == 0 { return state.unconfirmed > 0 ? "结果待确认" : "今日已完成" }
+        if state.unconfirmed > 0 { return "继续其他任务" }
         return state.hasStarted ? "继续未完成" : readyTitle
     }
 
-    func retryStep(for entry: LogEntry) -> WorkflowStep? {
-        guard Calendar.current.isDateInToday(entry.timestamp),
-              executionState.dateKey == ExecutionStateStore.todayKey,
-              let planID = entry.planID, let clientID = entry.clientID, let accountID = entry.accountID,
-              entry.task == .fight,
-              let plan = configuration.plans.first(where: { $0.id == planID }), plan.enabledTasks.contains(.fight),
-              let client = configuration.clients.first(where: { $0.id == clientID && $0.enabled }),
-              client.accounts.contains(where: { $0.id == accountID && plan.includes($0) }) else { return nil }
-        let step = WorkflowStep(planID: planID, clientID: clientID, accountID: accountID, task: .fight)
-        guard let status = executionState.fightResults?[step.key]?.status,
-              status == .failed || status == .unconfirmed,
-              activityEntries.last(where: {
-                  $0.planID == planID && $0.clientID == clientID && $0.accountID == accountID && $0.task == .fight
-              })?.id == entry.id else { return nil }
-        return step
-    }
+    var isFightRecoveryBusy: Bool { isWorkflowRunning || applicationUpdateState.blocksWorkflow }
 
-    func canConfirmAnnihilation(_ step: WorkflowStep) -> Bool {
-        guard let fight = configuration.plans.first(where: { $0.id == step.planID })?.fight,
-              let client = configuration.clients.first(where: { $0.id == step.clientID }) else { return false }
-        return fight.weeklyAnnihilation.enabled && weeklyAnnihilation.canConfirmComplete(client: client, accountID: step.accountID)
+    func confirmWeeklyAnnihilation(_ step: WorkflowStep) {
+        guard !isFightRecoveryBusy else {
+            showBanner("运行或更新进行中，结束后可确认本周剿灭")
+            return
+        }
+        guard let client = configuration.clients.first(where: { $0.id == step.clientID }),
+              client.accounts.contains(where: { $0.id == step.accountID }) else {
+            showBanner("账号配置已变化，请刷新后重新检查")
+            return
+        }
+        do {
+            weeklyAnnihilation = try weeklyAnnihilationStore.confirmComplete(client: client, accountID: step.accountID)
+            reloadActivityHistory()
+            showBanner("已记录本周剿灭完成；后续运行将继续尚未完成的日常")
+        } catch {
+            showBanner("确认未保存：\(error.localizedDescription)")
+        }
     }
 
     func fightRetryHint(_ step: WorkflowStep) -> String {
-        if weeklyAnnihilation.entry(clientID: step.clientID, accountID: step.accountID)?.result.status == .unconfirmed {
+        if continuation(for: step.planID).fightRecoveryItems.first(where: { $0.step == step })?.retryStage == "Annihilation" {
             if executionState.fightProgress?[step.key]?.regular?.status == .unconfirmed {
                 return "该账号的剿灭和本方案的常规作战均有待确认结果。请先检查游戏；重跑会再次执行未确认阶段，常规作战仍使用本方案的消耗设置。"
             }
-            return "该账号的剿灭结果尚未确认。请先检查游戏；重跑会再次尝试剿灭，只使用自然理智。各方案已完成的常规任务保留。"
+            return "将再次尝试剿灭，只使用自然理智；尚未完成的常规阶段使用本方案的消耗设置。已完成阶段保留。"
         }
         if let progress = executionState.fightProgress?[step.key] {
             if progress.canReselectRegularStage {
@@ -523,8 +522,7 @@ final class AppModel: ObservableObject {
         return "已完成阶段保留。未确认阶段可能已消耗理智或道具，请先检查游戏；重跑会再次执行该阶段。"
     }
 
-    func runPlan(_ planID: UUID, resumeToday: Bool = true, retryStep: WorkflowStep? = nil,
-                 confirmAnnihilation: Bool = false) {
+    func runPlan(_ planID: UUID, resumeToday: Bool = true, retryStep: WorkflowStep? = nil) {
         reloadActivityHistory()
         selectCurrentPlan(planID)
         let issues = readinessIssues(for: planID)
@@ -557,7 +555,7 @@ final class AppModel: ObservableObject {
         }
         workflowTask = Task { [weak self] in
             let report = await runner.run(snapshot, planID: planID, resumeToday: resumeToday,
-                                          retryStep: retryStep, confirmAnnihilation: confirmAnnihilation)
+                                          retryStep: retryStep)
             guard let self else { return }
             self.lastReport = report
             self.isRunning = false

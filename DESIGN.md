@@ -108,7 +108,7 @@ The macOS sidebar is the persistent navigation model. Panels organize dashboards
 
 Data entry uses native controls and keeps validation near the affected setting. A controlling strategy choice precedes its conditional fields. Confirmation dialogs are reserved for destructive or consequential actions. Banners summarize save and run results in a bounded overlay; details remain in readiness or activity views. Banner and editable-name transitions respect Reduce Motion. Shared behavior and native-control ownership are documented in [UX-CONTRACT.md](UX-CONTRACT.md).
 
-Task orchestration settings precede the MAA parameter mode in the same task card. Weekly annihilation uses `SettingsToggleRow` and a native weekday `Picker`, followed by compact account status and recovery controls. The strategy remains available in both parameter modes; account status wraps rather than clipping long labels. `FightRecoveryButton` owns the same confirmation flow in plan settings and activity history.
+Task orchestration settings precede the MAA parameter mode in the same task card. Weekly annihilation uses `SettingsToggleRow` and a native weekday `Picker`, followed by compact account status and recovery controls. The strategy remains available in both parameter modes; account status wraps rather than clipping long labels. `FightRecoveryActions` owns explicit weekly-confirmation and retry actions in plan settings and the activity current-work panel. Weekly confirmation saves a record without launching a game. Actions remain visible while busy, with an inline explanation. Activity places actionable current state before immutable historical runs; historical rows contain no live recovery or resume actions, and status counts wrap at narrow widths.
 
 ### Update behavior
 

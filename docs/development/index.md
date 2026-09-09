@@ -37,7 +37,7 @@ open .build/AutoMAA.app --args --data-directory /tmp/automaa-development
 
 每周剿灭策略与状态位于 `WeeklyAnnihilation.swift`。策略属于方案，周状态按客户端、账号与服务器区分；只以明确周奖励上限或手动确认为本周完成，单次成功与理智不足均不能替代。游戏周使用 [maa-cli v0.7.5 的服务器时间偏移](https://github.com/MaaAssistantArknights/maa-cli/blob/v0.7.5/crates/maa-cli/src/config/task/client_type.rs)：官服、Bilibili、繁中服为 UTC+4，日服、韩服为 UTC+5，国际服为 UTC−11；这些偏移已包含游戏日 04:00 的边界，不是当地民用时区。每周从游戏日周一开始；派发时固定周标识，跨周结果不会误记为新周完成。未确认结果跨周仍阻止自动补打。
 
-`ExecutionState.prepareWeeklyAnnihilation` 统一供 Runner 与界面续跑状态使用，恢复剿灭可执行性时保留每日常规阶段与其他步骤。派发前分别原子保存每日目标和共享周状态；任何写入失败均停止派发，未完成的保存不能伪装成成功。方案页和活动记录共用 `FightRecoveryButton`，人工确认只接受当前游戏周、入口未确认的记录。
+`ExecutionState.prepareWeeklyAnnihilation` 统一供 Runner 与界面续跑状态使用，恢复剿灭可执行性时保留每日常规阶段与其他步骤。派发前分别原子保存每日目标和共享周状态；任何写入失败均停止派发，未完成的保存不能伪装成成功。`PlanContinuation.fightRecoveryItems` 提供独立于历史日志的当前处理项，方案页和活动记录共用 `FightRecoveryActions`。`WeeklyAnnihilationStore.confirmComplete` 在进程锁内重新读取并校验当前游戏周记录，仅更新周状态，不启动工作流。入口不可用只有在完整任务回调证明尚未进入作战时才可安全跳过，证据不足仍保留待确认。
 
 ## 修改与验证
 

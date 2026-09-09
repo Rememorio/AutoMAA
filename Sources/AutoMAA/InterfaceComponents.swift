@@ -149,10 +149,10 @@ struct ActivitySearchField: View {
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("搜索方案、账号或记录", text: $text)
+            TextField("搜索历史中的方案、账号或记录", text: $text)
                 .textFieldStyle(.plain)
                 .focused($isFocused)
-                .accessibilityLabel("搜索活动记录")
+                .accessibilityLabel("搜索历史记录")
             if !text.isEmpty {
                 Button {
                     text = ""

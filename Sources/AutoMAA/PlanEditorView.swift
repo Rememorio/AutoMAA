@@ -322,9 +322,10 @@ struct PlanEditorView: View {
                                 .font(.caption)
                                 .foregroundStyle(status == .unconfirmed ? Color.orange : Color.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
-                            if status == .unconfirmed {
-                                FightRecoveryButton(step: .init(planID: plan.id, clientID: client.id, accountID: account.id, task: .fight),
-                                                    context: "\(client.displayName) / \(account.displayName)")
+                            if let item = model.continuation(for: plan.id).fightRecoveryItems.first(where: {
+                                $0.step.clientID == client.id && $0.step.accountID == account.id
+                            }) {
+                                FightRecoveryActions(item: item, context: "\(client.displayName) / \(account.displayName)")
                             }
                         }
                     }

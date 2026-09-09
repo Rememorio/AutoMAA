@@ -20,7 +20,7 @@ public enum FightStopReason: String, Codable, Sendable {
         case .navigationUnavailable: "未能确认剿灭入口；请检查本周奖励或关卡页面"
         case .stageUnavailable: "无法进入目标关卡；请检查开放情况或更换关卡"
         case .interruptedBattle: "作战被中断，结果未确认；请检查游戏结果"
-        case .missingEvidence: "未取得有效作战结果；请检查游戏后重跑本项"
+        case .missingEvidence: "未取得有效作战结果；请检查游戏后重新尝试"
         case .commandFailed: "MAA 执行失败"
         }
     }
@@ -54,7 +54,7 @@ public struct FightResult: Codable, Equatable, Sendable {
     public var description: String {
         let label = switch status {
         case .completed: "已完成"
-        case .unnecessary: "无需作战"
+        case .unnecessary: reason == .navigationUnavailable ? "本次跳过" : "无需作战"
         case .unconfirmed: "结果未确认"
         case .failed: "失败"
         }
@@ -71,6 +71,11 @@ public struct FightProgress: Codable, Equatable, Sendable {
     public var fallbackStage: String?
 
     public init(regularStage: String) { self.regularStage = regularStage }
+
+    public static func needsAnnihilation(_ progress: Self?, weeklyStatus: WeeklyAnnihilationStatus) -> Bool {
+        let continuingRegular = progress?.annihilation?.isResolved == true && progress?.regular?.isResolved != true
+        return (weeklyStatus == .pending || weeklyStatus == .unconfirmed) && !continuingRegular
+    }
 
     public var canReselectRegularStage: Bool {
         regular?.status == .failed && regular?.reason == .stageUnavailable && regular?.times == 0
@@ -127,6 +132,7 @@ struct FightObservation: Sendable {
     private var navigationFailed = false
     private var combatScreenObserved = false
     private var chainStarted = false
+    private var chainCompleted = false
     private var chainStopped = false
 
     mutating func consume(_ line: String) {
@@ -141,6 +147,7 @@ struct FightObservation: Sendable {
         let task = (details["task"] as? String ?? "").split(separator: "@").last.map(String.init) ?? ""
         let inFightLoop = (event["first"] as? [String]) == ["FightBegin"]
         if kind == "TaskChainStart" { chainStarted = true }
+        if kind == "TaskChainCompleted" { chainCompleted = true }
         if kind == "TaskChainStopped" { chainStopped = true }
         if inFightLoop || ["FightTimes", "StageDrops"].contains(event["what"] as? String ?? "") { enteredFightLoop = true }
         if ["StartButton2", "AnnihilationConfirm", "PRTS1", "PRTS2", "PRTS3", "EndOfAction", "EndOfActionAnnihilation"].contains(task) {
@@ -233,7 +240,11 @@ struct FightObservation: Sendable {
             return count > 0 || (summary?.times ?? 0) > 0
                 ? result(.unconfirmed, .interruptedBattle) : result(.failed, .commandFailed)
         }
-        if navigationUnavailable { return result(.unconfirmed, .navigationUnavailable) }
+        if navigationUnavailable {
+            let neverEnteredBattle = chainStarted && chainCompleted && !enteredFightLoop && !combatScreenObserved
+                && count == 0 && (summary?.times ?? 0) == 0
+            return result(neverEnteredBattle ? .unnecessary : .unconfirmed, .navigationUnavailable)
+        }
         let insufficient = insufficientSanity || insufficientAtLastCheck
         if count > 0 { return result(.completed, weeklyLimit ? .weeklyLimit : timesLimit ? .timesLimit : insufficient ? .insufficientSanity : nil) }
         if weeklyLimit { return result(.unnecessary, .weeklyLimit) }
@@ -297,6 +308,7 @@ public struct PlanContinuation: Equatable, Sendable {
     public var unconfirmed = 0
     public var resolved = 0
     public var hasStarted = false
+    public var fightRecoveryItems: [FightRecoveryItem] = []
 
     public init(configuration: AppConfiguration, planID: UUID, state: ExecutionState, history: [LogEntry],
                 weeklyAnnihilation: WeeklyAnnihilationState = .init(),
@@ -316,10 +328,42 @@ public struct PlanContinuation: Equatable, Sendable {
                     if state.isResolved(key) { resolved += 1 }
                     else if state.needsFightConfirmation(key) { unconfirmed += 1 }
                     else { pending += 1 }
+                    if task == .fight {
+                        let canConfirm = plan.fight.weeklyAnnihilation.enabled
+                            && weeklyAnnihilation.canConfirmComplete(client: client, accountID: account.id, at: now)
+                        let result = state.fightResults?[key]
+                        let needsAttention = state.needsFightConfirmation(key) || result?.status == .failed
+                        if needsAttention || canConfirm {
+                            if let result = needsAttention ? result : weeklyAnnihilation.entry(clientID: client.id, accountID: account.id)?.result {
+                                let progress = state.fightProgress?[key]
+                                let weeklyStatus = weeklyAnnihilation.status(for: plan.fight.weeklyAnnihilation,
+                                                                           client: client, accountID: account.id, at: now)
+                                let retryStage = FightProgress.needsAnnihilation(progress, weeklyStatus: weeklyStatus)
+                                    ? "Annihilation" : progress?.pendingStage ?? ""
+                                fightRecoveryItems.append(.init(
+                                    step: .init(planID: planID, clientID: client.id, accountID: account.id, task: .fight),
+                                    result: result, canConfirmWeeklyCompletion: canConfirm, retryStage: retryStage
+                                ))
+                            }
+                        }
+                    }
                 }
             }
         }
         hasStarted = hasStarted || resolved > 0 || unconfirmed > 0
+    }
+}
+
+public struct FightRecoveryItem: Equatable, Identifiable, Sendable {
+    public let step: WorkflowStep
+    public let result: FightResult
+    public let canConfirmWeeklyCompletion: Bool
+    public let retryStage: String
+
+    public var id: String { step.key }
+    public var title: String {
+        if result.reason == .navigationUnavailable { return "剿灭周进度待核实" }
+        return result.status == .failed ? "理智作战未完成" : "理智作战结果待确认"
     }
 }
 
