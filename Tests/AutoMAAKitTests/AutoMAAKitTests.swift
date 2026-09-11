@@ -2567,6 +2567,64 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertFalse(notification?.body.contains("客户端需要更新") == true)
     }
 
+    @MainActor
+    func testHandledRecruitmentIsRecordedWithoutAttentionOrNotifications() async throws {
+        for action in ["Recruited", "Refreshed"] {
+            let root = temporaryRoot()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let app = root.appending(path: "Test Game.app", directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+            let account = AccountConfiguration(name: "测试账号", accountSelector: "fixture-selector")
+            let client = ClientConfiguration(
+                name: "测试客户端", kind: .official, appPath: app.path,
+                address: "127.0.0.1:65494", profileName: "recruitment-result-test",
+                bundleIdentifier: "dev.automaa.tests.recruitment-result", accounts: [account]
+            )
+            var plan = AutomationPlan.lightRoutine
+            plan.fight.enabled = false
+            plan.infrast.enabled = false
+            plan.mall.enabled = false
+            plan.award.enabled = false
+            plan.recruit.settingsMode = .custom
+            plan.recruit.autoConfirm5 = false
+            plan.policy.hotUpdateBeforeRun = false
+            let configuration = AppConfiguration(cliPath: "/usr/bin/true", clients: [client], plans: [plan])
+            let commands = StubCommandRunner(taskResults: [.init(
+                exitCode: 0,
+                standardOutput: "Detected tags:\n1. ★★★★★ 资深干员, 输出, \(action)\n",
+                standardError: "RecruitingTips: 资深干员\nRecruitResult: ★★★★★ 资深干员, 输出",
+                timedOut: false
+            )])
+            let runtime = StubClientRuntime(closesOnForce: true)
+            var delivered: [WorkflowNotice] = []
+            let directories = AppDirectories(root: root)
+            let runner = WorkflowRunner(
+                directories: directories, portProbe: runtime, gameController: runtime,
+                shutdownPolicy: .immediate, commandRunner: commands,
+                noticeSink: { notices, _ in
+                    delivered.append(contentsOf: notices)
+                    return .delivered
+                }, eventSink: runtime.record
+            )
+
+            let report = await runner.run(configuration, planID: plan.id, resumeToday: false)
+
+            XCTAssertTrue(report.isSuccess, report.fatalError ?? "")
+            XCTAssertEqual(report.succeededSteps, 1)
+            XCTAssertTrue(report.notices.isEmpty)
+            XCTAssertTrue(report.pendingNotificationNotices.isEmpty)
+            XCTAssertTrue(delivered.isEmpty)
+            XCTAssertNil(WorkflowNotificationComposer.notification(for: report))
+            XCTAssertEqual(ExecutionStateStore(directories: directories).loadForToday().completedSteps.count, 1)
+            let logs = HistoryStore(directories: directories).load()
+            XCTAssertTrue(logs.contains {
+                $0.level == .info && $0.task == .recruit && $0.message.contains("5★")
+                    && $0.details == "识别标签：资深干员、输出"
+            })
+            XCTAssertFalse(logs.contains { $0.level == .warning || $0.message.contains("需要确认") })
+        }
+    }
+
     func testActivityWarningCountDoesNotCountCompletionSummaryTwice() {
         let runID = UUID()
         let session = ActivitySession(
@@ -2641,6 +2699,82 @@ final class AutoMAAKitTests: XCTestCase {
         )
     }
 
+    func testRecruitmentNoticesIgnoreConfirmedRecruitmentAndRefresh() {
+        for action in ["Recruited", "Refreshed", "recruited", "REFRESHED"] {
+            let output = """
+            RecruitingTips: 资深干员
+            RecruitResult: ★★★★★ 资深干员, 输出
+            RecruitResult: ★ 支援机械, 治疗
+            Detected tags:
+            1. ★★★★★ 资深干员, 输出, \(action)
+            2. ★ 支援机械, 治疗, \(action)
+            """
+            XCTAssertTrue(MAAOutputNoticeParser.recruitmentNotices(
+                in: output, preservedTags: ["支援机械"]
+            ).isEmpty, action)
+        }
+    }
+
+    func testRecruitmentNoticesKeepUnresolvedMatchingResultsAndIncompleteEvidence() {
+        let output = """
+        RecruitResult: ★★★★★ 资深干员, 输出
+        RecruitResult: ★★★★★ 资深干员, 输出
+        RecruitResult: ★★★★★★ 高级资深干员, 生存
+        Detected tags:
+        1. ★★★★★ 资深干员, 输出, Recruited
+        2. ★★★★★ 资深干员, 输出
+        Recruited 1 times
+        """
+        XCTAssertEqual(MAAOutputNoticeParser.recruitmentNotices(in: output, preservedTags: []), [
+            .highRarity(level: 5, tags: ["资深干员", "输出"]),
+            .highRarity(level: 6, tags: ["高级资深干员", "生存"]),
+        ])
+        let incomplete = """
+        RecruitResult: ★★★★★ 资深干员, 输出
+        RecruitResult: ★★★★★ 资深干员, 输出
+        Detected tags:
+        1. ★★★★★ 资深干员, 输出, Recruited
+        """
+        XCTAssertEqual(MAAOutputNoticeParser.recruitmentNotices(in: incomplete, preservedTags: []), [
+            .highRarity(level: 5, tags: ["资深干员", "输出"]),
+        ])
+    }
+
+    func testRecruitmentNoticesDoNotInferHandlingFromTotalsOrUnknownActions() {
+        for suffix in ["", ", Unknown", ", Recruited extra"] {
+            let output = """
+            Detected tags:
+            1. ★★★★★ 资深干员, 输出\(suffix)
+            Recruited 2 times
+            """
+            XCTAssertEqual(MAAOutputNoticeParser.recruitmentNotices(in: output, preservedTags: []).count, 1)
+        }
+    }
+
+    func testRecruitmentNoticesKeepAttentionWhenTaskDidNotSucceed() {
+        let output = "Detected tags:\n1. ★★★★★ 资深干员, 输出, Recruited"
+        let parsed = MAAOutputNoticeParser.recruitmentOutput(
+            in: output, preservedTags: [], taskSucceeded: false
+        )
+        XCTAssertTrue(parsed.handled.isEmpty)
+        XCTAssertEqual(parsed.notices, [.highRarity(level: 5, tags: ["资深干员", "输出"])])
+    }
+
+    func testRecruitmentSummaryReconcilesReorderedTagsAndOutputStreams() {
+        let output = """
+        Detected tags:
+        1. ★★★★★ 输出, 资深干员, Recruited
+        2. ★★★★★★ 高级资深干员, 生存
+        Recruited 1 times
+        RecruitingTips: 资深干员
+        RecruitResult: ★★★★★ 资深干员, 输出
+        RecruitResult: ★★★★★★ 高级资深干员, 生存
+        """
+        XCTAssertEqual(MAAOutputNoticeParser.recruitmentNotices(in: output, preservedTags: []), [
+            .highRarity(level: 6, tags: ["高级资深干员", "生存"]),
+        ])
+    }
+
     func testMAAOutputNoticeParserElevatesSixStarDetectedTagsSummary() {
         let output = """
         Detected tags:
@@ -2655,10 +2789,6 @@ final class AutoMAAKitTests: XCTestCase {
                 .highRarity(
                     level: 6,
                     tags: ["高级资深干员", "远程位", "输出", "生存", "狙击干员"]
-                ),
-                .preservedTag(
-                    tag: "支援机械",
-                    tags: ["支援机械", "近战位", "费用回复", "治疗", "先锋干员"]
                 ),
             ]
         )

@@ -1865,7 +1865,9 @@ public final class WorkflowRunner {
             let outputNotices = workflowNotices(
                 for: task,
                 output: result.combinedOutput,
+                taskSucceeded: result.exitCode == 0 && !result.timedOut,
                 plan: plan,
+                client: client,
                 account: account
             )
             for notice in outputNotices where !notices.contains(notice) {
@@ -1977,12 +1979,25 @@ public final class WorkflowRunner {
     private func workflowNotices(
         for task: TaskKind,
         output: String,
+        taskSucceeded: Bool,
         plan: AutomationPlan,
+        client: ClientConfiguration,
         account: AccountConfiguration
     ) -> [WorkflowNotice] {
         guard task == .recruit else { return [] }
         let preservedTags = plan.recruit.usesCustomSettings ? plan.recruit.preserveTags : ["支援机械"]
-        return MAAOutputNoticeParser.recruitmentNotices(in: output, preservedTags: preservedTags).map { notice in
+        let recruitment = MAAOutputNoticeParser.recruitmentOutput(
+            in: output, preservedTags: preservedTags, taskSucceeded: taskSucceeded
+        )
+        for result in recruitment.handled {
+            let message = result.action == .recruited
+                ? "公招发现 \(result.level)★ 组合，MAA 已自动确认招募"
+                : "公招标签已由 MAA 刷新（原 \(result.level)★ 组合）"
+            emit(.runningTask, "\(accountText(account))：\(message)", 0, .info,
+                 client: client, account: account, task: task,
+                 details: "识别标签：\(result.tags.joined(separator: "、"))")
+        }
+        return recruitment.notices.map { notice in
             switch notice {
             case let .highRarity(level, tags):
                 return WorkflowNotice(
