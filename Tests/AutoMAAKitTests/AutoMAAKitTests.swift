@@ -2389,6 +2389,9 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertTrue(StartupFailureClassifier.isGameOffline(output))
         XCTAssertEqual(result.scope, .client)
         XCTAssertTrue(result.guidance.contains("重启客户端后仍未恢复"))
+        XCTAssertTrue(result.guidance.contains("检查网络和代理"))
+        XCTAssertTrue(result.guidance.contains("维护"))
+        XCTAssertTrue(result.guidance.contains("登录"))
     }
 
     func testStartupCommandOutcomeRejectsGameOfflineDespiteZeroExitCode() {
@@ -3242,7 +3245,7 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertEqual(report.failedSteps, 0)
         XCTAssertEqual(
             warning.message,
-            "客户端「测试客户端」不可用，已跳过该客户端中 2 个账号的 2 个待执行任务。触发原因：账号「测试账号 1」准备失败。游戏与 MaaTools 的连接已离线，重启客户端后仍未恢复；可能正在维护，或停在登录、更新及异常弹窗页面，请稍后重试或手动进入一次主界面"
+            "客户端「测试客户端」不可用，已跳过该客户端中 2 个账号的 2 个待执行任务。触发原因：账号「测试账号 1」准备失败。游戏连接已离线，重启客户端后仍未恢复；请先检查网络和代理是否可用，再手动进入游戏主界面；若仍无法登录，请检查维护、登录、更新或异常弹窗"
         )
         XCTAssertFalse(entries.contains { $0.accountID != nil && $0.message.contains("测试账号 2") })
     }

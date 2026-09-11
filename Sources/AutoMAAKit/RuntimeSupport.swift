@@ -132,7 +132,7 @@ enum StartupFailureClassifier {
         if isGameOffline(value) {
             return .init(
                 scope: .client,
-                guidance: "游戏与 MaaTools 的连接已离线，重启客户端后仍未恢复；可能正在维护，或停在登录、更新及异常弹窗页面，请稍后重试或手动进入一次主界面"
+                guidance: "游戏连接已离线，重启客户端后仍未恢复；请先检查网络和代理是否可用，再手动进入游戏主界面；若仍无法登录，请检查维护、登录、更新或异常弹窗"
             )
         }
         if containsAny(value, [
