@@ -242,9 +242,14 @@ final class FightExecutionTests: XCTestCase {
     }
 
     func testPositiveCLICountWithoutSettlementIsStillUnconfirmed() {
-        let result = FightObservation().result(for: command("Fight 1-7 2 times"), configuredStage: nil)
-        XCTAssertEqual(result.status, .unconfirmed)
-        XCTAssertEqual(result.times, 0)
+        for output in [
+            "Fight 1-7 2 times",
+            "Fight 1-7 2 times, used 1 medicine (1 expiring), used 1 stone, drops:\ntotal drops: 源岩 × 2",
+        ] {
+            let result = FightObservation().result(for: command(output), configuredStage: nil)
+            XCTAssertEqual(result.status, .unconfirmed)
+            XCTAssertEqual(result.times, 0)
+        }
     }
 
     func testSettlementCountsAccumulateAcrossSeries() {
@@ -274,9 +279,14 @@ final class FightExecutionTests: XCTestCase {
     }
 
     func testInterruptionOverridesPositiveSummary() {
-        for result in [command("Fight 1-7 2 times", exit: 1), command("Fight 1-7 2 times", timeout: true),
-                       command("Fight 1-7 2 times", cancelled: true), command("Fight 1-7 2 times\nGameOffline")] {
-            XCTAssertEqual(FightObservation().result(for: result, configuredStage: nil).status, .unconfirmed)
+        for output in [
+            "Fight 1-7 2 times",
+            "Fight 1-7 2 times, used 1 medicine (1 expiring), used 1 stone, drops:\ntotal drops: 源岩 × 2",
+        ] {
+            for result in [command(output, exit: 1), command(output, timeout: true),
+                           command(output, cancelled: true), command(output + "\nGameOffline")] {
+                XCTAssertEqual(FightObservation().result(for: result, configuredStage: nil).status, .unconfirmed)
+            }
         }
         XCTAssertEqual(FightObservation().result(for: command(exit: 1), configuredStage: nil).status, .failed)
     }

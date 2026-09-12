@@ -2879,14 +2879,49 @@ final class AutoMAAKitTests: XCTestCase {
         )
     }
 
+    func testMAAOutputSummaryParserReadsSanityConsumptionWithAndWithoutDrops() {
+        for consumption in [
+            ", used 2 medicine",
+            ", used 2 medicine (1 expiring)",
+            ", used 1 medicine (1 expiring)",
+            ", used 1 stone",
+            ", used 2 medicine, used 1 stone",
+            ", used 2 medicine (1 expiring), used 1 stone",
+        ] {
+            for drops in [String?.none, "源岩 × 6, 龍門幣 × 720"] {
+                let header = "\u{001B}[32mFight 1-7 3 times\(consumption)\(drops == nil ? "" : ", drops:")\u{001B}[0m"
+                let output = header + (drops.map { "\ntotal drops: \($0)" } ?? "")
+                XCTAssertEqual(
+                    MAAOutputSummaryParser.fightSummary(in: output),
+                    MAAFightSummary(stage: "1-7", times: 3, totalDrops: drops),
+                    output
+                )
+            }
+        }
+    }
+
     func testMAAOutputSummaryParserIgnoresMalformedOrUnrelatedOutput() {
         XCTAssertNil(MAAOutputSummaryParser.fightSummary(in: "Fight TO-5 twice, drops:"))
         XCTAssertNil(MAAOutputSummaryParser.fightSummary(in: "total drops: 龙门币 × 1440"))
         XCTAssertNil(MAAOutputSummaryParser.fightSummary(in: "BeforeFight TO-5 2 times, drops:"))
+        for consumption in [
+            ", used medicine",
+            ", used -1 medicine",
+            ", used two medicine",
+            ", used 1 medicine (expiring)",
+            ", used 1 medicine (1 expiring",
+            ", used 1 stone, used 1 medicine",
+            ", used 1 medicine, used 1 medicine",
+            ", used 1 unknown",
+            ", used 1 stone trailing text",
+        ] {
+            let output = "Fight 1-7 3 times\(consumption), drops:\ntotal drops: 源岩 × 6"
+            XCTAssertNil(MAAOutputSummaryParser.fightSummary(in: output), output)
+        }
     }
 
     @MainActor
-    func testWorkflowCompletionRecordsFightSummaryAndTotalDrops() async throws {
+    func testWorkflowCompletionRecordsFightSummaryAndTotalDropsWithSanityConsumption() async throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let app = root.appending(path: "Applications/Test Game.app", directoryHint: .isDirectory)
@@ -2901,7 +2936,7 @@ final class AutoMAAKitTests: XCTestCase {
             'Assistant::append_callback | SubTaskExtraInfo {"taskchain":"Fight","what":"StageDrops","details":{"stage":{"stageCode":"TO-5"},"cur_times":2,"drops":[]}}' \
             'Assistant::append_callback | SubTaskCompleted {"taskchain":"Fight","subtask":"ProcessTask","details":{"task":"EndOfAction"}}' > "$MAA_STATE_DIR/debug/asst.log"
           printf '%s\\n' \
-            'Fight TO-5 2 times, drops:' \
+            'Fight TO-5 2 times, used 2 medicine (1 expiring), used 1 stone, drops:' \
             'total drops: 沿途的点滴 × 156, 装置 × 10, 酮凝集 × 4, 龙门币 × 1872'
         fi
         """
@@ -2946,6 +2981,16 @@ final class AutoMAAKitTests: XCTestCase {
             completion.log.details,
             "总掉落：沿途的点滴 × 156, 装置 × 10, 酮凝集 × 4, 龙门币 × 1872"
         )
+        XCTAssertEqual(
+            completion.log.fightResult?.totalDrops,
+            "沿途的点滴 × 156, 装置 × 10, 酮凝集 × 4, 龙门币 × 1872"
+        )
+        let savedCompletion = try XCTUnwrap(
+            HistoryStore(directories: AppDirectories(root: root)).load()
+                .first { $0.id == completion.log.id }
+        )
+        XCTAssertEqual(savedCompletion.fightResult, completion.log.fightResult)
+        XCTAssertEqual(savedCompletion.details, completion.log.details)
         XCTAssertEqual(
             try FightStageMemoryStore(directories: AppDirectories(root: root))
                 .load()

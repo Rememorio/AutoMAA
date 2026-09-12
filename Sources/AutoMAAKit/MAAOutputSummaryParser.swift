@@ -38,7 +38,8 @@ enum MAAOutputSummaryParser {
 
         let suffix = payload[timesRange.upperBound...]
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard suffix.isEmpty || suffix.localizedCaseInsensitiveCompare(", drops:") == .orderedSame else {
+        let consumptionSuffix = #"^(?:, used [0-9]+ medicine(?: \([0-9]+ expiring\))?)?(?:, used [0-9]+ stone)?(?:, drops:)?$"#
+        guard suffix.range(of: consumptionSuffix, options: [.regularExpression, .caseInsensitive]) != nil else {
             return nil
         }
 
