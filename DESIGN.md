@@ -104,6 +104,8 @@ Default state uses primary text and native control styling. Hover, pressed, focu
 
 The macOS sidebar is the persistent navigation model. Panels organize dashboards and editors; activity records use structured rows and expandable details. Selected and running plans are distinct states in both copy and color. Dense values use aligned digits, not oversized KPI decoration.
 
+Activity places its record toolbar after the current-work panel and pins it when scrolling through records. The record heading and native level selector form the leading group; `ActivitySearchField` and the neutral icon-only actions menu form the trailing group. Narrow layouts move search and actions onto a second row. Toolbar content and record panels share `PageLayout.inset`; a stable caption row explains the displayed scope and offers filter reset. The semantic window background keeps pinned content readable in either appearance without introducing another panel.
+
 ### Forms and overlays
 
 Data entry uses native controls and keeps validation near the affected setting. A controlling strategy choice precedes its conditional fields. Confirmation dialogs are reserved for destructive or consequential actions. Banners summarize save and run results in a bounded overlay; details remain in readiness or activity views. Banner and editable-name transitions respect Reduce Motion. Shared behavior and native-control ownership are documented in [UX-CONTRACT.md](UX-CONTRACT.md).

@@ -10,7 +10,7 @@ private enum ActivityFilter: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .all: "全部"
-        case .attention: "需留意"
+        case .attention: "警告与错误"
         }
     }
 }
@@ -56,11 +56,7 @@ struct ActivityView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            controls
-            Divider()
-            activityContent
-        }
+        activityContent
         .navigationTitle("活动记录")
         .alert("清除全部活动记录？", isPresented: $showingClearConfirmation) {
             Button("取消", role: .cancel) {}
@@ -71,11 +67,48 @@ struct ActivityView: View {
     }
 
     private var controls: some View {
-        HStack(spacing: 12) {
-            ActivitySearchField(text: $model.activitySearch)
-                .frame(minWidth: 180, maxWidth: 300)
+        VStack(alignment: .leading, spacing: 10) {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 20) {
+                    recordScope
+                    Spacer(minLength: 0)
+                    searchActions
+                }
+                VStack(alignment: .leading, spacing: 12) {
+                    recordScope
+                    searchActions
+                }
+            }
 
-            Picker("显示范围", selection: Binding(
+            HStack(spacing: 12) {
+                Text(filter == .attention
+                     ? "仅显示警告与错误 · 历史事件不代表当前待办"
+                     : "\(displayedSessions.count) 组历史记录")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Button("清除筛选", action: clearFilters)
+                    .buttonStyle(.link)
+                    .opacity(hasActiveFilters ? 1 : 0)
+                    .disabled(!hasActiveFilters)
+                    .accessibilityHidden(!hasActiveFilters)
+            }
+            .font(.caption)
+        }
+        .padding(.horizontal, PageLayout.inset)
+        .padding(.vertical, 12)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .overlay(alignment: .bottom) {
+            Divider().padding(.horizontal, PageLayout.inset)
+        }
+    }
+
+    private var recordScope: some View {
+        HStack(spacing: 16) {
+            Text("记录")
+                .font(.headline)
+                .accessibilityAddTraits(.isHeader)
+            Picker("记录级别", selection: Binding(
                 get: { filter },
                 set: { model.activityOnlyAttention = $0 == .attention }
             )) {
@@ -86,10 +119,17 @@ struct ActivityView: View {
             .pickerStyle(.segmented)
             .tint(.maaAction)
             .labelsHidden()
-            .frame(width: 160)
+            .frame(width: 200)
+            .help("筛选实时与历史记录，不影响当前待办和运行状态")
+        }
+        .fixedSize()
+    }
 
-            Spacer()
-
+    private var searchActions: some View {
+        HStack(spacing: 12) {
+            ActivitySearchField(text: $model.activitySearch)
+                .frame(minWidth: 240, maxWidth: 300)
+            Spacer(minLength: 0)
             Menu {
                 Button {
                     try? model.directories.prepare()
@@ -107,63 +147,71 @@ struct ActivityView: View {
                 }
                 .disabled(model.activityEntries.isEmpty || model.isWorkflowRunning)
             } label: {
-                Label("更多", systemImage: "ellipsis.circle")
+                Image(systemName: "ellipsis")
+                    .frame(width: 28, height: 28)
             }
             .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .foregroundStyle(.secondary)
+            .tint(.secondary)
             .fixedSize()
+            .help("记录操作")
+            .accessibilityLabel("记录操作")
         }
-        .padding(.horizontal, PageLayout.inset)
-        .padding(.vertical, 14)
-        .frame(maxWidth: PageLayout.readingWidth)
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: 340)
     }
 
     private var activityContent: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: PageLayout.sectionSpacing) {
-                if let planID = model.currentPlanID { currentPlanProgress(planID) }
-
-                if model.isWorkflowRunning {
-                    currentActivity
-                    if !displayedSessions.isEmpty {
-                        Text("历史记录")
-                            .font(.headline)
-                            .padding(.top, 4)
+        GeometryReader { viewport in
+            let gutter = NSScroller.preferredScrollerStyle == .legacy
+                ? NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) : 0
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: PageLayout.sectionSpacing, pinnedViews: [.sectionHeaders]) {
+                    if let planID = model.currentPlanID {
+                        currentPlanProgress(planID)
+                            .padding(.horizontal, PageLayout.inset)
+                            .padding(.top, PageLayout.inset)
                     }
-                }
 
-                if !model.isWorkflowRunning, !displayedSessions.isEmpty {
-                    Text("历史记录").font(.headline)
-                }
-
-                if displayedSessions.isEmpty {
-                    if !model.isWorkflowRunning {
-                        ContentUnavailableView(
-                            model.activityEntries.isEmpty ? "还没有活动记录" : "没有匹配的活动",
-                            systemImage: model.activityEntries.isEmpty ? "clock.arrow.circlepath" : "magnifyingglass",
-                            description: Text(model.activityEntries.isEmpty
-                                ? "运行方案或更新 MAA 后，这里会按每次运行整理进度与结果。"
-                                : "试试其他关键词，或切换到“全部”。")
-                        )
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 40)
-                        if !model.activityEntries.isEmpty {
-                            Button("清除筛选") {
-                                model.activitySearch = ""
-                                model.activityOnlyAttention = false
+                    Section {
+                        Group {
+                            if model.isWorkflowRunning {
+                                currentActivity
+                                if !displayedSessions.isEmpty {
+                                    Text("历史记录")
+                                        .font(.headline)
+                                        .padding(.top, 4)
+                                }
                             }
-                            .frame(maxWidth: .infinity)
+
+                            if displayedSessions.isEmpty {
+                                ContentUnavailableView(
+                                    historicalSessions.isEmpty ? "还没有历史记录" : "没有匹配的历史记录",
+                                    systemImage: historicalSessions.isEmpty ? "clock.arrow.circlepath" : "magnifyingglass",
+                                    description: Text(historicalSessions.isEmpty
+                                        ? "运行方案或更新 MAA 后，这里会按每次运行整理进度与结果。"
+                                        : "试试其他关键词，或清除筛选查看全部记录。")
+                                )
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 40)
+                            } else {
+                                ForEach(displayedSessions) { item in
+                                    sessionCard(item)
+                                }
+                            }
                         }
-                    }
-                } else {
-                    ForEach(displayedSessions) { item in
-                        sessionCard(item)
+                        .padding(.horizontal, PageLayout.inset)
+                    } header: {
+                        controls
                     }
                 }
+                .padding(.bottom, PageLayout.inset)
+                .frame(maxWidth: PageLayout.readingWidth)
+                .frame(width: max(0, viewport.size.width - gutter))
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(PageLayout.inset)
-            .frame(maxWidth: PageLayout.readingWidth)
-            .frame(maxWidth: .infinity)
+            .scrollIndicators(.visible)
+            .clipped()
         }
         .onAppear {
             if let first = displayedSessions.first {
@@ -173,6 +221,15 @@ struct ActivityView: View {
         .onChange(of: displayedSessions.first?.id) { _, id in
             if let id { expandedSessionIDs.insert(id) }
         }
+    }
+
+    private var hasActiveFilters: Bool {
+        !search.isEmpty || filter != .all
+    }
+
+    private func clearFilters() {
+        model.activitySearch = ""
+        model.activityOnlyAttention = false
     }
 
     private func currentPlanProgress(_ planID: UUID) -> some View {
