@@ -20,6 +20,30 @@ private struct TaskRunOutcome {
     let notices: [WorkflowNotice]
     let failureDetails: String?
     var fightResult: FightResult? = nil
+    var fightDescription: String? = nil
+
+    func summarizingFightPhases(_ phases: [(kind: FightKind, result: FightResult)]) -> Self {
+        guard phases.count > 1, var result = fightResult else { return self }
+        var outcome = self
+        func title(_ kind: FightKind) -> String { kind == .annihilation ? "剿灭" : "常规" }
+        outcome.fightDescription = "：" + phases.map { title($0.kind) + $0.result.description }.joined(separator: "；")
+        let drops = phases.compactMap { phase in
+            phase.result.totalDrops.map { title(phase.kind) + "：" + $0 }
+        }
+        result.totalDrops = drops.isEmpty ? nil : drops.joined(separator: "\n")
+        if phases.allSatisfy({ $0.result.isResolved }) {
+            let completed = phases.filter { $0.result.times > 0 }
+            result.times = completed.reduce(0) { $0 + $1.result.times }
+            result.status = result.times > 0 ? .completed : .unnecessary
+            result.stage = completed.map { $0.result.stage ?? title($0.kind) }.joined(separator: " + ")
+            result.kind = completed.count == 1 ? completed.first?.result.kind : nil
+            result.reason = nil
+            let unrecognized = completed.reduce(0) { $0 + ($1.result.unrecognizedSettlements ?? 0) }
+            result.unrecognizedSettlements = unrecognized > 0 ? unrecognized : nil
+        }
+        outcome.fightResult = result
+        return outcome
+    }
 }
 
 private struct MaintenanceCommandOutcome {
@@ -633,10 +657,12 @@ public final class WorkflowRunner {
                             stopAfterClosingClient = true
                             break accountLoop
                         }
-                        emit(.runningTask, "\(accountText(account))：理智作战\(result.description)",
+                        let details = [result.totalDrops.map { "总掉落：" + $0 }, result.isResolved ? nil : outcome.failureDetails]
+                            .compactMap { $0 }.joined(separator: "\n")
+                        emit(.runningTask, "\(accountText(account))：理智作战\(outcome.fightDescription ?? result.description)",
                              Double(visitedSteps) / Double(totalSteps), result.reason == .navigationUnavailable ? .warning : result.isResolved ? .success : result.status == .failed ? .error : .warning,
                              client: client, account: account, task: task,
-                             details: result.isResolved ? result.totalDrops.map { "总掉落：" + $0 } : outcome.failureDetails,
+                             details: details.isEmpty ? nil : details,
                              fightResult: result)
                         if result.status == .unconfirmed { break accountLoop }
                     }
@@ -1674,7 +1700,7 @@ public final class WorkflowRunner {
             progress.regularStage = stage
         }
         var lastOutcome: TaskRunOutcome?
-        var ranRegular = false
+        var phases: [(kind: FightKind, result: FightResult)] = []
         for isAnnihilation in (needsAnnihilation ? [true, false] : [false]) {
             let previous = isAnnihilation ? progress.annihilation : progress.regular
             if previous?.isResolved == true { continue }
@@ -1682,7 +1708,7 @@ public final class WorkflowRunner {
                 memory.markRecoveryRequired(clientID: client.id, accountID: account.id)
                 do { try fightStageMemoryStore.save(memory) }
                 catch { throw FightPersistenceError(details: error.localizedDescription) }
-            } else { ranRegular = true }
+            }
             var outcome = try await runFightPhase(
                 isAnnihilation: isAnnihilation, plan: plan, account: account, client: client,
                 configuration: configuration, progress: &progress, state: &state, weekly: &weekly
@@ -1707,29 +1733,18 @@ public final class WorkflowRunner {
             }
             lastOutcome = outcome
             guard let result = outcome.fightResult else { return outcome }
+            phases.append((isAnnihilation ? .annihilation : .regular, result))
             if memory.recordSuccessfulFight(result, clientID: client.id, accountID: account.id) {
                 do { try fightStageMemoryStore.save(memory) }
                 catch { throw FightPersistenceError(details: error.localizedDescription) }
             }
-            guard result.isResolved else { return outcome }
+            guard result.isResolved else { return outcome.summarizingFightPhases(phases) }
         }
         if needsAnnihilation, weekly.status(for: plan.fight.weeklyAnnihilation, client: client, accountID: account.id, at: now()) == .pending {
             emit(.runningTask, "\(accountText(account))：本周剿灭尚未确认打满，后续运行将继续补打；已完成的常规任务保留",
                  0, .info, client: client, account: account, task: .fight)
         }
-        if var lastOutcome {
-            if ranRegular, let annihilation = progress.annihilation, annihilation.times > 0,
-               var result = lastOutcome.fightResult, result.isResolved {
-                result.status = .completed
-                result.stage = result.times > 0 ? "剿灭 + \(result.stage ?? progress.regularStage)" : "Annihilation"
-                result.times += annihilation.times
-                let unrecognized = (result.unrecognizedSettlements ?? 0) + (annihilation.unrecognizedSettlements ?? 0)
-                result.unrecognizedSettlements = unrecognized > 0 ? unrecognized : nil
-                result.kind = result.times == annihilation.times ? .annihilation : nil
-                lastOutcome.fightResult = result
-            }
-            return lastOutcome
-        }
+        if let lastOutcome { return lastOutcome.summarizingFightPhases(phases) }
         let result = progress.regular ?? FightResult(status: .unconfirmed, reason: .missingEvidence)
         return TaskRunOutcome(succeeded: result.isResolved, recoveredAfterRetry: false, notices: [],
                               failureDetails: nil, fightResult: result)
@@ -2353,6 +2368,7 @@ public final class WorkflowRunner {
             var result = original
             result.stage = original.stage.map { SensitiveDataRedactor.redact($0, sensitiveValues: currentSensitiveValues) }
             result.totalDrops = original.totalDrops.map { SensitiveDataRedactor.redact($0, sensitiveValues: currentSensitiveValues) }
+            result.fallbackFrom = original.fallbackFrom.map { SensitiveDataRedactor.redact($0, sensitiveValues: currentSensitiveValues) }
             return result
         }
         let log = LogEntry(

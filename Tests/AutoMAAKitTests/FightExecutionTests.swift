@@ -900,6 +900,45 @@ final class FightWorkflowTests: XCTestCase {
         XCTAssertEqual(fixture.runtime.launches, 1)
     }
 
+    func testFightSummaryKeepsPhaseCountsReasonsAndDrops() async throws {
+        for regularRuns in [false, true] {
+            let fixture = try FightFixture(priority: true)
+            defer { fixture.cleanup() }
+            let annihilation = FightTestCommands.Reply(
+                result: command("Fight TestMap 2 times, drops:\ntotal drops: 合成玉 × 740"),
+                callbacks: try settlementCallbacks(stage: "TestMap", kind: .annihilation, times: 2, weeklyProgress: [1800, 1800]))
+            let regular = regularRuns
+                ? FightTestCommands.Reply(result: command("Fight 1-7 3 times, drops:\ntotal drops: 源岩 × 6"))
+                : FightTestCommands.Reply(result: command(), callbacks: noSanity)
+            let (report, _) = await fixture.run([annihilation, regular])
+            XCTAssertTrue(report.isSuccess)
+            let event = try XCTUnwrap(fixture.runtime.events.last { $0.message.contains("：理智作战") && $0.log.fightResult != nil })
+            XCTAssertTrue(event.message.contains("剿灭已完成（TestMap × 2） · 本周剿灭奖励已满"))
+            XCTAssertTrue(event.message.contains(regularRuns ? "常规已完成（1-7 × 3）" : "常规无需作战 · 理智不足"))
+            XCTAssertTrue(event.log.details?.contains("剿灭：合成玉 × 740") == true)
+            if regularRuns { XCTAssertTrue(event.log.details?.contains("常规：源岩 × 6") == true) }
+            XCTAssertEqual(event.log.fightResult?.times, regularRuns ? 5 : 2)
+            XCTAssertEqual(report.pendingWeeklyAnnihilation, 0)
+        }
+    }
+
+    func testUnconfirmedRegularSummaryRetainsCompletedPhaseWithoutResolvingCheckpoint() async throws {
+        let fixture = try FightFixture(priority: true)
+        defer { fixture.cleanup() }
+        let (report, _) = await fixture.run([
+            .init(result: command("Fight Annihilation 1 times, drops:\ntotal drops: 合成玉 × 370")),
+            .init(result: command(timeout: true))
+        ])
+        XCTAssertEqual(report.unconfirmedSteps, 1)
+        XCTAssertTrue(fixture.state.needsFightConfirmation(fixture.step.key))
+        XCTAssertFalse(fixture.state.completedSteps.contains(fixture.step.key))
+        let event = try XCTUnwrap(fixture.runtime.events.last { $0.message.contains("：理智作战") && $0.log.fightResult != nil })
+        XCTAssertTrue(event.message.contains("剿灭已完成"))
+        XCTAssertTrue(event.message.contains("常规结果未确认"))
+        XCTAssertTrue(event.log.details?.contains("剿灭：合成玉 × 370") == true)
+        XCTAssertEqual(event.log.fightResult?.status, .unconfirmed)
+    }
+
     func testPriorityFreezesRegularStageAndKeepsResourceLimitsInRegularPhase() async throws {
         let fixture = try FightFixture(priority: true)
         defer { fixture.cleanup() }
@@ -944,6 +983,10 @@ final class FightWorkflowTests: XCTestCase {
         XCTAssertTrue(resumed.isSuccess)
         XCTAssertEqual(calls.count, 1)
         XCTAssertEqual(try parameters(calls[0])["stage"] as? String, "1-7", "Retry uses the frozen stage")
+        XCTAssertEqual(fixture.state.fightResults?[fixture.step.key]?.times, 1, "This run must not recount an earlier phase")
+        let event = try XCTUnwrap(fixture.runtime.events.last { $0.message.contains("：理智作战") && $0.log.fightResult != nil })
+        XCTAssertFalse(event.message.contains("剿灭"))
+
     }
 
     func testMissingEntrancePausesUntilManualConfirmationThenOnlyRunsRegular() async throws {
