@@ -55,12 +55,14 @@ struct FightRecoveryActions: View {
 struct FightRecoveryRow: View {
     let item: FightRecoveryItem
     let context: String
+    var pendingTitle: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             Label(item.title, systemImage: "exclamationmark.circle")
                 .font(.subheadline.weight(.semibold)).foregroundStyle(.orange)
             Text(context).font(.callout).textSelection(.enabled)
+            if let pendingTitle { Text("待执行：" + pendingTitle).font(.callout) }
             Text(item.result.reason?.title ?? "请检查游戏中的作战结果，再选择如何继续。")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

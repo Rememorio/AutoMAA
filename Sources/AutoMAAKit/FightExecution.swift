@@ -308,6 +308,7 @@ public struct PlanContinuation: Equatable, Sendable {
     public var unconfirmed = 0
     public var resolved = 0
     public var hasStarted = false
+    public var pendingItems: [PendingWorkflowItem] = []
     public var fightRecoveryItems: [FightRecoveryItem] = []
 
     public init(configuration: AppConfiguration, planID: UUID, state: ExecutionState, history: [LogEntry],
@@ -324,10 +325,42 @@ public struct PlanContinuation: Equatable, Sendable {
             for account in client.accounts.filter(plan.includes) {
                 for task in plan.enabledTasks {
                     let key = WorkflowStep(planID: planID, clientID: client.id, accountID: account.id, task: task).key
-                    hasStarted = hasStarted || state.fightResults?[key] != nil
+                    hasStarted = hasStarted || state.fightResults?[key] != nil || state.fightProgress?[key] != nil
                     if state.isResolved(key) { resolved += 1 }
                     else if state.needsFightConfirmation(key) { unconfirmed += 1 }
-                    else { pending += 1 }
+                    else {
+                        pending += 1
+                        let weeklyStatus = weeklyAnnihilation.status(for: plan.fight.weeklyAnnihilation,
+                                                                    client: client, accountID: account.id, at: now)
+                        let progress = state.fightProgress?[key]
+                        let hasWeeklyPolicy = task == .fight && plan.fight.weeklyAnnihilation.enabled
+                        var targets: [ContinuationTarget] = []
+                        if hasWeeklyPolicy {
+                            if FightProgress.needsAnnihilation(progress, weeklyStatus: weeklyStatus) {
+                                targets.append(.weeklyAnnihilation)
+                            }
+                            if progress?.regular?.isResolved != true { targets.append(.regularFight) }
+                        } else { targets = [.task] }
+                        let entry = weeklyAnnihilation.entry(clientID: client.id, accountID: account.id)
+                        let currentEntry = entry?.clientKind == client.kind
+                            && entry?.weekStart == GameWeek(client: client.kind, at: now).start
+                        let reason: FightStopReason?
+                        switch targets.first {
+                        case .weeklyAnnihilation: reason = currentEntry ? entry?.result.reason : nil
+                        case .regularFight: reason = progress?.regular?.reason
+                        default: reason = state.fightResults?[key]?.reason
+                        }
+                        let lastAttempt = history.last {
+                            $0.planID == planID && $0.clientID == client.id && $0.accountID == account.id
+                                && $0.task == task
+                                && calendar.isDate($0.timestamp, inSameDayAs: now)
+                        }
+                        pendingItems.append(.init(
+                            step: .init(planID: planID, clientID: client.id, accountID: account.id, task: task),
+                            targets: targets, reason: reason,
+                            lastFailure: lastAttempt?.level == .error ? lastAttempt?.message : nil
+                        ))
+                    }
                     if task == .fight {
                         let canConfirm = plan.fight.weeklyAnnihilation.enabled
                             && weeklyAnnihilation.canConfirmComplete(client: client, accountID: account.id, at: now)
@@ -351,6 +384,37 @@ public struct PlanContinuation: Equatable, Sendable {
             }
         }
         hasStarted = hasStarted || resolved > 0 || unconfirmed > 0
+    }
+}
+
+public enum ContinuationTarget: Equatable, Sendable {
+    case task, weeklyAnnihilation, regularFight
+}
+
+public struct PendingWorkflowItem: Equatable, Identifiable, Sendable {
+    public let step: WorkflowStep
+    public let targets: [ContinuationTarget]
+    public let reason: FightStopReason?
+    public let lastFailure: String?
+
+    public var id: String { step.key }
+    public var title: String {
+        targets.map {
+            switch $0 {
+            case .task: step.task.title
+            case .weeklyAnnihilation: "本周剿灭"
+            case .regularFight: "常规作战"
+            }
+        }.joined(separator: "、")
+    }
+    public var detail: String? {
+        if targets == [.weeklyAnnihilation] {
+            return reason == .insufficientSanity
+                ? "上次理智不足；恢复理智后可补打，已处理的日常保留。"
+                : [reason?.title, "本周奖励尚未确认打满；后续运行继续补打，已处理的日常保留。"].compactMap { $0 }.joined(separator: "；")
+        }
+        if let reason { return reason.title }
+        return lastFailure ?? "尚未处理；下次运行将继续此项。"
     }
 }
 

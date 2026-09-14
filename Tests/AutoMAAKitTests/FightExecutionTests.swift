@@ -473,6 +473,26 @@ private final class FightFixture {
 
 @MainActor
 final class FightWorkflowTests: XCTestCase {
+    func testCompletedRoutineReportsWeeklyWorkStillPendingAfterInsufficientSanity() async throws {
+        let fixture = try FightFixture(priority: true, award: true)
+        defer { fixture.cleanup() }
+        let (report, _) = await fixture.run([
+            .init(result: command(), callbacks: noSanity),
+            .init(result: command("Fight 1-7 1 times")),
+            .init(result: command())
+        ])
+        XCTAssertTrue(report.isSuccess)
+        let completion = try XCTUnwrap(fixture.runtime.events.last)
+        XCTAssertTrue(completion.message.contains("本周剿灭待补打"))
+        XCTAssertEqual(completion.log.runSummary?.pendingWeeklyAnnihilation, 1)
+        XCTAssertFalse(completion.log.runSummary?.isPartial ?? true)
+        XCTAssertFalse(completion.message.contains("已全部完成"))
+        let (_, calls) = await fixture.run([.init(result: command(), callbacks: noSanity)])
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(try parameters(XCTUnwrap(calls.first))["stage"] as? String, "Annihilation")
+        XCTAssertTrue(fixture.runtime.events.last?.message.contains("本周剿灭待补打") == true)
+    }
+
     func testClosedEntranceContinuesRegularAndOtherTasksWithoutCompletingTheWeek() async throws {
         for kind in ClientKind.allCases {
             let fixture = try FightFixture(priority: true, award: true)
@@ -997,6 +1017,74 @@ final class FightWorkflowTests: XCTestCase {
         XCTAssertEqual(continuation.pending, 2)
         XCTAssertFalse(continuation.hasStarted)
         XCTAssertEqual(PlanContinuation(configuration: fixture.configuration, planID: UUID(), state: state, history: []).pending, 0)
+    }
+
+    func testContinuationTargetsFollowPhaseCheckpointsAndWeeklyPolicy() throws {
+        let fixture = try FightFixture(priority: true)
+        defer { fixture.cleanup() }
+        let now = Date()
+        var state = ExecutionState(dateKey: ExecutionStateStore.todayKey)
+        var weekly = WeeklyAnnihilationState()
+        func continuation() -> PlanContinuation {
+            PlanContinuation(configuration: fixture.configuration, planID: fixture.plan.id, state: state,
+                             history: [], weeklyAnnihilation: weekly, now: now)
+        }
+        XCTAssertEqual(continuation().pendingItems.first?.targets, [.weeklyAnnihilation, .regularFight])
+        var progress = FightProgress(regularStage: "1-7")
+        progress.annihilation = .init(status: .completed, times: 1, reason: .timesLimit)
+        progress.regular = .init(status: .failed, reason: .stageUnavailable)
+        state.fightProgress = [fixture.step.key: progress]
+        state.record(progress.regular!, for: fixture.step.key)
+        XCTAssertEqual(continuation().pendingItems.first?.targets, [.regularFight])
+        XCTAssertEqual(continuation().pendingItems.first?.reason, .stageUnavailable)
+        progress.regular = .init(status: .completed, stage: "1-7", times: 2)
+        state.fightProgress = [fixture.step.key: progress]
+        state.record(progress.regular!, for: fixture.step.key)
+        weekly.record(.init(status: .unnecessary, reason: .insufficientSanity), client: fixture.client,
+                      accountID: fixture.account.id, weekStart: GameWeek(client: fixture.client.kind, at: now).start)
+        XCTAssertEqual(continuation().pendingItems.first?.targets, [.weeklyAnnihilation])
+        XCTAssertEqual(continuation().pendingItems.first?.reason, .insufficientSanity)
+        XCTAssertTrue(continuation().hasStarted)
+        weekly.record(.init(status: .unnecessary, reason: .weeklyLimit), client: fixture.client,
+                      accountID: fixture.account.id, weekStart: GameWeek(client: fixture.client.kind, at: now).start)
+        XCTAssertTrue(continuation().pendingItems.isEmpty)
+        weekly = .init()
+        fixture.plan.fight.weeklyAnnihilation.enabled = false
+        XCTAssertTrue(continuation().pendingItems.isEmpty)
+    }
+
+    func testPendingTaskUsesOnlyItsLatestSameDayFailure() throws {
+        let fixture = try FightFixture(award: true)
+        defer { fixture.cleanup() }
+        let state = ExecutionState(dateKey: ExecutionStateStore.todayKey)
+        let failure = LogEntry(level: .error, message: "领取奖励失败", planID: fixture.plan.id,
+                               clientID: fixture.client.id, accountID: fixture.account.id, task: .award)
+        var history = [failure]
+        func pending() -> PendingWorkflowItem? {
+            PlanContinuation(configuration: fixture.configuration, planID: fixture.plan.id, state: state,
+                             history: history).pendingItems.last
+        }
+        XCTAssertEqual(pending()?.lastFailure, failure.message)
+        var later = failure
+        later.level = .success
+        history.append(later)
+        XCTAssertNil(pending()?.lastFailure)
+        history = [failure]
+        history[0].timestamp = .distantPast
+        XCTAssertNil(pending()?.lastFailure)
+        history[0] = failure
+        history[0].planID = UUID()
+        XCTAssertNil(pending()?.lastFailure)
+    }
+
+    func testRunSummaryPreservesWeeklyPendingWithoutChangingSuccessOrOldHistory() throws {
+        let old = Data(#"{"completedSteps":1,"failedSteps":0,"unexecutedSteps":0,"totalSteps":1}"#.utf8)
+        var summary = try JSONDecoder().decode(WorkflowRunSummary.self, from: old)
+        XCTAssertEqual(summary.pendingWeeklyAnnihilation, 0)
+        summary.pendingWeeklyAnnihilation = 2
+        XCTAssertFalse(summary.isPartial)
+        XCTAssertTrue(summary.successMessage(planName: "测试方案").contains("2 个账号"))
+        XCTAssertEqual(try JSONDecoder().decode(WorkflowRunSummary.self, from: JSONEncoder().encode(summary)), summary)
     }
 
     func testOnlyUnconfirmedWorkDoesNotLaunchClient() async throws {

@@ -110,6 +110,8 @@ Data entry uses native controls and keeps validation near the affected setting. 
 
 Task orchestration settings precede the MAA parameter mode in the same task card. Weekly annihilation uses `SettingsToggleRow` and a native weekday `Picker`, followed by compact account status and recovery controls. The strategy remains available in both parameter modes; account status wraps rather than clipping long labels. `FightRecoveryActions` owns explicit weekly-confirmation and retry actions in plan settings and the activity current-work panel. Weekly confirmation saves a record without launching a game. Actions remain visible while busy, with an inline explanation. Activity places actionable current state before immutable historical runs; historical rows contain no live recovery or resume actions, and status counts wrap at narrow widths.
 
+`PendingWorkList` shares the account, task or phase, and known reason presentation across Overview and Activity. It uses native text styles and wrapping rows, with task symbols and dividers. Run labels remain stable across task types; exact continuation scope comes from the core state model beside the action.
+
 ### Update behavior
 
 `UpdateProgressRow` owns pending update feedback in Settings: native indeterminate progress, named stage, elapsed time, the shared limit from `UpdatePolicy`, and a consistently labeled “取消更新” action. Automatic and manual work use the same controls. Cancellation remains busy until cleanup finishes; errors remain beside the owning update action and in MAA activity history. `AppModel.startMAAUpdate` owns both automatic and manual MAA task lifecycle. `WorkflowRunner` owns staged validation and activation; the UI never infers compatibility.

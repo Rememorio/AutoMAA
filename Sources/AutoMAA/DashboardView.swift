@@ -9,6 +9,17 @@ struct DashboardView: View {
             header
             metrics
             routines
+            if let planID = model.currentPlanID {
+                let progress = model.continuation(for: planID)
+                if progress.hasStarted, !progress.pendingItems.isEmpty {
+                    Panel {
+                        VStack(alignment: .leading, spacing: 14) {
+                            Text("当前待办").font(.headline)
+                            PendingWorkList(items: progress.pendingItems)
+                        }
+                    }
+                }
+            }
             executionFlow
             readiness
             recentActivity
@@ -429,6 +440,9 @@ struct DashboardView: View {
     private func activityStatus(_ session: ActivitySession) -> String {
         if session.runSummary?.isPartial == true { return "当次部分完成" }
         if session.finalPhase == .completed, session.finalLevel == .warning { return "完成，需留意" }
+        if session.finalPhase == .completed, (session.runSummary?.pendingWeeklyAnnihilation ?? 0) > 0 {
+            return "本轮结束，剿灭待补打"
+        }
         return session.finalPhase?.displayName ?? "运行记录"
     }
 

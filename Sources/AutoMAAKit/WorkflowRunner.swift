@@ -745,6 +745,9 @@ public final class WorkflowRunner {
                 let result = state.fightResults?[key]
                 if state.needsFightConfirmation(key) { report.unconfirmedSteps += 1 }
                 if result?.status == .unnecessary { report.unnecessarySteps += 1 }
+                if weeklyAnnihilation.status(for: plan.fight.weeklyAnnihilation, client: client, accountID: account.id, at: now()) == .pending {
+                    report.pendingWeeklyAnnihilation += 1
+                }
             }
         }
         report.unexecutedSteps = max(0, totalSteps - completedSteps - report.failedSteps - report.unconfirmedSteps)
@@ -770,7 +773,8 @@ public final class WorkflowRunner {
         } else if !report.notices.isEmpty {
             emit(.completed, noticeSummary(plan: plan, notices: report.notices), 1, .warning, runSummary: report.runSummary)
         } else {
-            emit(.completed, "「\(plan.displayName)」已全部完成", 1, .success, runSummary: report.runSummary)
+            emit(.completed, report.runSummary?.successMessage(planName: plan.displayName) ?? "本轮运行已结束",
+                 1, .success, runSummary: report.runSummary)
         }
         return report
     }

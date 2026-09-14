@@ -199,9 +199,16 @@ struct ActivityView: View {
                         PlanRunButton(planID: planID)
                     }
                 }
+                let recoveryIDs = Set(progress.fightRecoveryItems.map(\.id))
+                let pendingItems = progress.pendingItems.filter { !recoveryIDs.contains($0.id) }
+                if !pendingItems.isEmpty {
+                    Divider()
+                    PendingWorkList(items: pendingItems)
+                }
                 ForEach(progress.fightRecoveryItems) { item in
                     Divider()
-                    FightRecoveryRow(item: item, context: recoveryContext(item.step))
+                    FightRecoveryRow(item: item, context: model.pendingWorkContext(item.step),
+                                     pendingTitle: progress.pendingItems.first { $0.id == item.id }?.title)
                 }
             }
         }
@@ -213,16 +220,10 @@ struct ActivityView: View {
                 .font(.callout).monospacedDigit()
             Text(progress.unconfirmed > 0
                  ? "继续其他任务会保留待确认作战。可先核实下方结果，再决定是否继续。"
-                 : "保留今日已处理的任务，每周剿灭按账号共享进度。")
+                 : "下方列出下一次运行的任务与阶段；已处理的任务保留。")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-    }
-
-    private func recoveryContext(_ step: WorkflowStep) -> String {
-        guard let client = model.configuration.clients.first(where: { $0.id == step.clientID }),
-              let account = client.accounts.first(where: { $0.id == step.accountID }) else { return "当前账号" }
-        return "\(client.displayName) / \(account.displayName)"
     }
 
     private var currentActivity: some View {
@@ -411,6 +412,9 @@ struct ActivityView: View {
                 if summary.unnecessarySteps > 0 { sessionBadge("\(summary.unnecessarySteps) 无需执行", color: .secondary) }
                 if summary.unconfirmedSteps > 0 { sessionBadge("\(summary.unconfirmedSteps) 未确认", color: .orange) }
                 if summary.failedSteps > 0 { sessionBadge("\(summary.failedSteps) 失败", color: .red) }
+                if summary.pendingWeeklyAnnihilation > 0 {
+                    sessionBadge("\(summary.pendingWeeklyAnnihilation) 剿灭待补打", color: .secondary)
+                }
             } else if session.completedTaskCount > 0 {
                 sessionBadge("\(session.completedTaskCount) 完成", color: .green)
             }
@@ -467,6 +471,7 @@ struct ActivityView: View {
     private func sessionStatus(session: ActivitySession, phase: RunnerPhase?, level: LogLevel) -> String {
         if session.runSummary?.isPartial == true { return "当次部分完成" }
         if phase == .completed, level == .warning { return "完成，需留意" }
+        if phase == .completed, (session.runSummary?.pendingWeeklyAnnihilation ?? 0) > 0 { return "本轮结束，剿灭待补打" }
         if let phase { return phase.displayName }
         return switch level {
         case .info: "运行记录"

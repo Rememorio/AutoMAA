@@ -609,15 +609,17 @@ public struct WorkflowRunSummary: Codable, Sendable, Equatable {
     public var totalSteps: Int
     public var unconfirmedSteps: Int
     public var unnecessarySteps: Int
+    public var pendingWeeklyAnnihilation: Int
 
     public init(completedSteps: Int, failedSteps: Int, unexecutedSteps: Int, totalSteps: Int,
-                unconfirmedSteps: Int = 0, unnecessarySteps: Int = 0) {
+                unconfirmedSteps: Int = 0, unnecessarySteps: Int = 0, pendingWeeklyAnnihilation: Int = 0) {
         self.completedSteps = completedSteps
         self.failedSteps = failedSteps
         self.unexecutedSteps = unexecutedSteps
         self.totalSteps = totalSteps
         self.unconfirmedSteps = unconfirmedSteps
         self.unnecessarySteps = unnecessarySteps
+        self.pendingWeeklyAnnihilation = pendingWeeklyAnnihilation
     }
 
     public init(from decoder: any Decoder) throws {
@@ -628,6 +630,7 @@ public struct WorkflowRunSummary: Codable, Sendable, Equatable {
         totalSteps = try values.decode(Int.self, forKey: .totalSteps)
         unconfirmedSteps = try values.decodeIfPresent(Int.self, forKey: .unconfirmedSteps) ?? 0
         unnecessarySteps = try values.decodeIfPresent(Int.self, forKey: .unnecessarySteps) ?? 0
+        pendingWeeklyAnnihilation = try values.decodeIfPresent(Int.self, forKey: .pendingWeeklyAnnihilation) ?? 0
     }
 
     public var isPartial: Bool { failedSteps > 0 || unexecutedSteps > 0 || unconfirmedSteps > 0 }
@@ -638,7 +641,15 @@ public struct WorkflowRunSummary: Codable, Sendable, Equatable {
         if unnecessarySteps > 0 { parts.append("\(unnecessarySteps) 个无需执行") }
         if unconfirmedSteps > 0 { parts.append("\(unconfirmedSteps) 个结果未确认") }
         if unexecutedSteps > 0 { parts.append("\(unexecutedSteps) 个未执行") }
+        if pendingWeeklyAnnihilation > 0 { parts.append("\(pendingWeeklyAnnihilation) 个账号本周剿灭待补打") }
         return parts.joined(separator: "，")
+    }
+
+    public func successMessage(planName: String) -> String {
+        if pendingWeeklyAnnihilation > 0 {
+            return "「\(planName)」本轮已结束，\(pendingWeeklyAnnihilation) 个账号本周剿灭待补打"
+        }
+        return "「\(planName)」今日任务已处理"
     }
 }
 
@@ -800,6 +811,7 @@ public struct WorkflowReport: Sendable {
     public var totalSteps: Int
     public var unconfirmedSteps = 0
     public var unnecessarySteps = 0
+    public var pendingWeeklyAnnihilation = 0
     public var attentionMessages: [String]
     public var notices: [WorkflowNotice]
     public var pendingNotificationNotices: [WorkflowNotice]
@@ -838,7 +850,8 @@ public struct WorkflowReport: Sendable {
             unexecutedSteps: unexecutedSteps,
             totalSteps: totalSteps,
             unconfirmedSteps: unconfirmedSteps,
-            unnecessarySteps: unnecessarySteps
+            unnecessarySteps: unnecessarySteps,
+            pendingWeeklyAnnihilation: pendingWeeklyAnnihilation
         )
     }
 

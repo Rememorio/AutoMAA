@@ -483,6 +483,18 @@ final class AppModel: ObservableObject {
         return state.hasStarted ? "继续未完成" : readyTitle
     }
 
+    func pendingWorkContext(_ step: WorkflowStep) -> String {
+        guard let client = configuration.clients.first(where: { $0.id == step.clientID }),
+              let account = client.accounts.first(where: { $0.id == step.accountID }) else { return "当前账号" }
+        return "\(client.displayName) / \(account.displayName)"
+    }
+
+    func runHelp(for planID: UUID) -> String {
+        let progress = continuation(for: planID)
+        if progress.unconfirmed > 0 { return "未确认的作战不会自动补跑；请在活动记录中处理" }
+        return "保留今日已处理的任务，只执行当前待办中的步骤"
+    }
+
     var isFightRecoveryBusy: Bool { isWorkflowRunning || applicationUpdateState.blocksWorkflow }
 
     func confirmWeeklyAnnihilation(_ step: WorkflowStep) {
@@ -573,7 +585,7 @@ final class AppModel: ObservableObject {
             } else if report.isSuccess {
                 if report.notices.isEmpty {
                     let name = snapshot.plans.first(where: { $0.id == planID })?.displayName ?? "方案"
-                    self.showBanner("「\(name)」已全部完成")
+                    self.showBanner(report.runSummary?.successMessage(planName: name) ?? "本轮运行已结束")
                 } else {
                     self.showBanner(self.noticeBanner(report.notices))
                 }

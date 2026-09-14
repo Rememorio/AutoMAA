@@ -189,7 +189,7 @@ struct SidebarView: View {
                     .buttonStyle(.borderedProminent)
                     .tint(.maaAction)
                     .controlSize(.large)
-                    .help("按当前方案依次执行客户端和账号")
+                    .help(model.currentPlanID.map { model.runHelp(for: $0) } ?? "请选择方案")
                     .disabled(model.currentPlanID.map { model.continuation(for: $0).pending == 0 } ?? true)
                 } else {
                     Button {} label: {
