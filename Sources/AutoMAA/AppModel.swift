@@ -98,7 +98,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var currentPlanID: UUID?
     @Published var activityEntries: [LogEntry]
     @Published var activitySearch = ""
-    @Published var activityOnlyAttention = false
+    @Published var activityFilter: ActivityFilter = .all
     @Published var phase: RunnerPhase = .idle
     @Published var statusMessage = "等待开始"
     @Published var progress = 0.0

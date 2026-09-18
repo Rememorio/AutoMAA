@@ -434,19 +434,20 @@ struct DashboardView: View {
            let plan = model.configuration.plans.first(where: { $0.id == planID }) {
             return plan.displayName
         }
+        if session.planID != nil { return "已移除的方案" }
         return session.runID == nil ? "较早的运行记录" : "MAA 维护"
     }
 
+    private func isCurrentActivity(_ session: ActivitySession) -> Bool {
+        model.isWorkflowRunning && session.runID != nil && session.runID == model.activeRunID
+    }
+
     private func activityStatus(_ session: ActivitySession) -> String {
-        if session.runSummary?.isPartial == true { return "当次部分完成" }
-        if session.finalPhase == .completed, session.finalLevel == .warning { return "完成，需留意" }
-        if session.finalPhase == .completed, (session.runSummary?.pendingWeeklyAnnihilation ?? 0) > 0 {
-            return "本轮结束，剿灭待补打"
-        }
-        return session.finalPhase?.displayName ?? "运行记录"
+        isCurrentActivity(session) ? model.activePhase.displayName : session.historyStatusTitle
     }
 
     private func activitySymbol(_ session: ActivitySession) -> String {
+        if !isCurrentActivity(session), session.hasUnfinishedActivity { return "questionmark.circle" }
         if session.finalPhase == .completed, session.finalLevel == .warning {
             return "exclamationmark.circle.fill"
         }
@@ -454,6 +455,7 @@ struct DashboardView: View {
     }
 
     private func activityTint(_ session: ActivitySession) -> Color {
+        if !isCurrentActivity(session), session.hasUnfinishedActivity { return .secondary }
         if session.finalPhase == .completed, session.finalLevel == .warning { return .orange }
         return session.finalPhase?.statusTint ?? session.finalLevel.color
     }

@@ -153,7 +153,7 @@ struct ActivitySearchField: View {
                 .textFieldStyle(.plain)
                 .focused($isFocused)
                 .accessibilityLabel("搜索活动记录")
-                .help("搜索实时与历史记录中的方案、客户端、账号、任务、消息或详情")
+                .help("搜索历史运行中的方案、客户端、账号、任务、消息或详情")
             if !text.isEmpty {
                 Button {
                     text = ""

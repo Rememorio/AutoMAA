@@ -2,30 +2,10 @@ import AppKit
 import AutoMAAKit
 import SwiftUI
 
-private enum ActivityFilter: String, CaseIterable, Identifiable {
-    case all
-    case attention
-
-    var id: Self { self }
-    var title: String {
-        switch self {
-        case .all: "全部"
-        case .attention: "警告与错误"
-        }
-    }
-}
-
-private struct DisplayActivitySession: Identifiable {
-    let session: ActivitySession
-    let entries: [LogEntry]
-
-    var id: String { session.id }
-}
-
 struct ActivityView: View {
     @EnvironmentObject private var model: AppModel
     private var search: String { model.activitySearch }
-    private var filter: ActivityFilter { model.activityOnlyAttention ? .attention : .all }
+    private var filter: ActivityFilter { model.activityFilter }
     @State private var expandedSessionIDs: Set<String> = []
     @State private var followsLiveActivity = true
     @State private var showingClearConfirmation = false
@@ -48,11 +28,15 @@ struct ActivityView: View {
         return sessions.filter { $0.runID != currentRunID }
     }
 
-    private var displayedSessions: [DisplayActivitySession] {
-        historicalSessions.compactMap { session in
-            let entries = filteredEntries(in: session)
-            return entries.isEmpty ? nil : DisplayActivitySession(session: session, entries: entries)
+    private var displayedSessions: [ActivitySession] {
+        historicalSessions.filter { session in
+            filter.includes(session) && ActivitySearch.matches(session, query: search,
+                title: sessionTitle(session), context: context(for:))
         }
+    }
+
+    private var recoveryPlans: [AutomationPlan] {
+        model.configuration.plans.filter { !model.continuation(for: $0.id).fightRecoveryItems.isEmpty }
     }
 
     var body: some View {
@@ -81,9 +65,7 @@ struct ActivityView: View {
             }
 
             HStack(spacing: 12) {
-                Text(filter == .attention
-                     ? "仅显示警告与错误 · 历史事件不代表当前待办"
-                     : "\(displayedSessions.count) 组历史记录")
+                Text("\(displayedSessions.count) 次运行" + (hasActiveFilters ? " · 按整次运行筛选，保留完整过程" : " · 展开查看账号结果"))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
@@ -105,13 +87,10 @@ struct ActivityView: View {
 
     private var recordScope: some View {
         HStack(spacing: 16) {
-            Text("记录")
+            Text("历史记录")
                 .font(.headline)
                 .accessibilityAddTraits(.isHeader)
-            Picker("记录级别", selection: Binding(
-                get: { filter },
-                set: { model.activityOnlyAttention = $0 == .attention }
-            )) {
+            Picker("历史运行筛选", selection: $model.activityFilter) {
                 ForEach(ActivityFilter.allCases) { item in
                     Text(item.title).tag(item)
                 }
@@ -120,7 +99,7 @@ struct ActivityView: View {
             .tint(.maaAction)
             .labelsHidden()
             .frame(width: 200)
-            .help("筛选实时与历史记录，不影响当前待办和运行状态")
+            .help("提醒包含警告、错误与未完成事项；失败筛选有失败结果的运行。保留整次过程，不影响当前状态。")
         }
         .fixedSize()
     }
@@ -128,7 +107,7 @@ struct ActivityView: View {
     private var searchActions: some View {
         HStack(spacing: 12) {
             ActivitySearchField(text: $model.activitySearch)
-                .frame(minWidth: 240, maxWidth: 300)
+                .frame(minWidth: 200, maxWidth: 280)
             Spacer(minLength: 0)
             Menu {
                 Button {
@@ -167,23 +146,18 @@ struct ActivityView: View {
                 ? NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) : 0
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: PageLayout.sectionSpacing, pinnedViews: [.sectionHeaders]) {
-                    if let planID = model.currentPlanID {
-                        currentPlanProgress(planID)
-                            .padding(.horizontal, PageLayout.inset)
-                            .padding(.top, PageLayout.inset)
+                    VStack(alignment: .leading, spacing: 14) {
+                        if !recoveryPlans.isEmpty { currentRecovery }
+                        if model.isWorkflowRunning { currentActivity }
+                        if let planID = model.currentPlanID, !model.isWorkflowRunning {
+                            currentPlanProgress(planID)
+                        }
                     }
+                    .padding(.horizontal, PageLayout.inset)
+                    .padding(.top, PageLayout.inset)
 
                     Section {
                         Group {
-                            if model.isWorkflowRunning {
-                                currentActivity
-                                if !displayedSessions.isEmpty {
-                                    Text("历史记录")
-                                        .font(.headline)
-                                        .padding(.top, 4)
-                                }
-                            }
-
                             if displayedSessions.isEmpty {
                                 ContentUnavailableView(
                                     historicalSessions.isEmpty ? "还没有历史记录" : "没有匹配的历史记录",
@@ -195,8 +169,20 @@ struct ActivityView: View {
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 40)
                             } else {
-                                ForEach(displayedSessions) { item in
-                                    sessionCard(item)
+                                ForEach(ActivityDay.groups(displayedSessions)) { day in
+                                    VStack(alignment: .leading, spacing: 10) {
+                                        Text(dayTitle(day.date))
+                                            .font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                                            .accessibilityAddTraits(.isHeader)
+                                        Panel {
+                                            VStack(spacing: 0) {
+                                                ForEach(Array(day.sessions.enumerated()), id: \.element.id) { index, session in
+                                                    if index > 0 { Divider().padding(.vertical, 12) }
+                                                    sessionRow(session)
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -213,14 +199,6 @@ struct ActivityView: View {
             .scrollIndicators(.visible)
             .clipped()
         }
-        .onAppear {
-            if let first = displayedSessions.first {
-                expandedSessionIDs.insert(first.id)
-            }
-        }
-        .onChange(of: displayedSessions.first?.id) { _, id in
-            if let id { expandedSessionIDs.insert(id) }
-        }
     }
 
     private var hasActiveFilters: Bool {
@@ -229,7 +207,42 @@ struct ActivityView: View {
 
     private func clearFilters() {
         model.activitySearch = ""
-        model.activityOnlyAttention = false
+        model.activityFilter = .all
+    }
+
+    private var currentRecovery: some View {
+        Panel {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Label("需要处理", systemImage: "exclamationmark.circle")
+                        .font(.headline).foregroundStyle(.orange)
+                    Spacer()
+                    Text("\(recoveryPlans.count) 个方案").font(.caption).foregroundStyle(.secondary)
+                }
+                Text("请先核实游戏结果，再决定是否重试。历史提醒不会加入这里。")
+                    .font(.caption).foregroundStyle(.secondary)
+                ForEach(recoveryPlans) { plan in
+                    let progress = model.continuation(for: plan.id)
+                    DisclosureGroup {
+                        VStack(alignment: .leading, spacing: 14) {
+                            ForEach(progress.fightRecoveryItems) { item in
+                                Divider()
+                                FightRecoveryRow(item: item, context: model.pendingWorkContext(item.step),
+                                    pendingTitle: progress.pendingItems.first { $0.id == item.id }?.title)
+                            }
+                        }
+                        .padding(.top, 8)
+                    } label: {
+                        HStack {
+                            Text(plan.displayName)
+                            Spacer()
+                            Text("\(progress.fightRecoveryItems.count) 项待核实").foregroundStyle(.secondary)
+                        }
+                        .font(.callout)
+                    }
+                }
+            }
+        }
     }
 
     private func currentPlanProgress(_ planID: UUID) -> some View {
@@ -262,11 +275,6 @@ struct ActivityView: View {
                     Divider()
                     PendingWorkList(items: pendingItems)
                 }
-                ForEach(progress.fightRecoveryItems) { item in
-                    Divider()
-                    FightRecoveryRow(item: item, context: model.pendingWorkContext(item.step),
-                                     pendingTitle: progress.pendingItems.first { $0.id == item.id }?.title)
-                }
             }
         }
         .id(planID)
@@ -296,7 +304,7 @@ struct ActivityView: View {
     }
 
     private var currentActivity: some View {
-        let entries = currentSession.map(filteredEntries(in:)) ?? []
+        let entries = currentSession?.entries ?? []
 
         return Panel {
             VStack(alignment: .leading, spacing: 14) {
@@ -309,7 +317,7 @@ struct ActivityView: View {
 
                     VStack(alignment: .leading, spacing: 7) {
                         HStack {
-                            Text("当前运行")
+                            Text(model.activePlanID.flatMap { id in model.configuration.plans.first { $0.id == id }?.displayName } ?? "当前运行")
                                 .font(.headline)
                             Text(model.activePhase.displayName)
                                 .font(.caption.weight(.semibold))
@@ -364,7 +372,7 @@ struct ActivityView: View {
             }
 
             if entries.isEmpty {
-                Text(search.isEmpty && filter == .all ? "正在等待第一条活动…" : "当前运行没有匹配的活动")
+                Text("正在等待第一条活动…")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 72)
@@ -397,110 +405,69 @@ struct ActivityView: View {
         }
     }
 
-    private func filteredEntries(in session: ActivitySession) -> [LogEntry] {
-        session.entries.filter { entry in
-            let matchesLevel = filter == .all || entry.level == .warning || entry.level == .error
-            let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
-            let matchesSearch = query.isEmpty
-                || entry.message.localizedCaseInsensitiveContains(query)
-                || entry.details?.localizedCaseInsensitiveContains(query) == true
-                || entry.task?.title.localizedCaseInsensitiveContains(query) == true
-                || context(for: entry)?.localizedCaseInsensitiveContains(query) == true
-                || sessionTitle(session).localizedCaseInsensitiveContains(query)
-            return matchesLevel && matchesSearch
-        }
-    }
-
-    private func sessionCard(_ item: DisplayActivitySession) -> some View {
-        Panel {
-            DisclosureGroup(isExpanded: expansionBinding(for: item.id)) {
-                VStack(spacing: 0) {
-                    Divider()
-                        .padding(.vertical, 12)
-                    ForEach(Array(item.entries.enumerated()), id: \.element.id) { index, entry in
-                        ActivityEventRow(
-                            entry: entry,
-                            context: context(for: entry),
-                            drawsConnector: index < item.entries.count - 1
-                        )
-                    }
+    private func sessionRow(_ session: ActivitySession) -> some View {
+        DisclosureGroup(isExpanded: expansionBinding(for: session.id)) {
+            VStack(alignment: .leading, spacing: 12) {
+                Divider().padding(.vertical, 8)
+                if let information = session.updateInformation {
+                    Button("更新内容") { model.updateDetailsRequest = .maa(information) }
+                        .buttonStyle(.link).font(.callout)
                 }
-            } label: {
-                VStack(alignment: .leading, spacing: 10) {
-                    sessionHeader(item.session)
-                    sessionBadges(item.session)
-                }
-                .contentShape(Rectangle())
+                ActivitySessionDetail(session: session, context: context(for:))
             }
-            .disclosureGroupStyle(.automatic)
+            .padding(.leading, 6)
+            .padding(.bottom, 6)
+        } label: {
+            sessionHeader(session).contentShape(Rectangle())
         }
+        .disclosureGroupStyle(.automatic)
     }
 
     private func sessionHeader(_ session: ActivitySession) -> some View {
-        let isCurrent = model.isWorkflowRunning && session.runID != nil && session.runID == model.activeRunID
-        let phase = isCurrent ? model.activePhase : session.finalPhase
-        let tint = sessionTint(phase: phase, level: session.finalLevel)
-
-        return HStack(spacing: 13) {
-            Image(systemName: sessionSymbol(phase: phase, level: session.finalLevel))
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(tint)
-                .frame(width: 36, height: 36)
-                .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(sessionTitle(session))
-                    .font(.headline)
-                HStack(spacing: 7) {
-                    Text(sessionStatus(session: session, phase: phase, level: session.finalLevel))
-                        .foregroundStyle(tint)
-                    Text("·")
-                    Text(session.startedAt, format: .dateTime.month().day().hour().minute())
-                    if session.endedAt > session.startedAt {
-                        Text("· \(duration(from: session.startedAt, to: session.endedAt))")
-                    }
+        let phase = session.finalPhase
+        let tint = session.hasUnfinishedActivity ? Color.secondary : sessionTint(phase: phase, level: session.finalLevel)
+        return HStack(alignment: .top, spacing: 12) {
+            Text(session.startedAt, format: .dateTime.hour().minute())
+                .font(.callout.monospacedDigit()).foregroundStyle(.secondary)
+                .frame(width: 46, alignment: .leading)
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(sessionTitle(session)).font(.subheadline.weight(.semibold))
+                    Spacer(minLength: 4)
+                    Label(session.historyStatusTitle,
+                          systemImage: session.hasUnfinishedActivity ? "questionmark.circle" : sessionSymbol(phase: phase, level: session.finalLevel))
+                        .font(.caption).foregroundStyle(tint)
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                Text(sessionSummary(session))
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-
-            Spacer()
         }
         .padding(.trailing, 8)
     }
 
-    private func sessionBadges(_ session: ActivitySession) -> some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), alignment: .leading)], alignment: .leading, spacing: 6) {
-            if let information = session.updateInformation {
-                Button("更新内容") { model.updateDetailsRequest = .maa(information) }
-                    .buttonStyle(.link)
-                    .font(.caption)
-            }
-            if let summary = session.runSummary {
-                sessionBadge("\(summary.completedSteps + summary.unnecessarySteps)/\(summary.totalSteps) 已处理", color: .secondary)
-                if summary.unnecessarySteps > 0 { sessionBadge("\(summary.unnecessarySteps) 无需执行", color: .secondary) }
-                if summary.unconfirmedSteps > 0 { sessionBadge("\(summary.unconfirmedSteps) 未确认", color: .orange) }
-                if summary.failedSteps > 0 { sessionBadge("\(summary.failedSteps) 失败", color: .red) }
-                if summary.pendingWeeklyAnnihilation > 0 {
-                    sessionBadge("\(summary.pendingWeeklyAnnihilation) 剿灭待补打", color: .secondary)
-                }
-            } else if session.completedTaskCount > 0 {
-                sessionBadge("\(session.completedTaskCount) 完成", color: .green)
-            }
-            if session.unexecutedTaskCount > 0 {
-                sessionBadge("\(session.unexecutedTaskCount) 未执行", color: .orange)
-            }
-            if session.warningCount > 0, session.runSummary?.isPartial != true {
-                sessionBadge("有提醒", color: .orange)
-            }
-            if session.errorCount > 0, (session.runSummary?.failedSteps ?? 0) == 0 {
-                sessionBadge("有错误", color: .red)
-            }
+    private func sessionSummary(_ session: ActivitySession) -> String {
+        var parts: [String] = []
+        if let summary = session.runSummary {
+            parts.append("\(summary.completedSteps + summary.unnecessarySteps)/\(summary.totalSteps) 项已处理")
+            if summary.unconfirmedSteps > 0 { parts.append("\(summary.unconfirmedSteps) 项未确认") }
+            if summary.failedSteps > 0 { parts.append("\(summary.failedSteps) 项失败") }
+            if summary.unexecutedSteps > 0 { parts.append("\(summary.unexecutedSteps) 项未执行") }
+            if summary.pendingWeeklyAnnihilation > 0 { parts.append("\(summary.pendingWeeklyAnnihilation) 个账号剿灭待补打") }
+        } else {
+            parts.append("\(session.entries.count) 条记录")
         }
+        if session.warningCount > 0 { parts.append("\(session.warningCount) 条提醒") }
+        if session.errorCount > 0, (session.runSummary?.failedSteps ?? 0) == 0 { parts.append("\(session.errorCount) 条错误") }
+        if session.endedAt > session.startedAt { parts.append(duration(from: session.startedAt, to: session.endedAt)) }
+        return parts.joined(separator: " · ")
     }
 
-    private func sessionBadge(_ text: String, color: Color) -> some View {
-        StatusBadge(title: text, color: color)
+    private func dayTitle(_ date: Date) -> String {
+        if Calendar.current.isDateInToday(date) { return "今天" }
+        if Calendar.current.isDateInYesterday(date) { return "昨天" }
+        return date.formatted(.dateTime.year().month().day().weekday())
     }
 
     private func expansionBinding(for id: String) -> Binding<Bool> {
@@ -520,6 +487,7 @@ struct ActivityView: View {
            let plan = model.configuration.plans.first(where: { $0.id == planID }) {
             return plan.displayName
         }
+        if session.planID != nil { return "已移除的方案" }
         if session.runID == nil { return "较早的运行记录" }
         return "MAA 维护"
     }
@@ -535,19 +503,6 @@ struct ActivityView: View {
             }
         }
         return components.isEmpty ? nil : components.joined(separator: " · ")
-    }
-
-    private func sessionStatus(session: ActivitySession, phase: RunnerPhase?, level: LogLevel) -> String {
-        if session.runSummary?.isPartial == true { return "当次部分完成" }
-        if phase == .completed, level == .warning { return "完成，需留意" }
-        if phase == .completed, (session.runSummary?.pendingWeeklyAnnihilation ?? 0) > 0 { return "本轮结束，剿灭待补打" }
-        if let phase { return phase.displayName }
-        return switch level {
-        case .info: "运行记录"
-        case .success: "已完成"
-        case .warning: "需要留意"
-        case .error: "发生错误"
-        }
     }
 
     private func sessionSymbol(phase: RunnerPhase?, level: LogLevel) -> String {
@@ -571,7 +526,7 @@ struct ActivityView: View {
     }
 }
 
-private struct ActivityEventRow: View {
+struct ActivityEventRow: View {
     let entry: LogEntry
     let context: String?
     let drawsConnector: Bool
