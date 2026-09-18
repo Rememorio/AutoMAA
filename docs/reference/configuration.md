@@ -49,8 +49,8 @@
 | `applicationUpdates.automaticallyDownloadsUpdates` | 空闲时自动准备 AutoMAA 更新，不代表允许静默重启 |
 | `maaUpdates.automaticallyUpdatesCoreAndResources` | 空闲时自动维护 MAA；具体时机见[更新指南](../guide/updates#自动更新-maa) |
 | `schedule.rules` | 方案的星期集合、小时和分钟；同一个星期不能出现在多条规则中 |
-| `stageStrategy` | `gameCurrentOrLast` 跟随游戏、`rememberedRegular` 剿灭后恢复、`fixed` 固定关卡 |
-| `fallbackStage` | 可选常规兜底关卡，留空关闭；仅在确认选关失败且尚未开战时尝试一次，不覆盖恢复记录 |
+| `stageStrategy` | `gameCurrentOrLast` 跟随游戏、`rememberedRegular` 最近常规关卡优先、`fixed` 固定关卡 |
+| `fallbackStage` | 可选常规兜底关卡，留空关闭；仅在活动数据确认目标未开放、或选关失败且尚未开战时尝试一次，不覆盖恢复记录 |
 | `weeklyAnnihilation.enabled` | 开启本方案的每周优先剿灭；独立于 MAA 参数模式，默认关闭 |
 | `weeklyAnnihilation.startDay` | 本游戏周开始尝试剿灭的星期，取 `monday` 至 `sunday`，默认 `monday`；未满时后续运行继续补打 |
 

@@ -1677,14 +1677,14 @@ public final class WorkflowRunner {
         let weeklyStatus = weekly.status(for: plan.fight.weeklyAnnihilation, client: client, accountID: account.id, at: now())
         let previous = state.fightProgress?[key]
         let needsAnnihilation = FightProgress.needsAnnihilation(previous, weeklyStatus: weeklyStatus)
-        let needsRegularTarget = needsAnnihilation || (previous?.annihilation != nil && previous?.regular?.isResolved != true)
-        let resolution = FightStagePolicy.resolve(plan.fight, memory: memory, clientID: client.id, accountID: account.id,
-                                                  preparingAnnihilation: needsRegularTarget)
+        let needsRegularTarget = FightStagePolicy.requiresExplicitRegularStage(in: plan.fight)
+            || (previous?.annihilation != nil && previous?.regular?.isResolved != true)
+        let resolution = FightStagePolicy.resolve(plan.fight, memory: memory, clientID: client.id, accountID: account.id)
         let stage: String
         switch resolution {
         case let .value(value): stage = value
         case .omitted: stage = ""
-        case .unavailable: throw MAAConfigurationWriterError.invalidConfiguration("缺少后续常规关卡，请先设置恢复关卡")
+        case .unavailable: throw MAAConfigurationWriterError.invalidConfiguration("缺少常规关卡，请先设置常规目标")
         }
         var progress = previous ?? FightProgress(regularStage: stage)
         if progress.canReselectRegularStage {
@@ -1695,12 +1695,16 @@ public final class WorkflowRunner {
         if needsRegularTarget,
            FightStagePolicy.regularStage(from: progress.regularStage, times: 1) == nil {
             guard FightStagePolicy.regularStage(from: stage, times: 1) != nil else {
-                throw MAAConfigurationWriterError.invalidConfiguration("后续常规关卡无效，请设置恢复关卡或固定常规关卡")
+                throw MAAConfigurationWriterError.invalidConfiguration("后续常规关卡无效，请设置常规目标或固定常规关卡")
             }
             progress.regularStage = stage
         }
         var lastOutcome: TaskRunOutcome?
         var phases: [(kind: FightKind, result: FightResult)] = []
+        if weeklyStatus == .completed {
+            emit(.runningTask, "\(accountText(account))：本周剿灭奖励已满，已跳过剿灭", 0, .info,
+                 client: client, account: account, task: .fight)
+        }
         for isAnnihilation in (needsAnnihilation ? [true, false] : [false]) {
             let previous = isAnnihilation ? progress.annihilation : progress.regular
             if previous?.isResolved == true { continue }
@@ -1795,6 +1799,10 @@ public final class WorkflowRunner {
         if plan.fight.weeklyAnnihilation.enabled {
             emit(.runningTask, "\(accountText(account))：\(isAnnihilation ? "优先剿灭" : "常规作战")",
                  0, .info, client: client, account: account, task: .fight)
+        }
+        if !isAnnihilation, !stage.isEmpty {
+            emit(.runningTask, "\(accountText(account))：常规目标 \(stage)\(fallbackFrom == nil ? "" : "（兜底）")", 0, .info,
+                 client: client, account: account, task: .fight)
         }
         var outcome = try await runTask(.fight, plan: phasePlan, account: account, client: client, configuration: configuration)
         guard var result = outcome.fightResult else { return outcome }

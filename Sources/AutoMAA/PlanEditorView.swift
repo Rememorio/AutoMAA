@@ -251,7 +251,7 @@ struct PlanEditorView: View {
                 }
             }
             Text(plan.fight.weeklyAnnihilation.enabled && plan.fight.stageStrategy != .fixed
-                 ? "剿灭前使用账号记录的常规关卡，或手动设置的恢复目标；不会读取剿灭后的上次关卡。"
+                 ? "每次常规作战都使用账号记录或手动设置的明确目标；本周剿灭已满时也不会回到游戏的上次关卡。"
                  : plan.fight.stageStrategy.detail)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -337,7 +337,7 @@ struct PlanEditorView: View {
 
     private var fightRecoverySettings: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text(plan.fight.weeklyAnnihilation.enabled ? "后续常规关卡（剿灭前确定）" : "账号恢复状态")
+            Text(plan.fight.weeklyAnnihilation.enabled ? "后续常规关卡" : "账号常规目标")
                 .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             ForEach(fightStageMemoryRows) { row in fightStageMemoryRow(row) }
         }
@@ -512,8 +512,7 @@ struct PlanEditorView: View {
                     clientID: client.id,
                     accountID: account.id,
                     label: "\(client.displayName) / \(account.displayName)",
-                    stage: entry?.stage,
-                    recoveryRequired: entry?.recoveryRequiredAt != nil
+                    stage: entry?.stage
                 )
             }
         }
@@ -522,46 +521,35 @@ struct PlanEditorView: View {
     private func fightStageMemoryRow(_ row: FightStageMemoryRow) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 8) {
-                Image(systemName: row.recoveryRequired ? "arrow.uturn.backward.circle.fill" : "location.fill")
-                    .foregroundStyle(row.recoveryRequired ? Color.orange : Color.maaAccent)
+                Image(systemName: "location.fill")
+                    .foregroundStyle(Color.maaAccent)
                 Text(row.label)
                     .lineLimit(1)
                 Spacer(minLength: 8)
-                Text(row.recoveryRequired ? "待恢复" : "跟随游戏")
+                Text(row.stage == nil ? "未设置" : "已记录")
                     .font(.caption.weight(.medium))
-                    .foregroundStyle(row.recoveryRequired ? Color.orange : Color.secondary)
+                    .foregroundStyle(row.stage == nil ? Color.orange : Color.secondary)
             }
             HStack(spacing: 8) {
                 Text(fightStageStatusText(row))
                     .font(.caption)
-                    .foregroundStyle(row.recoveryRequired && row.stage == nil ? Color.orange : Color.secondary)
+                    .foregroundStyle(row.stage == nil ? Color.orange : Color.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
-                Button(row.stage == nil ? "设置恢复关卡" : "修改") {
+                Button(row.stage == nil ? "设置常规目标" : "修改") {
                     fightStageEditor = FightStageEditorContext(row: row)
                 }
                 .controlSize(.small)
                 .disabled(model.isWorkflowRunning)
             }
-            if row.recoveryRequired {
-                Button("游戏已手动切回，继续跟随") {
-                    model.continueFollowingGameStage(clientID: row.clientID, accountID: row.accountID)
-                }
-                .controlSize(.small)
-                .disabled(model.isWorkflowRunning)
-                .help("确认游戏当前/上次已是常规关卡，并取消这次自动恢复")
-            }
+
         }
         .padding(.vertical, 3)
     }
 
     private func fightStageStatusText(_ row: FightStageMemoryRow) -> String {
-        if row.recoveryRequired {
-            return row.stage.map { "下次理智作战将先恢复到 \($0)" }
-                ?? "缺少恢复关卡，运行前检查会阻止理智作战"
-        }
-        return row.stage.map { "记录关卡：\($0)；常规作战成功后更新，临时兜底不覆盖" }
-            ?? "首次成功完成常规作战后会自动记录；也可手动设置恢复目标"
+        row.stage.map { "常规目标：\($0)；临时兜底不覆盖此记录" }
+            ?? "请先设置已解锁的常规关卡，运行前检查会校验目标。"
     }
 
     private var scheduleInstalled: Bool {
@@ -736,7 +724,6 @@ private struct FightStageMemoryRow: Identifiable {
     let accountID: UUID
     let label: String
     let stage: String?
-    let recoveryRequired: Bool
 
     var id: String { "\(clientID.uuidString)-\(accountID.uuidString)" }
 }
@@ -746,14 +733,12 @@ private struct FightStageEditorContext: Identifiable {
     let accountID: UUID
     let label: String
     let stage: String?
-    let recoveryRequired: Bool
 
     init(row: FightStageMemoryRow) {
         clientID = row.clientID
         accountID = row.accountID
         label = row.label
         stage = row.stage
-        recoveryRequired = row.recoveryRequired
     }
 
     var id: String { "\(clientID.uuidString)-\(accountID.uuidString)" }
@@ -780,15 +765,13 @@ private struct FightStageEditorSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 5) {
-                Text(context.recoveryRequired ? "设置恢复关卡" : "设置记录关卡")
+                Text("设置常规目标")
                     .font(.title3.weight(.semibold))
                 Text(context.label)
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
-            Text(context.recoveryRequired
-                 ? "下次理智作战会先明确返回这个关卡；成功后恢复状态自动清除。"
-                 : "平时仍跟随游戏当前/上次；只有 AutoMAA 执行剿灭后才会使用这个关卡恢复。")
+            Text("采用最近常规关卡或每周优先剿灭的方案会使用此目标。请指定 MAA 支持导航且已解锁的关卡；游戏内手动换关不会自动更新这里。")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -813,7 +796,7 @@ private struct FightStageEditorSheet: View {
                 Spacer()
                 Button("取消") { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button(context.recoveryRequired ? "保存恢复关卡" : "保存记录关卡") {
+                Button("保存常规目标") {
                     guard let normalizedStage, onSave(normalizedStage) else { return }
                     dismiss()
                 }

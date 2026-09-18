@@ -10,7 +10,7 @@ public enum FightStageStrategy: String, Codable, CaseIterable, Identifiable, Sen
     public var title: String {
         switch self {
         case .gameCurrentOrLast: "游戏当前/上次"
-        case .rememberedRegular: "跟随游戏，剿灭后恢复"
+        case .rememberedRegular: "最近常规关卡优先"
         case .fixed: "固定关卡"
         }
     }
@@ -20,7 +20,7 @@ public enum FightStageStrategy: String, Codable, CaseIterable, Identifiable, Sen
         case .gameCurrentOrLast:
             "沿用 MAA 的当前/上次关卡；其他方案执行剿灭后，这里也可能继续进入剿灭。"
         case .rememberedRegular:
-            "平时沿用游戏当前/上次关卡；AutoMAA 执行剿灭后，下次仅恢复一次最近成功的常规关卡。"
+            "始终选择账号最近成功的常规关卡，或手动设置的目标。游戏内手动换关不会自动更新这里；目标无法进入且尚未开战时，可使用兜底关卡。"
         case .fixed:
             "始终使用下面指定的关卡。"
         }
@@ -186,6 +186,11 @@ public struct FightStageMemory: Codable, Equatable, Sendable {
 public enum FightStagePolicy {
     public static let regularStageHint = "请输入常规关卡编号，例如 1-7、CE-6 或 PR-A-1"
 
+    public static func requiresExplicitRegularStage(in configuration: FightConfiguration) -> Bool {
+        configuration.weeklyAnnihilation.enabled
+            || (configuration.usesCustomSettings && configuration.stageStrategy == .rememberedRegular)
+    }
+
     public static func fallback(in configuration: FightConfiguration, after result: FightResult, primaryStage: String) -> String? {
         guard configuration.usesCustomSettings, result.status == .failed, result.reason == .stageUnavailable,
               result.times == 0, result.fallbackFrom == nil, !isAnnihilation(primaryStage),
@@ -197,29 +202,15 @@ public enum FightStagePolicy {
         _ configuration: FightConfiguration,
         memory: FightStageMemory,
         clientID: UUID,
-        accountID: UUID,
-        preparingAnnihilation: Bool = false
+        accountID: UUID
     ) -> FightStageResolution {
-        if configuration.weeklyAnnihilation.enabled,
-           preparingAnnihilation || memory.requiresRecovery(clientID: clientID, accountID: accountID),
-           !configuration.usesCustomSettings || configuration.stageStrategy != .fixed {
-            return memory.stage(clientID: clientID, accountID: accountID).map(FightStageResolution.value) ?? .unavailable
-        }
-        guard configuration.usesCustomSettings else { return .omitted }
-        switch configuration.stageStrategy {
-        case .gameCurrentOrLast:
-            return .value("")
-        case .rememberedRegular:
-            guard memory.requiresRecovery(clientID: clientID, accountID: accountID) else {
-                return .value("")
-            }
-            guard let stage = memory.stage(clientID: clientID, accountID: accountID) else {
-                return .unavailable
-            }
-            return .value(stage)
-        case .fixed:
+        if configuration.usesCustomSettings, configuration.stageStrategy == .fixed {
             return .value(configuration.stage.trimmingCharacters(in: .whitespacesAndNewlines))
         }
+        if requiresExplicitRegularStage(in: configuration) {
+            return memory.stage(clientID: clientID, accountID: accountID).map(FightStageResolution.value) ?? .unavailable
+        }
+        return configuration.usesCustomSettings ? .value("") : .omitted
     }
 
     public static func regularStage(from stage: String, times: Int) -> String? {

@@ -9,7 +9,7 @@ public enum FightKind: String, Codable, Sendable {
 }
 
 public enum FightStopReason: String, Codable, Sendable {
-    case insufficientSanity, timesLimit, weeklyLimit, confirmedWeeklyLimit, navigationUnavailable, stageUnavailable, interruptedBattle, missingEvidence, commandFailed
+    case insufficientSanity, timesLimit, weeklyLimit, confirmedWeeklyLimit, navigationUnavailable, stageUnavailable, unexpectedStage, interruptedBattle, missingEvidence, commandFailed
 
     public var title: String {
         switch self {
@@ -19,6 +19,7 @@ public enum FightStopReason: String, Codable, Sendable {
         case .confirmedWeeklyLimit: "已手动确认本周剿灭完成"
         case .navigationUnavailable: "未能确认剿灭入口；请检查本周奖励或关卡页面"
         case .stageUnavailable: "无法进入目标关卡；请检查开放情况或更换关卡"
+        case .unexpectedStage: "常规目标返回了剿灭结果；请检查游戏与 MAA 资源"
         case .interruptedBattle: "作战被中断，结果未确认；请检查游戏结果"
         case .missingEvidence: "未取得有效作战结果；请检查游戏后重新尝试"
         case .commandFailed: "MAA 执行失败"
@@ -134,8 +135,12 @@ struct FightObservation: Sendable {
     private var chainStarted = false
     private var chainCompleted = false
     private var chainStopped = false
+    private var rejectedStage: String?
 
     mutating func consume(_ line: String) {
+        if line.contains("[ERR]"), let marker = line.range(of: "Cannot set stage ") {
+            rejectedStage = String(line[marker.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         guard let marker = line.range(of: "Assistant::append_callback | "),
               let brace = line[marker.upperBound...].firstIndex(of: "{"),
               let data = String(line[brace...]).data(using: .utf8),
@@ -232,6 +237,11 @@ struct FightObservation: Sendable {
             || StartupFailureClassifier.isGameOffline(command.combinedOutput) {
             return result(.unconfirmed, .interruptedBattle)
         }
+        if let configuredStage, !configuredStage.isEmpty, rejectedStage == configuredStage,
+           !chainStarted, !enteredFightLoop, !combatScreenObserved, count == 0, (summary?.times ?? 0) == 0,
+           command.exitCode != 0, kind != .annihilation {
+            return result(.failed, .stageUnavailable)
+        }
         if chainStarted, navigationFailed, !enteredFightLoop, !combatScreenObserved, count == 0, (summary?.times ?? 0) == 0,
            !navigationUnavailable, kind != .annihilation {
             return result(.failed, .stageUnavailable)
@@ -244,6 +254,10 @@ struct FightObservation: Sendable {
             let neverEnteredBattle = chainStarted && chainCompleted && !enteredFightLoop && !combatScreenObserved
                 && count == 0 && (summary?.times ?? 0) == 0
             return result(neverEnteredBattle ? .unnecessary : .unconfirmed, .navigationUnavailable)
+        }
+        if kind == .annihilation, let configuredStage,
+           FightStagePolicy.regularStage(from: configuredStage, times: 1) != nil {
+            return result(.unconfirmed, .unexpectedStage)
         }
         let insufficient = insufficientSanity || insufficientAtLastCheck
         if count > 0 { return result(.completed, weeklyLimit ? .weeklyLimit : timesLimit ? .timesLimit : insufficient ? .insufficientSanity : nil) }
@@ -270,8 +284,9 @@ struct FightCommandEvidence: Sendable {
                 while let newline = pending.firstIndex(of: 10) {
                     let line = String(decoding: pending[..<newline], as: UTF8.self)
                     pending.removeSubrange(...newline)
-                    guard line.contains("Assistant::append_callback | ") else { continue }
                     result.observation.consume(line)
+                    guard line.contains("Assistant::append_callback | ")
+                        || (line.contains("[ERR]") && line.contains("Cannot set stage ")) else { continue }
                     result.callbacks += line + "\n"
                     if result.callbacks.utf8.count > 131_072 { result.callbacks = String(result.callbacks.suffix(65_536)) }
                 }

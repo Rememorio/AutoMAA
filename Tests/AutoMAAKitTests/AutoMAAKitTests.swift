@@ -598,7 +598,7 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertNil(params["series"])
     }
 
-    func testRememberedRegularStageFollowsGameUntilRecoveryIsRequired() throws {
+    func testRememberedRegularStageAlwaysUsesEachAccountsExplicitTarget() throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let directories = AppDirectories(root: root)
@@ -618,11 +618,11 @@ final class AutoMAAKitTests: XCTestCase {
 
         XCTAssertEqual(
             try generatedParams(.fight, plan: plan, client: firstClient, account: firstAccount, writer: writer, root: root)["stage"] as? String,
-            ""
+            "AT-4"
         )
         XCTAssertEqual(
             try generatedParams(.fight, plan: plan, client: secondClient, account: secondAccount, writer: writer, root: root)["stage"] as? String,
-            ""
+            "EA-3"
         )
 
         memory.markRecoveryRequired(clientID: firstClient.id, accountID: firstAccount.id)
@@ -652,13 +652,11 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(
             atPath: root.appending(path: "MAA/tasks/\(missingFirstName).json").path
         ))
-        XCTAssertEqual(
-            try generatedParams(.fight, plan: plan, client: secondClient, account: secondAccount, writer: writer, root: root)["stage"] as? String,
-            ""
-        )
+        let missingSecondName = writer.taskName(planID: plan.id, clientID: secondClient.id, accountID: secondAccount.id, task: .fight)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appending(path: "MAA/tasks/\(missingSecondName).json").path))
     }
 
-    func testRememberedRegularStageOnlyRequiresFallbackWhileRecoveringFromAnnihilation() {
+    func testRememberedRegularStageRequiresAnExplicitTargetBeforeAnyRun() {
         var config = populatedConfiguration()
         config.cliPath = "/usr/bin/true"
         config.plans[0].fight.stageStrategy = .rememberedRegular
@@ -674,7 +672,7 @@ final class AutoMAAKitTests: XCTestCase {
             fightStageMemory: memory
         )
 
-        XCTAssertFalse(problems.contains { $0.id.contains("fight-memory") })
+        XCTAssertTrue(problems.contains { $0.id.contains(config.clients[1].accounts[0].id.uuidString) })
 
         memory.markRecoveryRequired(clientID: firstClient.id, accountID: firstAccount.id)
         memory.markRecoveryRequired(
@@ -691,7 +689,7 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertTrue(recoveryProblems.contains {
             $0.severity == .error
                 && $0.id.contains(config.clients[1].accounts[0].id.uuidString)
-                && $0.message.contains("从剿灭恢复")
+                && $0.message.contains("常规关卡记录")
         })
     }
 
@@ -754,13 +752,13 @@ final class AutoMAAKitTests: XCTestCase {
         configuration.stageStrategy = .rememberedRegular
         XCTAssertEqual(
             FightStagePolicy.resolve(configuration, memory: memory, clientID: clientID, accountID: accountID),
-            .value("")
+            .unavailable
         )
 
         memory.remember("AT-4", clientID: clientID, accountID: accountID)
         XCTAssertEqual(
             FightStagePolicy.resolve(configuration, memory: memory, clientID: clientID, accountID: accountID),
-            .value("")
+            .value("AT-4")
         )
 
         memory.markRecoveryRequired(clientID: clientID, accountID: accountID)

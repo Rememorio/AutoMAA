@@ -226,16 +226,13 @@ public enum ConfigurationValidator {
             if plan.fight.enabled,
                (plan.fight.weeklyAnnihilation.enabled || (plan.fight.usesCustomSettings && plan.fight.stageStrategy == .rememberedRegular)),
                (!plan.fight.usesCustomSettings || plan.fight.stageStrategy != .fixed) {
-                for account in targetAccounts where (plan.fight.weeklyAnnihilation.enabled || fightStageMemory.requiresRecovery(
-                    clientID: client.id,
-                    accountID: account.id
-                )) && fightStageMemory.stage(clientID: client.id, accountID: account.id) == nil {
+                for account in targetAccounts where fightStageMemory.stage(clientID: client.id, accountID: account.id) == nil {
                     result.append(.init(
                         id: "plan-\(plan.id)-fight-memory-\(client.id)-\(account.id)",
                         severity: .error,
                         message: plan.fight.weeklyAnnihilation.enabled
-                            ? "「\(planName)」需要在剿灭前确定\(clientName) / \(account.displayName)的常规关卡；请设置恢复关卡，或改用固定常规关卡"
-                            : "「\(planName)」需要为\(clientName) / \(account.displayName)从剿灭恢复，但尚无记录的常规关卡；请设置恢复关卡，或确认游戏已手动切回后继续跟随",
+                            ? "「\(planName)」需要在剿灭前确定\(clientName) / \(account.displayName)的常规关卡；请设置常规目标，或改用固定常规关卡"
+                            : "「\(planName)」尚无\(clientName) / \(account.displayName)的常规关卡记录；请设置常规目标，或改用固定关卡",
                         scope: .plan(plan.id)
                     ))
                 }

@@ -528,6 +528,14 @@ final class AppModel: ObservableObject {
                 return "上次选关失败且未开战。可以先在方案中修改关卡或兜底设置，重跑将采用当前设置；已完成的剿灭会保留。"
             }
             let stage = progress.pendingStage
+            if progress.fallbackStage == nil,
+               FightStagePolicy.regularStage(from: stage, times: 1) == nil,
+               let plan = configuration.plans.first(where: { $0.id == step.planID }),
+               FightStagePolicy.requiresExplicitRegularStage(in: plan.fight),
+               case let .value(target) = FightStagePolicy.resolve(plan.fight, memory: fightStageMemory,
+                    clientID: step.clientID, accountID: step.accountID) {
+                return "旧记录没有有效的常规目标，本次将明确选择 \(target)。已完成阶段保留；未确认阶段可能已消耗理智或道具，请先检查游戏。"
+            }
             let target = stage.isEmpty ? "游戏当前/上次关卡" : stage
             return "将重跑上次保留的目标：\(target)。已完成阶段保留；未确认阶段可能已消耗理智或道具，请先检查游戏。"
         }
@@ -1316,15 +1324,8 @@ final class AppModel: ObservableObject {
             showBanner(FightStagePolicy.regularStageHint)
             return false
         }
-        return updateFightStageMemory(successMessage: "恢复关卡已更新为 \(stage)") { memory in
+        return updateFightStageMemory(successMessage: "常规目标已更新为 \(stage)") { memory in
             memory.remember(stage, clientID: clientID, accountID: accountID)
-        }
-    }
-
-    @discardableResult
-    func continueFollowingGameStage(clientID: UUID, accountID: UUID) -> Bool {
-        updateFightStageMemory(successMessage: "已确认游戏切回常规关卡；下次将继续跟随游戏当前/上次") { memory in
-            memory.clearRecovery(clientID: clientID, accountID: accountID)
         }
     }
 
