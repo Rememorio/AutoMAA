@@ -237,7 +237,7 @@ struct ActivityView: View {
         return Panel {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text("当前待办").font(.headline)
+                    Text(progress.hasStarted ? "当前待办" : "今日状态").font(.headline)
                     Spacer()
                     Picker("方案", selection: Binding(get: { planID }, set: { model.selectCurrentPlan($0) })) {
                         ForEach(model.configuration.plans) { plan in Text(plan.displayName).tag(plan.id) }
@@ -247,18 +247,18 @@ struct ActivityView: View {
                 }
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 14) {
-                        progressDescription(progress)
+                        progressDescription(progress, planID: planID)
                         Spacer()
                         PlanRunButton(planID: planID)
                     }
                     VStack(alignment: .leading, spacing: 10) {
-                        progressDescription(progress)
+                        progressDescription(progress, planID: planID)
                         PlanRunButton(planID: planID)
                     }
                 }
                 let recoveryIDs = Set(progress.fightRecoveryItems.map(\.id))
                 let pendingItems = progress.pendingItems.filter { !recoveryIDs.contains($0.id) }
-                if !pendingItems.isEmpty {
+                if progress.hasStarted, !pendingItems.isEmpty {
                     Divider()
                     PendingWorkList(items: pendingItems)
                 }
@@ -269,18 +269,30 @@ struct ActivityView: View {
                 }
             }
         }
+        .id(planID)
     }
 
-    private func progressDescription(_ progress: PlanContinuation) -> some View {
+    private func progressDescription(_ progress: PlanContinuation, planID: UUID) -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text("\(progress.resolved) 项已处理 · \(progress.pending) 项可继续 · \(progress.unconfirmed) 项待确认")
-                .font(.callout).monospacedDigit()
-            Text(progress.unconfirmed > 0
-                 ? "继续其他任务会保留待确认作战。可先核实下方结果，再决定是否继续。"
-                 : "下方列出下一次运行的任务与阶段；已处理的任务保留。")
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            if progress.hasStarted {
+                Text("\(progress.resolved) 项已处理 · \(progress.pending) 项可继续 · \(progress.unconfirmed) 项待确认")
+                    .font(.callout).monospacedDigit()
+                if progress.unconfirmed > 0 {
+                    Text("继续其他任务会保留待确认作战。请先核实结果，再决定是否重新尝试。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            } else {
+                Text("今日尚未运行").font(.callout)
+                if let plan = model.configuration.plans.first(where: { $0.id == planID }),
+                   model.isPlanScheduleCurrent(plan), let next = PlanScheduleFormatter.nextRunLabel(plan.schedule) {
+                    Text("下次 \(next)").font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("开始运行后，这里会显示进度与剩余任务。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
         }
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private var currentActivity: some View {

@@ -5,22 +5,36 @@ struct PendingWorkList: View {
     @EnvironmentObject private var model: AppModel
     let items: [PendingWorkflowItem]
 
+    private var accounts: [WorkflowStep] {
+        var seen: Set<String> = []
+        return items.map(\.step).filter { seen.insert("\($0.clientID)/\($0.accountID)").inserted }
+    }
+
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 12) {
-            ForEach(items) { item in
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(model.pendingWorkContext(item.step))
-                        .font(.subheadline.weight(.semibold))
-                        .textSelection(.enabled)
-                    Label(item.title, systemImage: item.step.task.symbol)
-                        .font(.callout)
-                    if let detail = item.detail {
-                        Text(detail).font(.caption).foregroundStyle(.secondary)
+            ForEach(accounts, id: \.key) { account in
+                let remaining = items.filter { $0.step.clientID == account.clientID && $0.step.accountID == account.accountID }
+                DisclosureGroup {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(remaining) { item in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Label(item.title, systemImage: item.step.task.symbol).font(.callout)
+                                if let detail = item.detail {
+                                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityElement(children: .combine)
+                        }
+                    }
+                    .padding(.top, 8)
+                } label: {
+                    HStack {
+                        Text(model.pendingWorkContext(account)).font(.callout.weight(.medium))
+                        Spacer()
+                        Text("剩余 \(remaining.count) 项").font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityElement(children: .combine)
-                if item.id != items.last?.id { Divider() }
             }
         }
     }
