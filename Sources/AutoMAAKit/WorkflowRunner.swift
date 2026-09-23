@@ -155,7 +155,7 @@ public final class WorkflowRunner {
     private var currentRunID: UUID?
     private var currentSensitiveValues: [String] = []
     private var runProgress = MonotonicProgress()
-    private var restartedClientsForRecovery: Set<UUID> = []
+    private var restartedAccountsByClient: [UUID: Set<UUID>] = [:]
 
     public convenience init(
         directories: AppDirectories = .init(),
@@ -1475,9 +1475,13 @@ public final class WorkflowRunner {
                 break
             }
             if outcome == .connectionLost {
-                let message = lastResult.timedOut
-                    ? "\(accountText(account))准备超时，正在重启\(clientText(client))后恢复"
-                    : "检测到游戏连接离线，正在重启\(clientText(client))后恢复\(accountText(account))"
+                let message = if lastResult.timedOut {
+                    "\(accountText(account))准备超时，正在重启\(clientText(client))后恢复"
+                } else if StartupFailureClassifier.isGameOffline(detail) {
+                    "检测到游戏连接离线，正在重启\(clientText(client))后恢复\(accountText(account))"
+                } else {
+                    "检测到截图连接异常，正在重启\(clientText(client))后恢复\(accountText(account))"
+                }
                 if try await restartClientForRecovery(
                     client,
                     configuration: configuration,
@@ -1524,11 +1528,11 @@ public final class WorkflowRunner {
         _ client: ClientConfiguration,
         configuration: AppConfiguration,
         message: String,
-        account: AccountConfiguration?,
+        account: AccountConfiguration,
         task: TaskKind? = nil,
         details: String? = nil
     ) async throws -> Bool {
-        guard restartedClientsForRecovery.insert(client.id).inserted else { return false }
+        guard restartedAccountsByClient[client.id, default: []].insert(account.id).inserted else { return false }
         emit(
             task == nil ? .switchingAccount : .runningTask,
             message,
@@ -1935,7 +1939,7 @@ public final class WorkflowRunner {
                         account: account,
                         timeout: timeout,
                         details: failureDetails,
-                        recoveredBeforeFailure: restartedClientsForRecovery.contains(client.id)
+                        recoveredBeforeFailure: restartedAccountsByClient[client.id]?.contains(account.id) == true
                     )
                 }
                 try await switchAccount(
@@ -2317,7 +2321,7 @@ public final class WorkflowRunner {
         currentRunID = runID
         currentSensitiveValues = sensitiveValues
         runProgress.reset()
-        restartedClientsForRecovery = []
+        restartedAccountsByClient = [:]
         diagnosticLogStore.begin(runID: runID)
     }
 

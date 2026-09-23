@@ -69,11 +69,16 @@ enum StartupFailureClassifier {
         ])
     }
 
+    static func isScreenshotConnectionFailure(_ output: String) -> Bool {
+        containsAny(output.lowercased(), ["screencapfailed", "screencap failed"])
+    }
+
     static func commandOutcome(result: CommandResult, output: String) -> StartupCommandOutcome {
         if isMAACoreInitializationFailure(output) {
             return .coreInitializationFailed
         }
-        if result.timedOut || isGameOffline(output) {
+        if result.timedOut || isGameOffline(output)
+            || (result.exitCode != 0 && isScreenshotConnectionFailure(output)) {
             return .connectionLost
         }
         if result.exitCode == 0 {

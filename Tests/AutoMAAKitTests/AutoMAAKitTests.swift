@@ -2430,6 +2430,19 @@ final class AutoMAAKitTests: XCTestCase {
         )
     }
 
+    func testFailedScreenshotCaptureRequiresConnectionRecovery() {
+        for output in ["ScreencapFailed", "Screencap failed"] {
+            let result = CommandResult(exitCode: 1, standardOutput: "", standardError: output, timedOut: false)
+            XCTAssertEqual(StartupFailureClassifier.commandOutcome(result: result, output: output), .connectionLost)
+        }
+    }
+
+    func testRecoveredScreenshotWarningDoesNotRestartSuccessfulStartup() {
+        let output = "ScreencapFailed\n[StartUp] Completed"
+        let result = CommandResult(exitCode: 0, standardOutput: output, standardError: "", timedOut: false)
+        XCTAssertEqual(StartupFailureClassifier.commandOutcome(result: result, output: output), .ready)
+    }
+
     func testStartupFailureClassifierRecognizesMAACoreInitializationFailure() {
         let output = "Error: MaaCore returned an error, check its log for details"
         let result = StartupFailureClassifier.diagnose(output: output, hasAccountSelector: false)
@@ -3191,7 +3204,7 @@ final class AutoMAAKitTests: XCTestCase {
     }
 
     @MainActor
-    func testStartupAndTaskTimeoutsShareOneClientRecoveryBudget() async throws {
+    func testStartupAndTaskTimeoutsShareOneAccountRecoveryBudget() async throws {
         let commandRunner = StubCommandRunner(
             startupResults: [
                 CommandResult(
@@ -3223,6 +3236,101 @@ final class AutoMAAKitTests: XCTestCase {
     }
 
     @MainActor
+    func testEachAccountCanRecoverAfterThePreviousAccountCompleted() async throws {
+        let timeout = CommandResult(exitCode: 1, standardOutput: "", standardError: "ScreencapFailed", timedOut: true)
+        let success = CommandResult(exitCode: 0, standardOutput: "", standardError: "", timedOut: false)
+        let commands = StubCommandRunner(startupResults: [timeout, success, timeout, success])
+        let (report, runtime) = try await runTaskTimeoutScenario(
+            tasks: [.award], commandRunner: commands, accountCount: 2
+        )
+        let startups = await commands.calls(for: "startup")
+        let tasks = await commands.calls(for: "run")
+
+        XCTAssertTrue(report.isSuccess)
+        XCTAssertEqual(report.runSummary?.completedSteps, 2)
+        XCTAssertEqual(startups.count, 4)
+        guard startups.count == 4 else { return }
+        XCTAssertEqual(startups[0].arguments, startups[1].arguments)
+        XCTAssertEqual(startups[2].arguments, startups[3].arguments)
+        XCTAssertNotEqual(startups[0].arguments, startups[2].arguments)
+        XCTAssertEqual(tasks.count, 2)
+        XCTAssertEqual(runtime.events.count { $0.message.contains("正在重启客户端") }, 2)
+        let releases = runtime.events.filter { $0.message.contains("连接已释放") }
+        XCTAssertEqual(releases.count, 3)
+    }
+
+    @MainActor
+    func testLaterAccountTaskTimeoutHasItsOwnRecoveryBudget() async throws {
+        let timeout = CommandResult(exitCode: 1, standardOutput: "", standardError: "", timedOut: true)
+        let success = CommandResult(exitCode: 0, standardOutput: "", standardError: "", timedOut: false)
+        let commands = StubCommandRunner(startupResults: [timeout, success], taskResults: [success, timeout, success])
+        let (report, runtime) = try await runTaskTimeoutScenario(
+            tasks: [.award], commandRunner: commands, accountCount: 2
+        )
+        let tasks = await commands.calls(for: "run")
+
+        XCTAssertTrue(report.isSuccess)
+        XCTAssertEqual(report.runSummary?.completedSteps, 2)
+        XCTAssertEqual(tasks.count, 3)
+        guard tasks.count == 3 else { return }
+        XCTAssertNotEqual(tasks[0].arguments, tasks[1].arguments)
+        XCTAssertEqual(tasks[1].arguments, tasks[2].arguments)
+        XCTAssertEqual(runtime.events.count { $0.message.contains("正在重启客户端") }, 2)
+    }
+
+    @MainActor
+    func testPersistentLaterAccountFailureStopsClientWithoutLosingEarlierCompletion() async throws {
+        let timeout = CommandResult(exitCode: 1, standardOutput: "", standardError: "", timedOut: true)
+        let success = CommandResult(exitCode: 0, standardOutput: "", standardError: "", timedOut: false)
+        let commands = StubCommandRunner(startupResults: [timeout, success, timeout, timeout])
+        let (report, runtime) = try await runTaskTimeoutScenario(
+            tasks: [.award], commandRunner: commands, accountCount: 3
+        )
+        let startups = await commands.calls(for: "startup")
+        let tasks = await commands.calls(for: "run")
+
+        XCTAssertFalse(report.isSuccess)
+        XCTAssertEqual(report.runSummary?.completedSteps, 1)
+        XCTAssertEqual(report.unexecutedSteps, 2)
+        XCTAssertEqual(startups.count, 4)
+        XCTAssertEqual(tasks.count, 1)
+        XCTAssertEqual(runtime.events.count { $0.message.contains("正在重启客户端") }, 2)
+        XCTAssertFalse(runtime.events.contains { $0.message.contains("测试账号 3") })
+        XCTAssertEqual(report.attentionMessages.count, 1)
+    }
+
+    @MainActor
+    func testFailedScreenshotCaptureRestartsBeforeRetryingStartup() async throws {
+        let commands = StubCommandRunner(startupResults: [
+            CommandResult(exitCode: 1, standardOutput: "", standardError: "ScreencapFailed", timedOut: false),
+        ])
+        let (report, runtime) = try await runTaskTimeoutScenario(tasks: [.award], commandRunner: commands)
+
+        XCTAssertTrue(report.isSuccess)
+        XCTAssertEqual(runtime.events.count { $0.message.contains("正在重启客户端") }, 1)
+        XCTAssertTrue(runtime.events.contains { $0.message.contains("截图连接异常") })
+        XCTAssertFalse(runtime.events.contains { $0.message.contains("准备暂未完成") })
+    }
+
+    @MainActor
+    func testPersistentScreenshotFailureSkipsRemainingAccountsAfterOneRestart() async throws {
+        let failure = CommandResult(exitCode: 1, standardOutput: "", standardError: "ScreencapFailed", timedOut: false)
+        let commands = StubCommandRunner(startupResults: [failure, failure])
+        let (report, runtime) = try await runTaskTimeoutScenario(
+            tasks: [.award], commandRunner: commands, accountCount: 2
+        )
+        let startups = await commands.calls(for: "startup")
+        let tasks = await commands.calls(for: "run")
+
+        XCTAssertFalse(report.isSuccess)
+        XCTAssertEqual(report.unexecutedSteps, 2)
+        XCTAssertEqual(startups.count, 2)
+        XCTAssertTrue(tasks.isEmpty)
+        XCTAssertEqual(runtime.events.count { $0.message.contains("正在重启客户端") }, 1)
+        XCTAssertFalse(runtime.events.contains { $0.message.contains("测试账号 2") })
+    }
+
+    @MainActor
     func testRecoveredRetriesRemainVisibleWithoutCreatingWarnings() async throws {
         let (report, runtime) = try await runRetryScenario(startupFailures: 1, taskFailures: 1)
         let entries = runtime.events.map(\.log)
@@ -3233,7 +3341,7 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertTrue(entries.contains {
             $0.level == .info
                 && $0.message == "账号「测试账号」准备暂未完成，正在自动重试（1/1）"
-                && $0.details?.contains("ScreencapFailed") == true
+                && $0.details?.contains("temporary network failure") == true
         })
         XCTAssertTrue(entries.contains {
             $0.level == .success && $0.message == "账号「测试账号」重试后已就绪"
@@ -3265,7 +3373,7 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertEqual(warnings.count, 1)
         XCTAssertEqual(warnings[0].phase, .attention)
         XCTAssertTrue(warnings[0].message.contains("账号「测试账号」准备失败"))
-        XCTAssertTrue(warnings[0].details?.contains("ScreencapFailed") == true)
+        XCTAssertTrue(warnings[0].details?.contains("temporary network failure") == true)
         XCTAssertFalse(entries.contains { $0.task != nil })
         XCTAssertEqual(entries.last?.runSummary, report.runSummary)
         XCTAssertEqual(entries.last?.message, "流程部分完成：0/1 个步骤完成，1 个未执行；需要手动处理：客户端「测试客户端」不可用，已跳过该客户端中 1 个账号的 1 个待执行任务。触发原因：账号「测试账号」准备失败。网络或 MaaTools 连接异常，自动重试仍未恢复；请手动检查游戏和网络")
@@ -3348,7 +3456,7 @@ final class AutoMAAKitTests: XCTestCase {
     }
 
     @MainActor
-    func testRepeatedGameOfflineDoesNotRestartTheSameClientTwice() async throws {
+    func testRepeatedGameOfflineDoesNotRestartTheSameAccountTwice() async throws {
         let (report, runtime) = try await runRetryScenario(
             startupFailures: 2,
             taskFailures: 0,
@@ -3369,7 +3477,7 @@ final class AutoMAAKitTests: XCTestCase {
     private func runRetryScenario(
         startupFailures: Int,
         taskFailures: Int,
-        startupFailureOutput: String = "ScreencapFailed",
+        startupFailureOutput: String = "temporary network failure",
         maxRetries: Int = 1,
         opensOnWait: Bool = false,
         accountCount: Int = 1
@@ -3445,13 +3553,19 @@ final class AutoMAAKitTests: XCTestCase {
     @MainActor
     private func runTaskTimeoutScenario(
         tasks: [TaskKind],
-        commandRunner: StubCommandRunner
+        commandRunner: StubCommandRunner,
+        accountCount: Int = 1
     ) async throws -> (WorkflowReport, StubClientRuntime) {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let app = root.appending(path: "Applications/Test Game.app", directoryHint: .isDirectory)
         try createTestApplication(at: app)
-        let account = AccountConfiguration(name: "测试账号", accountSelector: "fixture-selector")
+        let accounts = (1...accountCount).map {
+            AccountConfiguration(
+                name: accountCount == 1 ? "测试账号" : "测试账号 \($0)",
+                accountSelector: "fixture-selector-\($0)"
+            )
+        }
         let client = ClientConfiguration(
             name: "测试客户端",
             kind: .official,
@@ -3459,7 +3573,7 @@ final class AutoMAAKitTests: XCTestCase {
             address: "127.0.0.1:65490",
             profileName: "task-timeout",
             bundleIdentifier: "dev.automaa.tests.task-timeout",
-            accounts: [account]
+            accounts: accounts
         )
         var plan = AutomationPlan.lightRoutine
         plan.stepOrder = TaskKind.allCases
@@ -3482,6 +3596,8 @@ final class AutoMAAKitTests: XCTestCase {
         )
 
         let report = await runner.run(configuration, planID: plan.id, resumeToday: false)
+        let state = try ExecutionStateStore(directories: AppDirectories(root: root)).loadForExecution()
+        XCTAssertEqual(state.completedSteps.count, report.runSummary?.completedSteps)
         return (report, runtime)
     }
 
