@@ -10,7 +10,7 @@ public enum FightStageStrategy: String, Codable, CaseIterable, Identifiable, Sen
     public var title: String {
         switch self {
         case .gameCurrentOrLast: "游戏当前/上次"
-        case .rememberedRegular: "最近常规关卡优先"
+        case .rememberedRegular: "跟随常规关卡"
         case .fixed: "固定关卡"
         }
     }
@@ -20,7 +20,7 @@ public enum FightStageStrategy: String, Codable, CaseIterable, Identifiable, Sen
         case .gameCurrentOrLast:
             "沿用 MAA 的当前/上次关卡；其他方案执行剿灭后，这里也可能继续进入剿灭。"
         case .rememberedRegular:
-            "始终选择账号最近成功的常规关卡，或手动设置的目标。游戏内手动换关不会自动更新这里；目标无法进入且尚未开战时，可使用兜底关卡。"
+            "优先游戏当前/上次的常规关卡；遇到剿灭或无法识别时使用记录的常规目标，选关失败且尚未开战时再尝试兜底。"
         case .fixed:
             "始终使用下面指定的关卡。"
         }
@@ -39,6 +39,8 @@ public struct FightStageMemoryEntry: Codable, Equatable, Sendable {
     public fileprivate(set) var stage: String?
     public fileprivate(set) var updatedAt: Date?
     public fileprivate(set) var recoveryRequiredAt: Date?
+    public fileprivate(set) var recoveryStage: String?
+    public fileprivate(set) var temporaryStage: String?
 
     public init(
         clientID: UUID,
@@ -55,6 +57,8 @@ public struct FightStageMemoryEntry: Codable, Equatable, Sendable {
     }
 
     fileprivate mutating func discardInvalidStage() {
+        if let recoveryStage, FightStagePolicy.regularStage(from: recoveryStage, times: 1) != recoveryStage { self.recoveryStage = nil }
+        if let temporaryStage, FightStagePolicy.regularStage(from: temporaryStage, times: 1) != temporaryStage { self.temporaryStage = nil }
         guard let stage, FightStagePolicy.regularStage(from: stage, times: 1) != stage else { return }
         recoveryRequiredAt = recoveryRequiredAt ?? updatedAt ?? .distantPast
         self.stage = nil
@@ -77,7 +81,8 @@ public struct FightStageMemory: Codable, Equatable, Sendable {
     }
 
     public func stage(clientID: UUID, accountID: UUID) -> String? {
-        entry(clientID: clientID, accountID: accountID)?.stage
+        let entry = entry(clientID: clientID, accountID: accountID)
+        return entry?.recoveryStage ?? entry?.stage
     }
 
     public func entry(clientID: UUID, accountID: UUID) -> FightStageMemoryEntry? {
@@ -105,6 +110,8 @@ public struct FightStageMemory: Codable, Equatable, Sendable {
         updateEntry(clientID: clientID, accountID: accountID) { entry in
             entry.stage = stage
             entry.updatedAt = date
+            entry.recoveryStage = nil
+            entry.temporaryStage = nil
         }
         return true
     }
@@ -113,10 +120,14 @@ public struct FightStageMemory: Codable, Equatable, Sendable {
     public mutating func markRecoveryRequired(
         clientID: UUID,
         accountID: UUID,
+        stage: String? = nil,
+        temporaryStage: String? = nil,
         at date: Date = Date()
     ) -> Bool {
         updateEntry(clientID: clientID, accountID: accountID) { entry in
             entry.recoveryRequiredAt = date
+            if let stage = stage.flatMap({ FightStagePolicy.regularStage(from: $0, times: 1) }) { entry.recoveryStage = stage }
+            if let temporaryStage { entry.temporaryStage = FightStagePolicy.regularStage(from: temporaryStage, times: 1) }
         }
         return true
     }
@@ -129,6 +140,8 @@ public struct FightStageMemory: Codable, Equatable, Sendable {
             return false
         }
         entries[index].recoveryRequiredAt = nil
+        entries[index].recoveryStage = nil
+        entries[index].temporaryStage = nil
         if entries[index].stage == nil {
             entries.remove(at: index)
         }
@@ -192,10 +205,14 @@ public enum FightStagePolicy {
     }
 
     public static func fallback(in configuration: FightConfiguration, after result: FightResult, primaryStage: String) -> String? {
-        guard configuration.usesCustomSettings, result.status == .failed, result.reason == .stageUnavailable,
-              result.times == 0, result.fallbackFrom == nil, !isAnnihilation(primaryStage),
+        guard configuration.usesCustomSettings, canChangeStage(after: result),
+              result.fallbackFrom == nil, !isAnnihilation(primaryStage),
               let stage = regularStage(from: configuration.fallbackStage, times: 1), stage != primaryStage else { return nil }
         return stage
+    }
+
+    static func canChangeStage(after result: FightResult) -> Bool {
+        result.status == .failed && result.reason == .stageUnavailable && result.times == 0
     }
 
     public static func resolve(

@@ -1668,6 +1668,29 @@ public final class WorkflowRunner {
             : "MAA 引擎已更新，识别数据已通过校验"
     }
 
+    private func inspectFightStage(configuration: AppConfiguration, client: ClientConfiguration,
+                                  account: AccountConfiguration) async throws -> FightStageInspection {
+        let root = FileManager.default.temporaryDirectory.appending(path: "automaa-stage-inspection-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FightStageInspection.prepare(at: root, client: client)
+        emit(.runningTask, "\(accountText(account))：正在识别当前/上次关卡（不开始作战）", 0, .info,
+             client: client, account: account, task: .fight)
+        let result = await runCommand(executable: configuration.cliPath,
+                                      arguments: ["run", FightStageInspection.taskName, "-p", FightStageInspection.taskName, "--batch"],
+                                      timeout: 60, environment: ["MAA_STATE_DIR": root.path], configurationDirectory: root)
+        guard !result.cancelled, !Task.isCancelled else { throw RuntimeError.cancelled }
+        let evidence = await Task.detached(priority: .utility) { FightCommandEvidence.read(from: root) }.value
+        if let currentRunID {
+            diagnosticLogStore.append(CommandResult(exitCode: result.exitCode, standardOutput: evidence.callbacks,
+                                                    standardError: "", timedOut: result.timedOut),
+                                      command: "Stage inspection callbacks", runID: currentRunID, sensitiveValues: currentSensitiveValues)
+        }
+        guard let stage = FightStageInspection.read(evidence.callbacks, command: result) else {
+            throw MAAConfigurationWriterError.invalidConfiguration("无法在开战前确认关卡页面，未开始作战；请检查游戏与 MAA 识别资源，或改用固定关卡")
+        }
+        return stage
+    }
+
     private func runFight(
         plan: AutomationPlan,
         account: AccountConfiguration,
@@ -1684,11 +1707,34 @@ public final class WorkflowRunner {
         let needsRegularTarget = FightStagePolicy.requiresExplicitRegularStage(in: plan.fight)
             || (previous?.annihilation != nil && previous?.regular?.isResolved != true)
         let resolution = FightStagePolicy.resolve(plan.fight, memory: memory, clientID: client.id, accountID: account.id)
-        let stage: String
+        var stage: String
+        var useCurrentStage = false
+        let remembered = memory.stage(clientID: client.id, accountID: account.id)
+        let canSelect = previous == nil || previous?.canReselectRegularStage == true
+        let inspect = canSelect && needsRegularTarget && !(plan.fight.usesCustomSettings && plan.fight.stageStrategy == .fixed)
         switch resolution {
         case let .value(value): stage = value
         case .omitted: stage = ""
-        case .unavailable: throw MAAConfigurationWriterError.invalidConfiguration("缺少常规关卡，请先设置常规目标")
+        case .unavailable: stage = ""
+        }
+        if inspect {
+            let observed = try await inspectFightStage(configuration: configuration, client: client, account: account)
+            if case let .regular(current) = observed,
+               memory.entry(clientID: client.id, accountID: account.id)?.temporaryStage != current {
+                stage = current
+                useCurrentStage = !needsAnnihilation
+                emit(.runningTask, "\(accountText(account))：当前/上次常规关卡 \(current)，优先使用游戏目标",
+                     0, .info, client: client, account: account, task: .fight)
+            } else {
+                let reason = switch observed {
+                case .annihilation: "当前/上次是剿灭"
+                case .unknown: "未识别到常规关卡编号"
+                case .unavailable: "无法从上次作战入口进入关卡"
+                case .regular: "当前/上次是临时兜底"
+                }
+                emit(.runningTask, "\(accountText(account))：\(reason)，\(remembered.map { "恢复常规目标 \($0)" } ?? "没有常规目标记录")",
+                     0, .info, client: client, account: account, task: .fight)
+            }
         }
         var progress = previous ?? FightProgress(regularStage: stage)
         if progress.canReselectRegularStage {
@@ -1696,15 +1742,19 @@ public final class WorkflowRunner {
             emit(.runningTask, "\(accountText(account))：上次选关失败且未开战，本次使用当前方案的关卡与兜底设置；已完成阶段保留",
                  0, .info, client: client, account: account, task: .fight)
         }
-        if needsRegularTarget,
-           FightStagePolicy.regularStage(from: progress.regularStage, times: 1) == nil {
-            guard FightStagePolicy.regularStage(from: stage, times: 1) != nil else {
-                throw MAAConfigurationWriterError.invalidConfiguration("后续常规关卡无效，请设置常规目标或固定常规关卡")
+        if needsRegularTarget, FightStagePolicy.regularStage(from: progress.fallbackStage ?? progress.regularStage, times: 1) == nil {
+            if FightStagePolicy.regularStage(from: stage, times: 1) != nil {
+                progress.regularStage = stage
+            } else if canSelect, plan.fight.usesCustomSettings,
+                      let fallback = FightStagePolicy.regularStage(from: plan.fight.fallbackStage, times: 1) {
+                progress.fallbackStage = fallback
+            } else {
+                throw MAAConfigurationWriterError.invalidConfiguration("未能确定常规关卡；请在游戏中选择常规关卡，或设置常规目标/兜底关卡")
             }
-            progress.regularStage = stage
         }
         var lastOutcome: TaskRunOutcome?
         var phases: [(kind: FightKind, result: FightResult)] = []
+        let recoveryStage = plan.fight.usesCustomSettings && plan.fight.stageStrategy == .fixed ? nil : progress.regularStage
         if weeklyStatus == .completed {
             emit(.runningTask, "\(accountText(account))：本周剿灭奖励已满，已跳过剿灭", 0, .info,
                  client: client, account: account, task: .fight)
@@ -1713,27 +1763,39 @@ public final class WorkflowRunner {
             let previous = isAnnihilation ? progress.annihilation : progress.regular
             if previous?.isResolved == true { continue }
             if isAnnihilation {
-                memory.markRecoveryRequired(clientID: client.id, accountID: account.id)
+                memory.markRecoveryRequired(clientID: client.id, accountID: account.id, stage: recoveryStage)
+                do { try fightStageMemoryStore.save(memory) }
+                catch { throw FightPersistenceError(details: error.localizedDescription) }
+            }
+            if !isAnnihilation, let fallback = progress.fallbackStage {
+                memory.markRecoveryRequired(clientID: client.id, accountID: account.id,
+                                            stage: recoveryStage, temporaryStage: fallback)
                 do { try fightStageMemoryStore.save(memory) }
                 catch { throw FightPersistenceError(details: error.localizedDescription) }
             }
             var outcome = try await runFightPhase(
                 isAnnihilation: isAnnihilation, plan: plan, account: account, client: client,
-                configuration: configuration, progress: &progress, state: &state, weekly: &weekly
+                configuration: configuration, progress: &progress, state: &state, weekly: &weekly,
+                useCurrentStage: !isAnnihilation && useCurrentStage && progress.fallbackStage == nil
             )
-            if !isAnnihilation, let result = outcome.fightResult,
-               let fallback = FightStagePolicy.fallback(in: plan.fight, after: result, primaryStage: progress.regularStage) {
-                emit(.runningTask, "\(accountText(account))：\(progress.regularStage.isEmpty ? "游戏当前/上次关卡" : progress.regularStage)无法进入，准备改用兜底关卡 \(fallback)",
+            var candidates: [String] = []
+            if !isAnnihilation, progress.fallbackStage == nil, !FightStagePolicy.isAnnihilation(progress.regularStage) {
+                if inspect, let remembered, remembered != progress.regularStage { candidates.append(remembered) }
+                if let result = outcome.fightResult,
+                   let fallback = FightStagePolicy.fallback(in: plan.fight, after: result, primaryStage: progress.regularStage),
+                   !candidates.contains(fallback) { candidates.append(fallback) }
+            }
+            for fallback in candidates {
+                guard let result = outcome.fightResult, FightStagePolicy.canChangeStage(after: result) else { break }
+                emit(.runningTask, "\(accountText(account))：\(progress.fallbackStage ?? (progress.regularStage.isEmpty ? "游戏当前/上次关卡" : progress.regularStage))无法进入，准备改用兜底关卡 \(fallback)",
                      0, .warning, client: client, account: account, task: .fight, fightResult: result)
                 // Re-establish the same account's ready state before navigating elsewhere.
                 try await switchAccount(account, client: client, configuration: configuration, policy: plan.policy)
                 progress.fallbackStage = fallback
-                if !progress.regularStage.isEmpty, plan.fight.stageStrategy != .fixed,
-                   memory.stage(clientID: client.id, accountID: account.id) == progress.regularStage {
-                    memory.markRecoveryRequired(clientID: client.id, accountID: account.id)
-                    do { try fightStageMemoryStore.save(memory) }
-                    catch { throw FightPersistenceError(details: error.localizedDescription) }
-                }
+                memory.markRecoveryRequired(clientID: client.id, accountID: account.id,
+                                            stage: recoveryStage, temporaryStage: fallback)
+                do { try fightStageMemoryStore.save(memory) }
+                catch { throw FightPersistenceError(details: error.localizedDescription) }
                 outcome = try await runFightPhase(
                     isAnnihilation: false, plan: plan, account: account, client: client,
                     configuration: configuration, progress: &progress, state: &state, weekly: &weekly
@@ -1766,7 +1828,8 @@ public final class WorkflowRunner {
         configuration: AppConfiguration,
         progress: inout FightProgress,
         state: inout ExecutionState,
-        weekly: inout WeeklyAnnihilationState
+        weekly: inout WeeklyAnnihilationState,
+        useCurrentStage: Bool = false
     ) async throws -> TaskRunOutcome {
         guard !Task.isCancelled else { throw RuntimeError.cancelled }
         let key = checkpointKey(plan: plan, client: client, account: account, task: .fight)
@@ -1778,11 +1841,12 @@ public final class WorkflowRunner {
             phasePlan.fight = FightConfiguration()
         }
         phasePlan.fight.weeklyAnnihilation.enabled = false
-        phasePlan.fight.stageStrategy = stage.isEmpty ? .gameCurrentOrLast : .fixed
-        phasePlan.fight.stage = stage
+        let dispatchedStage = useCurrentStage ? "" : stage
+        phasePlan.fight.stageStrategy = dispatchedStage.isEmpty ? .gameCurrentOrLast : .fixed
+        phasePlan.fight.stage = dispatchedStage
         try MAAConfigurationWriter(directories: directories).writeTask(
             .fight, plan: phasePlan, account: account, client: client,
-            fightStageResolution: phasePlan.fight.usesCustomSettings || !stage.isEmpty ? .value(stage) : .omitted
+            fightStageResolution: phasePlan.fight.usesCustomSettings || !stage.isEmpty ? .value(dispatchedStage) : .omitted
         )
         func record(_ result: FightResult) {
             if isAnnihilation { progress.annihilation = result }
@@ -1810,6 +1874,12 @@ public final class WorkflowRunner {
         }
         var outcome = try await runTask(.fight, plan: phasePlan, account: account, client: client, configuration: configuration)
         guard var result = outcome.fightResult else { return outcome }
+        if useCurrentStage, result.isResolved, result.times > 0, result.stage != stage || result.kind != .regular {
+            result.status = .unconfirmed
+            result.reason = .unexpectedStage
+            outcome = TaskRunOutcome(succeeded: false, recoveredAfterRetry: false, notices: outcome.notices,
+                                     failureDetails: outcome.failureDetails)
+        }
         result.fallbackFrom = fallbackFrom
         outcome.fightResult = result
         record(result)
@@ -1819,7 +1889,7 @@ public final class WorkflowRunner {
             catch { throw FightPersistenceError(details: error.localizedDescription) }
         }
         if isAnnihilation, result.isResolved, progress.regular?.isResolved != true {
-            state.record(FightResult(status: .unconfirmed, stage: progress.regularStage, reason: .missingEvidence), for: key)
+            state.record(FightResult(status: .unconfirmed, stage: progress.fallbackStage ?? progress.regularStage, reason: .missingEvidence), for: key)
         }
         try persistFightState(state)
         if plan.fight.weeklyAnnihilation.enabled {
@@ -2276,13 +2346,14 @@ public final class WorkflowRunner {
         arguments: [String],
         timeout: TimeInterval,
         environment: [String: String] = [:],
+        configurationDirectory: URL? = nil,
         ignoreCancellation: Bool = false
     ) async -> CommandResult {
         let command = arguments.first(where: { !$0.hasPrefix("-") }) ?? URL(filePath: executable).lastPathComponent
         let result: CommandResult
         do {
             var commandEnvironment = environment
-            commandEnvironment["MAA_CONFIG_DIR"] = directories.maaConfig.path
+            commandEnvironment["MAA_CONFIG_DIR"] = (configurationDirectory ?? directories.maaConfig).path
             result = try await commandRunner.run(
                 executable: executable,
                 arguments: arguments,

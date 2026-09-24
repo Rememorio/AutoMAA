@@ -88,6 +88,10 @@ private actor StubCommandRunner: CommandRunning {
         timeout: TimeInterval,
         observeCancellation: Bool
     ) async throws -> CommandResult {
+        if arguments.first == "run", arguments.dropFirst().first == FightStageInspection.taskName {
+            try writeInspectionFixture(.unknown, environment: environment)
+            return Self.success
+        }
         recordedCalls.append(Call(arguments: arguments, timeout: timeout))
         switch arguments.first {
         case "dir":
@@ -656,7 +660,7 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appending(path: "MAA/tasks/\(missingSecondName).json").path))
     }
 
-    func testRememberedRegularStageRequiresAnExplicitTargetBeforeAnyRun() {
+    func testMissingRegularMemoryWarnsBeforeRuntimeInspection() {
         var config = populatedConfiguration()
         config.cliPath = "/usr/bin/true"
         config.plans[0].fight.stageStrategy = .rememberedRegular
@@ -687,7 +691,7 @@ final class AutoMAAKitTests: XCTestCase {
 
         XCTAssertFalse(recoveryProblems.contains { $0.id.contains(firstAccount.id.uuidString) })
         XCTAssertTrue(recoveryProblems.contains {
-            $0.severity == .error
+            $0.severity == .warning
                 && $0.id.contains(config.clients[1].accounts[0].id.uuidString)
                 && $0.message.contains("常规关卡记录")
         })

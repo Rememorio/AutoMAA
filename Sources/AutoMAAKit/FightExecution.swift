@@ -19,7 +19,7 @@ public enum FightStopReason: String, Codable, Sendable {
         case .confirmedWeeklyLimit: "已手动确认本周剿灭完成"
         case .navigationUnavailable: "未能确认剿灭入口；请检查本周奖励或关卡页面"
         case .stageUnavailable: "无法进入目标关卡；请检查开放情况或更换关卡"
-        case .unexpectedStage: "常规目标返回了剿灭结果；请检查游戏与 MAA 资源"
+        case .unexpectedStage: "实际作战与已确认的常规目标不符；请检查游戏与 MAA 资源"
         case .interruptedBattle: "作战被中断，结果未确认；请检查游戏结果"
         case .missingEvidence: "未取得有效作战结果；请检查游戏后重新尝试"
         case .commandFailed: "MAA 执行失败"

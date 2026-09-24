@@ -3,6 +3,29 @@ import XCTest
 @testable import AutoMAAKit
 
 final class FightStageMemoryTests: XCTestCase {
+    func testObservedRecoveryAndTemporaryStageRoundTripWithoutInventingSuccessfulCompletion() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = FightStageMemoryStore(directories: AppDirectories(root: root))
+        let clientID = UUID(), accountID = UUID()
+        var memory = FightStageMemory()
+        memory.remember("AP-5", clientID: clientID, accountID: accountID)
+        memory.markRecoveryRequired(clientID: clientID, accountID: accountID, stage: "PA-8", temporaryStage: "1-7")
+        try store.save(memory)
+        memory = try store.load()
+        XCTAssertEqual(memory.stage(clientID: clientID, accountID: accountID), "PA-8")
+        XCTAssertEqual(memory.entry(clientID: clientID, accountID: accountID)?.stage, "AP-5")
+        XCTAssertEqual(memory.entry(clientID: clientID, accountID: accountID)?.temporaryStage, "1-7")
+        XCTAssertFalse(memory.recordSuccessfulFight(.init(status: .completed, stage: "1-7", times: 2, kind: .regular, fallbackFrom: "PA-8"),
+                                                   clientID: clientID, accountID: accountID))
+        XCTAssertEqual(memory.stage(clientID: clientID, accountID: accountID), "PA-8")
+        XCTAssertTrue(memory.recordSuccessfulFight(.init(status: .completed, stage: "PA-8", times: 1, kind: .regular),
+                                                  clientID: clientID, accountID: accountID))
+        XCTAssertNil(memory.entry(clientID: clientID, accountID: accountID)?.recoveryStage)
+        XCTAssertNil(memory.entry(clientID: clientID, accountID: accountID)?.temporaryStage)
+        XCTAssertFalse(memory.requiresRecovery(clientID: clientID, accountID: accountID))
+    }
+
     static let mapNames = ["切尔诺伯格", "切爾諾伯格", "Chernobog", "Lungmen Outskirts", "チェルノボーグ", "カズデル", "체르노보그"]
 
     func testMapNamesAndInvalidOCRCannotBecomeRecoveryStages() {

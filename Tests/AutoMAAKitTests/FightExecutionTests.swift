@@ -410,12 +410,17 @@ private actor FightTestCommands: CommandRunning {
     let directories: AppDirectories
     let blockStateSave: Bool
     let blockWeeklySave: Bool
+    let inspection: FightStageInspection
+    let inspectionFailure: CommandResult?
 
-    init(_ replies: [Reply], directories: AppDirectories, blockStateSave: Bool, blockWeeklySave: Bool) {
+    init(_ replies: [Reply], directories: AppDirectories, blockStateSave: Bool, blockWeeklySave: Bool,
+         inspection: FightStageInspection, inspectionFailure: CommandResult?) {
         self.replies = replies
         self.directories = directories
         self.blockStateSave = blockStateSave
         self.blockWeeklySave = blockWeeklySave
+        self.inspection = inspection
+        self.inspectionFailure = inspectionFailure
     }
 
     func run(executable: String, arguments: [String], environment: [String: String], timeout: TimeInterval,
@@ -429,6 +434,11 @@ private actor FightTestCommands: CommandRunning {
         }
         guard arguments.first == "run" else { return command(exit: arguments.first == "dir" ? 1 : 0) }
         let name = arguments[1]
+        if name == FightStageInspection.taskName {
+            XCTAssertNotEqual(environment["MAA_CONFIG_DIR"], directories.maaConfig.path)
+            try writeInspectionFixture(inspection, environment: environment)
+            return inspectionFailure ?? command()
+        }
         let data = try Data(contentsOf: directories.maaConfig.appending(path: "tasks/\(name).json"))
         calls.append(Call(name: name, taskJSON: data, statePath: environment["MAA_STATE_DIR"],
                           stateBeforeDispatch: ExecutionStateStore(directories: directories).loadForToday(),
@@ -470,6 +480,8 @@ private final class FightFixture {
     var plan = AutomationPlan.lightRoutine
     var now = ISO8601DateFormatter().date(from: "2026-09-09T00:00:00Z")!
     let runtime = FightTestRuntime()
+    var inspection: FightStageInspection = .unknown
+    var inspectionFailure: CommandResult?
     var directories: AppDirectories { AppDirectories(root: root) }
     var configuration: AppConfiguration { AppConfiguration(cliPath: "/usr/bin/true", clients: [client], plans: [plan]) }
     var step: WorkflowStep { WorkflowStep(planID: plan.id, clientID: client.id, accountID: account.id, task: .fight) }
@@ -496,7 +508,8 @@ private final class FightFixture {
 
     func run(_ replies: [FightTestCommands.Reply], retry: Bool = false, blockStateSave: Bool = false,
              blockWeeklySave: Bool = false) async -> (WorkflowReport, [FightTestCommands.Call]) {
-        let commands = FightTestCommands(replies, directories: directories, blockStateSave: blockStateSave, blockWeeklySave: blockWeeklySave)
+        let commands = FightTestCommands(replies, directories: directories, blockStateSave: blockStateSave,
+                                         blockWeeklySave: blockWeeklySave, inspection: inspection, inspectionFailure: inspectionFailure)
         let runner = WorkflowRunner(directories: directories, portProbe: runtime, gameController: runtime,
                                     shutdownPolicy: ClientShutdownPolicy(maaGracePeriod: 0, systemGracePeriod: 0, forcedGracePeriod: 0),
                                     commandRunner: commands, now: { [self] in now }, eventSink: runtime.record)
@@ -507,6 +520,199 @@ private final class FightFixture {
 
 @MainActor
 final class FightWorkflowTests: XCTestCase {
+    func testInspectionFailureTimeoutAndCancellationNeverDispatchAFightOrFallback() async throws {
+        for failure in [command(exit: 1), command(timeout: true), command(cancelled: true)] {
+            let fixture = try FightFixture(priority: true)
+            defer { fixture.cleanup() }
+            fixture.plan.fight.stageStrategy = .rememberedRegular
+            fixture.plan.fight.fallbackStage = "1-7"
+            fixture.inspection = .regular("PA-8")
+            fixture.inspectionFailure = failure
+            let (report, calls) = await fixture.run([])
+            XCTAssertFalse(report.isSuccess)
+            XCTAssertTrue(calls.isEmpty)
+            XCTAssertNil(fixture.state.fightResults?[fixture.step.key])
+            XCTAssertFalse(fixture.runtime.running)
+            XCTAssertEqual(report.cancelled, failure.cancelled)
+        }
+    }
+
+    func testUnconfirmedObservedStageRetryUsesFrozenStageInsteadOfInspectingAgain() async throws {
+        let fixture = try FightFixture()
+        defer { fixture.cleanup() }
+        fixture.plan.fight.stageStrategy = .rememberedRegular
+        fixture.inspection = .regular("PA-8")
+        _ = await fixture.run([.init(result: command(timeout: true))])
+        XCTAssertTrue(fixture.state.needsFightConfirmation(fixture.step.key))
+        fixture.inspection = .regular("CE-6")
+        fixture.inspectionFailure = command(exit: 1)
+        let (report, calls) = await fixture.run([.init(result: command("Fight PA-8 1 times"))], retry: true)
+        XCTAssertTrue(report.isSuccess)
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(try parameters(calls[0])["stage"] as? String, "PA-8")
+    }
+
+    func testUnexpectedSettlementAfterInspectionRemainsUnconfirmedWithoutLearningOrFallback() async throws {
+        for kind in [FightKind.regular, .annihilation] {
+            let fixture = try FightFixture()
+            defer { fixture.cleanup() }
+            fixture.plan.fight.stageStrategy = .rememberedRegular
+            fixture.plan.fight.fallbackStage = "1-7"
+            fixture.inspection = .regular("PA-8")
+            let callbacks = try settlementCallbacks(stage: kind == .regular ? "CE-6" : "Annihilation", kind: kind)
+            let (report, calls) = await fixture.run([.init(result: command(), callbacks: callbacks)])
+            XCTAssertFalse(report.isSuccess)
+            XCTAssertEqual(calls.count, 1)
+            XCTAssertEqual(fixture.state.fightResults?[fixture.step.key]?.reason, .unexpectedStage)
+            XCTAssertTrue(fixture.state.needsFightConfirmation(fixture.step.key))
+            XCTAssertNil(try FightStageMemoryStore(directories: fixture.directories).load().stage(
+                clientID: fixture.client.id, accountID: fixture.account.id))
+        }
+    }
+
+    func testUnavailableLastBattleCanUseConfiguredFallbackWithoutLearningIt() async throws {
+        let fixture = try FightFixture()
+        defer { fixture.cleanup() }
+        fixture.plan.fight.stageStrategy = .rememberedRegular
+        fixture.plan.fight.fallbackStage = "1-7"
+        fixture.inspection = .unavailable
+        let (report, calls) = await fixture.run([.init(result: command("Fight 1-7 1 times"))])
+        XCTAssertTrue(report.isSuccess)
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(try parameters(calls[0])["stage"] as? String, "1-7")
+        XCTAssertEqual(fixture.state.fightResults?[fixture.step.key]?.fallbackFrom, "")
+        XCTAssertNil(try FightStageMemoryStore(directories: fixture.directories).load().stage(
+            clientID: fixture.client.id, accountID: fixture.account.id))
+    }
+
+    func testFailedFixedStageDoesNotReplaceAnotherPlansRecoveryTarget() async throws {
+        let fixture = try FightFixture()
+        defer { fixture.cleanup() }
+        fixture.plan.fight.stage = "AP-5"
+        fixture.plan.fight.fallbackStage = "1-7"
+        var memory = FightStageMemory()
+        memory.remember("PA-8", clientID: fixture.client.id, accountID: fixture.account.id)
+        let store = FightStageMemoryStore(directories: fixture.directories)
+        try store.save(memory)
+        let (report, _) = await fixture.run([
+            .init(result: command(exit: 1), callbacks: navigationFailure), .init(result: command("Fight 1-7 1 times"))
+        ])
+        XCTAssertTrue(report.isSuccess)
+        XCTAssertEqual(try store.load().stage(clientID: fixture.client.id, accountID: fixture.account.id), "PA-8")
+    }
+
+    func testCurrentRegularStageOverridesOldMemoryWhenWeekIsComplete() async throws {
+        for weeklyEnabled in [false, true] {
+            let fixture = try FightFixture(priority: weeklyEnabled)
+            defer { fixture.cleanup() }
+            fixture.plan.fight.stageStrategy = .rememberedRegular
+            fixture.inspection = .regular("PA-8")
+            var memory = FightStageMemory()
+            memory.remember("1-7", clientID: fixture.client.id, accountID: fixture.account.id)
+            let store = FightStageMemoryStore(directories: fixture.directories)
+            try store.save(memory)
+            var weekly = WeeklyAnnihilationState()
+            weekly.record(.init(status: .unnecessary, reason: .weeklyLimit), client: fixture.client,
+                          accountID: fixture.account.id, weekStart: GameWeek(client: fixture.client.kind, at: fixture.now).start)
+            try WeeklyAnnihilationStore(directories: fixture.directories).save(weekly)
+            let (report, calls) = await fixture.run([.init(result: command("Fight PA-8 2 times"))])
+            XCTAssertTrue(report.isSuccess)
+            XCTAssertEqual(calls.count, 1)
+            XCTAssertEqual(try parameters(calls[0])["stage"] as? String, "")
+            XCTAssertEqual(calls[0].stateBeforeDispatch.fightProgress?[fixture.step.key]?.regularStage, "PA-8")
+            XCTAssertEqual(try store.load().stage(clientID: fixture.client.id, accountID: fixture.account.id), "PA-8")
+        }
+    }
+
+    func testFirstRunCanLearnGameStageWithoutAStoredTarget() async throws {
+        let fixture = try FightFixture()
+        defer { fixture.cleanup() }
+        fixture.plan.fight.stageStrategy = .rememberedRegular
+        fixture.inspection = .regular("PA-7")
+        let (report, calls) = await fixture.run([.init(result: command("Fight PA-7 1 times"))])
+        XCTAssertTrue(report.isSuccess)
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(try FightStageMemoryStore(directories: fixture.directories).load().stage(
+            clientID: fixture.client.id, accountID: fixture.account.id), "PA-7")
+    }
+
+    func testAnnihilationIsIdentifiedBeforeAnyFightAndRestoresMemory() async throws {
+        let fixture = try FightFixture()
+        defer { fixture.cleanup() }
+        fixture.plan.fight.stageStrategy = .rememberedRegular
+        fixture.inspection = .annihilation
+        var memory = FightStageMemory()
+        memory.remember("PA-8", clientID: fixture.client.id, accountID: fixture.account.id)
+        try FightStageMemoryStore(directories: fixture.directories).save(memory)
+        let (report, calls) = await fixture.run([.init(result: command("Fight PA-8 1 times"))])
+        XCTAssertTrue(report.isSuccess)
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(try parameters(calls[0])["stage"] as? String, "PA-8")
+    }
+
+    func testWeeklyAnnihilationSnapshotsObservedStageBeforeReplacingGameLastBattle() async throws {
+        let fixture = try FightFixture(priority: true)
+        defer { fixture.cleanup() }
+        fixture.plan.fight.stageStrategy = .rememberedRegular
+        fixture.inspection = .regular("PA-8")
+        let callbacks = try settlementCallbacks(stage: "Annihilation", kind: .annihilation, weeklyProgress: [1800, 1800])
+        let (report, calls) = await fixture.run([
+            .init(result: command(), callbacks: callbacks), .init(result: command("Fight PA-8 2 times"))
+        ])
+        XCTAssertTrue(report.isSuccess)
+        XCTAssertEqual(calls.count, 2)
+        XCTAssertEqual(try parameters(calls[0])["stage"] as? String, "Annihilation")
+        XCTAssertEqual(calls[0].stateBeforeDispatch.fightProgress?[fixture.step.key]?.regularStage, "PA-8")
+        XCTAssertEqual(try parameters(calls[1])["stage"] as? String, "PA-8")
+    }
+
+    func testTemporaryFallbackDoesNotBecomeTheNextGameTargetAndManualChangeWins() async throws {
+        let fixture = try FightFixture()
+        defer { fixture.cleanup() }
+        fixture.plan.fight.stageStrategy = .rememberedRegular
+        fixture.plan.fight.fallbackStage = "1-7"
+        fixture.inspection = .regular("PA-8")
+        let store = FightStageMemoryStore(directories: fixture.directories)
+        let (first, calls) = await fixture.run([
+            .init(result: command(exit: 1), callbacks: lastStageFailure), .init(result: command("Fight 1-7 2 times"))
+        ])
+        XCTAssertTrue(first.isSuccess)
+        XCTAssertEqual(calls.count, 2)
+        XCTAssertEqual(try store.load().stage(clientID: fixture.client.id, accountID: fixture.account.id), "PA-8")
+        fixture.plan.id = UUID()
+        fixture.inspection = .regular("1-7")
+        let (second, restored) = await fixture.run([.init(result: command("Fight PA-8 1 times"))])
+        XCTAssertTrue(second.isSuccess)
+        XCTAssertEqual(try parameters(restored[0])["stage"] as? String, "PA-8")
+        fixture.plan.id = UUID()
+        fixture.inspection = .regular("CE-6")
+        let (third, changed) = await fixture.run([.init(result: command("Fight CE-6 1 times"))])
+        XCTAssertTrue(third.isSuccess)
+        XCTAssertEqual(try parameters(changed[0])["stage"] as? String, "")
+        XCTAssertEqual(try store.load().stage(clientID: fixture.client.id, accountID: fixture.account.id), "CE-6")
+    }
+
+    func testFailedCurrentStageTriesMemoryThenConfiguredFallbackOnceEach() async throws {
+        let fixture = try FightFixture()
+        defer { fixture.cleanup() }
+        fixture.plan.fight.stageStrategy = .rememberedRegular
+        fixture.plan.fight.fallbackStage = "1-7"
+        fixture.inspection = .regular("PA-8")
+        var memory = FightStageMemory()
+        memory.remember("AP-5", clientID: fixture.client.id, accountID: fixture.account.id)
+        let store = FightStageMemoryStore(directories: fixture.directories)
+        try store.save(memory)
+        let (report, calls) = await fixture.run([
+            .init(result: command(exit: 1), callbacks: lastStageFailure),
+            .init(result: command(exit: 1), callbacks: navigationFailure),
+            .init(result: command("Fight 1-7 1 times"))
+        ])
+        XCTAssertTrue(report.isSuccess)
+        XCTAssertEqual(try calls.map { try parameters($0)["stage"] as? String }, ["", "AP-5", "1-7"])
+        XCTAssertEqual(try store.load().stage(clientID: fixture.client.id, accountID: fixture.account.id), "PA-8")
+        XCTAssertEqual(fixture.state.fightResults?[fixture.step.key]?.fallbackFrom, "PA-8")
+    }
+
     func testCompletedWeekKeepsAnExplicitRegularTargetInEveryParameterMode() async throws {
         for custom in [true, false] {
             let fixture = try FightFixture(priority: true)
@@ -1173,20 +1379,21 @@ final class FightWorkflowTests: XCTestCase {
         XCTAssertEqual(try parameters(retry[0])["stage"] as? String, "1-7")
     }
 
-    func testPriorityRequiresRegularStageAndRejectsAnnihilationAsFallback() async throws {
+    func testPriorityWithoutAnIdentifiableRegularTargetNeverDispatchesAnnihilation() async throws {
         let fixture = try FightFixture(priority: true)
         defer { fixture.cleanup() }
         fixture.plan.fight.stageStrategy = .gameCurrentOrLast
         let (missing, calls) = await fixture.run([])
-        XCTAssertNotNil(missing.fatalError)
+        XCTAssertFalse(missing.isSuccess)
         XCTAssertTrue(calls.isEmpty)
-        XCTAssertEqual(fixture.runtime.launches, 0)
+        XCTAssertEqual(fixture.runtime.launches, 1)
+        XCTAssertFalse(fixture.runtime.running)
         fixture.plan.fight.stageStrategy = .fixed
         fixture.plan.fight.stage = "Annihilation"
         XCTAssertFalse(ConfigurationValidator.structuralProblems(in: fixture.configuration).isEmpty)
         let (invalid, _) = await fixture.run([])
         XCTAssertNotNil(invalid.fatalError)
-        XCTAssertEqual(fixture.runtime.launches, 0)
+        XCTAssertEqual(fixture.runtime.launches, 1)
     }
 
     func testManualWeeklyConfirmationRejectsOtherUnconfirmedResults() async throws {

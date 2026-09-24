@@ -251,7 +251,7 @@ struct PlanEditorView: View {
                 }
             }
             Text(plan.fight.weeklyAnnihilation.enabled && plan.fight.stageStrategy != .fixed
-                 ? "每次常规作战都使用账号记录或手动设置的明确目标；本周剿灭已满时也不会回到游戏的上次关卡。"
+                 ? "优先识别游戏当前/上次的常规关卡；需要剿灭时先保存常规目标，剿灭结束后恢复。本周已满时继续跟随常规关卡。"
                  : plan.fight.stageStrategy.detail)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -282,7 +282,7 @@ struct PlanEditorView: View {
                     .frame(width: 190)
                     .accessibilityLabel("兜底关卡，留空关闭")
             }
-            Text("仅在确认尚未开战、目标无法进入时尝试一次。兜底不会覆盖记录的常规关卡，也不会替代剿灭。建议选择已解锁的常驻关卡。")
+            Text("没有可用的常规目标，或选关失败且尚未开战时使用；每个候选只尝试一次。临时兜底不替代原目标或剿灭，建议选择已解锁的常驻关卡。")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Divider()
@@ -507,12 +507,11 @@ struct PlanEditorView: View {
     private var fightStageMemoryRows: [FightStageMemoryRow] {
         model.configuration.clients.filter(\.enabled).flatMap { client in
             client.accounts.filter(plan.includes).map { account in
-                let entry = model.fightStageMemory.entry(clientID: client.id, accountID: account.id)
                 return FightStageMemoryRow(
                     clientID: client.id,
                     accountID: account.id,
                     label: "\(client.displayName) / \(account.displayName)",
-                    stage: entry?.stage
+                    stage: model.fightStageMemory.stage(clientID: client.id, accountID: account.id)
                 )
             }
         }
@@ -548,8 +547,8 @@ struct PlanEditorView: View {
     }
 
     private func fightStageStatusText(_ row: FightStageMemoryRow) -> String {
-        row.stage.map { "常规目标：\($0)；临时兜底不覆盖此记录" }
-            ?? "请先设置已解锁的常规关卡，运行前检查会校验目标。"
+        row.stage.map { "恢复目标：\($0)；游戏中的新常规关卡优先" }
+            ?? "运行时先识别游戏关卡；可预设已解锁的常规目标用于恢复。"
     }
 
     private var scheduleInstalled: Bool {
@@ -771,7 +770,7 @@ private struct FightStageEditorSheet: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
-            Text("采用最近常规关卡或每周优先剿灭的方案会使用此目标。请指定 MAA 支持导航且已解锁的关卡；游戏内手动换关不会自动更新这里。")
+            Text("跟随常规关卡或每周优先剿灭时，用于恢复剿灭或临时兜底之前的目标。请指定 MAA 支持导航且已解锁的关卡；游戏内换到其他常规关卡后，下次运行会优先识别新目标。")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

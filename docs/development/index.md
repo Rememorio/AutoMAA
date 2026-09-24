@@ -33,11 +33,19 @@ open .build/AutoMAA.app --args --data-directory /tmp/automaa-development
 
 作战类型与显示名称分开保存。`ProcessTask` 开始处理 `EndOfAction` 或 `EndOfActionAnnihilation` 时记录结算类型，再与对应的掉落结果关联；有效周奖励进度也能证明是剿灭，不要求达到上限。Core 先运行掉落插件，再转发 `SubTaskCompleted`，因此不能等待完成事件再判断前面的掉落。未知类型、无效编号和不完整结果不会覆盖常规关卡记忆。上游依据见 [StageDropsTaskPlugin](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/v6.17.2/src/MaaCore/Task/Fight/StageDropsTaskPlugin.cpp)、[AbstractTask 回调顺序](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/v6.17.2/src/MaaCore/Task/AbstractTask.cpp#L123-L151)、[StageNavigationTask](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/v6.17.2/src/MaaCore/Task/Fight/StageNavigationTask.cpp) 和 [maa-cli 作战摘要](https://github.com/MaaAssistantArknights/maa-cli/blob/v0.7.5/crates/maa-cli/src/run/callback/summary.rs)。对应行为使用隔离回调样例与工作流测试覆盖。
 
-常规兜底只接受作战前的 `StageNavigationTask` 失败，或已点击上次作战入口后的导航失败；进入 `FightBegin`、发现战斗画面、超时或掉线都会阻止自动换关。选关与各次尝试在 `WorkflowRunner` 中串行执行，已选兜底在派发前持久化。兜底结果与原目标分开保存，不能更新恢复记录；所有服务器共享这套判断。
+已有目标时，自动换关只接受作战前的 `StageNavigationTask` 失败，或已点击上次作战入口后的导航失败；进入 `FightBegin`、发现战斗画面、超时或掉线都会阻止自动换关。选关与各次尝试在 `WorkflowRunner` 中串行执行，已选兜底在派发前持久化。兜底结果与原目标分开保存，不能更新恢复记录；所有服务器共享这套判断。
 
 每周剿灭策略与状态位于 `WeeklyAnnihilation.swift`。策略属于方案，周状态按客户端、账号与服务器区分；只以明确周奖励上限或手动确认为本周完成，单次成功与理智不足均不能替代。游戏周使用 [maa-cli v0.7.5 的服务器时间偏移](https://github.com/MaaAssistantArknights/maa-cli/blob/v0.7.5/crates/maa-cli/src/config/task/client_type.rs)：官服、Bilibili、繁中服为 UTC+4，日服、韩服为 UTC+5，国际服为 UTC−11；这些偏移已包含游戏日 04:00 的边界，不是当地民用时区。每周从游戏日周一开始；派发时固定周标识，跨周结果不会误记为新周完成。未确认结果跨周仍阻止自动补打。
 
 `ExecutionState.prepareWeeklyAnnihilation` 统一供 Runner 与界面续跑状态使用，恢复剿灭可执行性时保留每日常规阶段与其他步骤。派发前分别原子保存每日目标和共享周状态；任何写入失败均停止派发，未完成的保存不能伪装成成功。`PlanContinuation.fightRecoveryItems` 提供独立于历史日志的当前处理项，方案页和活动记录共用 `FightRecoveryActions`。`WeeklyAnnihilationStore.confirmComplete` 在进程锁内重新读取并校验当前游戏周记录，仅更新周状态，不启动工作流。入口不可用只有在完整任务回调证明尚未进入作战时才可安全跳过，证据不足仍保留待确认。
+
+### 常规关卡的开战前检查
+
+`FightStageInspection` 通过隔离配置中的 `Custom` 任务复用 MaaCore 的关卡页 OCR。独立 Profile 启用 `user_resource`，生成的节点使用专属名称，重置继承的动作、分支与子任务；仅“前往上次作战”和返回终端导航可点击，开始作战和全权委托识别节点只观察。没有 `Fight` 任务，也不用 `times = 0` 模拟探测。只接受本次隔离日志中完整成功的 Custom 回调；检查失败不派发作战。
+
+选择顺序为当前/上次常规关卡、账号恢复目标、方案兜底。剿灭前保存常规目标；没有目标时可使用配置兜底；已有目标的每个后续候选仅在明确未开战的选关失败后尝试一次。最近成功关卡、待恢复目标与临时兜底分别保存；只有成功结算更新成功记录。待确认续跑固定使用已派发目标，不重新跟随游戏。手动选择与自动兜底恰好相同时无法区分，手动设置常规目标可以解除该恢复状态。
+
+识别流程依据 [MaaCore v6.17.5 的任务资源](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/v6.17.5/resource/tasks/tasks.json)、[Custom 接口](https://docs.maa.plus/zh-cn/protocol/integration.html)和 [maa-cli Profile 资源配置](https://github.com/MaaAssistantArknights/maa-cli/blob/v0.7.5/crates/maa-cli/src/config/asst.rs)。继承模板匹配的节点需要显式指定图片名，避免 Core 按新任务名查找不存在的图片。
 
 ## 修改与验证
 

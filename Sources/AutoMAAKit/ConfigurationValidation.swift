@@ -229,10 +229,8 @@ public enum ConfigurationValidator {
                 for account in targetAccounts where fightStageMemory.stage(clientID: client.id, accountID: account.id) == nil {
                     result.append(.init(
                         id: "plan-\(plan.id)-fight-memory-\(client.id)-\(account.id)",
-                        severity: .error,
-                        message: plan.fight.weeklyAnnihilation.enabled
-                            ? "「\(planName)」需要在剿灭前确定\(clientName) / \(account.displayName)的常规关卡；请设置常规目标，或改用固定常规关卡"
-                            : "「\(planName)」尚无\(clientName) / \(account.displayName)的常规关卡记录；请设置常规目标，或改用固定关卡",
+                        severity: .warning,
+                        message: "「\(planName)」尚无\(clientName) / \(account.displayName)的常规关卡记录；运行时先识别游戏目标，无法确定时需设置常规目标或兜底关卡",
                         scope: .plan(plan.id)
                     ))
                 }
