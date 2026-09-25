@@ -57,6 +57,7 @@ struct ClientEditorView: View {
                             }
                         }
                         .labelsHidden()
+                        .fixedSize(horizontal: true, vertical: false)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     GridRow {

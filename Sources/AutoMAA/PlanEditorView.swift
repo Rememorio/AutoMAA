@@ -290,6 +290,7 @@ struct PlanEditorView: View {
                             Text(strategy.title).tag(strategy)
                         }
                     }
+                    .fixedSize(horizontal: true, vertical: false)
                     if plan.fight.stageStrategy == .fixed {
                         LabeledContent("关卡") {
                             if customFightStage.wrappedValue {
@@ -333,6 +334,7 @@ struct PlanEditorView: View {
                             Text("\(value)").tag(Int?.some(value))
                         }
                     }
+                    .fixedSize(horizontal: true, vertical: false)
                     DisclosureGroup("高级选项") {
                         Toggle("博朗台碎石模式", isOn: $plan.fight.drGrandet)
                     }
@@ -358,6 +360,7 @@ struct PlanEditorView: View {
                 Picker("本周开始日", selection: $plan.fight.weeklyAnnihilation.startDay) {
                     ForEach(ScheduleWeekday.allCases) { day in Text(day.title).tag(day) }
                 }
+                .fixedSize(horizontal: true, vertical: false)
             }
         }
     }
@@ -387,6 +390,7 @@ struct PlanEditorView: View {
     private var recruitCard: some View {
         PlanTaskCard(task: .recruit, enabled: $plan.recruit.enabled, usesCustomSettings: $plan.recruit.usesCustomSettings) {
             Stepper("招募次数：\(plan.recruit.times)", value: $plan.recruit.times, in: 0...12)
+                .fixedSize(horizontal: true, vertical: false)
             Toggle("刷新标签", isOn: $plan.recruit.refresh)
             Toggle("使用加急许可", isOn: $plan.recruit.expedite)
             Divider()
@@ -405,6 +409,7 @@ struct PlanEditorView: View {
                     Text(mode.title).tag(mode)
                 }
             }
+            .fixedSize(horizontal: true, vertical: false)
             LabeledContent("三星首选标签") {
                 DelimitedListField("三星首选标签", prompt: "可留空", values: $plan.recruit.firstTags)
                     .frame(width: 210)
@@ -437,6 +442,7 @@ struct PlanEditorView: View {
                     Button("选择…") { chooseInfrastSchedule() }
                 }
                 Stepper("方案序号：\(plan.infrast.customSchedulePlanIndex)", value: $plan.infrast.customSchedulePlanIndex, in: 0...99)
+                    .fixedSize(horizontal: true, vertical: false)
             } else {
                 Divider()
                 Text("处理设施")
@@ -451,6 +457,7 @@ struct PlanEditorView: View {
                 Picker("无人机用途", selection: $plan.infrast.drones) {
                     ForEach(DroneUsage.allCases) { usage in Text(usage.title).tag(usage) }
                 }
+                .fixedSize(horizontal: true, vertical: false)
                 if plan.infrast.mode == .fullShift {
                     Divider()
                     Text("上岗最低心情：\(Int(plan.infrast.threshold * 100))%")
@@ -498,6 +505,7 @@ struct PlanEditorView: View {
                     Text("当前编队").tag(0)
                     ForEach(1...4, id: \.self) { Text("第 \($0) 编队").tag($0) }
                 }
+                .fixedSize(horizontal: true, vertical: false)
             }
         }
     }
@@ -520,6 +528,7 @@ struct PlanEditorView: View {
                 Divider()
                 Toggle("运行前更新识别数据", isOn: $plan.policy.hotUpdateBeforeRun)
                 Stepper("单步骤失败重试：\(plan.policy.maxRetries) 次", value: $plan.policy.maxRetries, in: 0...3)
+                    .fixedSize(horizontal: true, vertical: false)
                 Toggle("某一步失败后继续后续步骤", isOn: $plan.policy.continueAfterStepFailure)
                 Text("日常完成记录按方案隔离；每周剿灭按账号共享状态，未满时可继续补打。")
                     .font(.caption)
