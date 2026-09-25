@@ -130,6 +130,8 @@ Release information remains visible independently of operation state. Settings s
 
 Use SF Symbols. Filled task symbols are acceptable inside the 2rem task container; ordinary action symbols follow the native rendering mode. Symbols support text rather than replace it for consequential actions.
 
+Brand artwork is limited to project identity: `Assets/AutoMAA-logo.png` uses a tilted frame on transparency for README, documentation, sidebar and About. `Assets/AutoMAA-icon.png` uses a circular frame on a gradient rounded tile exclusively for the macOS application icon, generated as `Assets/AutoMAA.icns`. Web variants derive from the transparent logo. Preserve the character and framing across sizes; do not add artwork to operational controls.
+
 ### Motion
 
 Motion communicates focus or state transitions and stays short, typically around 140ms for local feedback. Animations must be interruptible and respect Reduce Motion. Avoid continuous decorative animation.

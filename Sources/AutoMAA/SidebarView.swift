@@ -144,11 +144,8 @@ struct SidebarView: View {
 
     private var brand: some View {
         HStack(spacing: 11) {
-            Image(nsImage: NSApp.applicationIconImage)
-                .resizable()
-                .scaledToFit()
+            BrandLogo()
                 .frame(width: 38, height: 38)
-                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 Text("AutoMAA")
                     .font(.headline)

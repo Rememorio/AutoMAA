@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./Assets/AutoMAA-icon.png" width="128" alt="AutoMAA 图标">
+<img src="./Assets/AutoMAA-logo.png" width="128" height="128" alt="AutoMAA Logo">
 
 # AutoMAA
 
@@ -18,7 +18,7 @@ AutoMAA 是原生 macOS 的 [MAA](https://github.com/MaaAssistantArknights/MaaAs
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/screenshots/overview-dark.webp">
-  <img src="./docs/assets/screenshots/overview-light.webp" width="1180" alt="AutoMAA 今日总览：两套日常方案、多个客户端与账号，以及运行前检查">
+  <img src="./docs/assets/screenshots/overview-light.webp" width="1180" alt="AutoMAA 今日总览：两套日常方案、客户端与账号，以及今日状态和运行入口">
 </picture>
 
 ## 能做什么
@@ -76,4 +76,4 @@ AutoMAA 仍处于 `0.x` 阶段，首次运行请有人值守。它不保存游�
 
 AutoMAA 是独立社区项目，与 MAA 官方、鹰角网络、Hypergryph、Yostar 或《明日方舟》运营方均无隶属、合作或背书关系。上述第三方项目各自的许可证和用户协议仍然适用。
 
-源代码与文档采用 [MIT License](./LICENSE)。**应用图标与宣传视觉资产不属于 MIT 授权范围**：图标为艾雅法拉的非官方二次创作，并非 MAA 官方 Logo；角色名称、形象及相关知识产权归原权利人所有。视觉资产仅用于识别和介绍本项目，完整说明见 [Assets/README.md](./Assets/README.md)。
+源代码与文档采用 [MIT License](./LICENSE)。**Logo、应用图标与宣传视觉资产不属于 MIT 授权范围**：Logo 与图标为艾雅法拉的非官方二次创作，并非 MAA 官方 Logo；角色名称、形象及相关知识产权归原权利人所有。视觉资产仅用于识别和介绍本项目，完整说明见 [Assets/README.md](./Assets/README.md)。

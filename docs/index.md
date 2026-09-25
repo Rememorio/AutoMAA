@@ -6,8 +6,8 @@ hero:
   text: 把 MAA 日常，组织成可复用自动化方案
   tagline: 配好客户端与账号，安排任务和时间。AutoMAA 依次完成每套日常，你可以随时查看结果、处理异常或安全停止。
   image:
-    src: /automaa-hero-icon.webp
-    alt: AutoMAA 应用图标
+    src: /automaa-logo.webp
+    alt: AutoMAA Logo
   actions:
     - theme: brand
       text: 下载与安装
@@ -52,9 +52,9 @@ features:
   </div>
 
   <figure class="product-shot product-shot-wide">
-    <img class="theme-shot theme-shot-light" src="./assets/screenshots/overview-light.webp" width="2360" height="1560" alt="AutoMAA 今日总览：展示简中服与日服两个客户端、三个演示账号和两套日常方案" />
-    <img class="theme-shot theme-shot-dark" src="./assets/screenshots/overview-dark.webp" width="2360" height="1560" alt="AutoMAA 今日总览：展示简中服与日服两个客户端、三个演示账号和两套日常方案" />
-    <figcaption><strong>今日总览</strong><span>先比较全部方案的状态摘要，再展开当前方案的路径与检查详情。</span></figcaption>
+    <img class="theme-shot theme-shot-light" src="./assets/screenshots/overview-light.webp" width="2360" height="1560" alt="AutoMAA 今日总览：展示简中服与日服两个客户端、两个演示账号和两套日常方案" />
+    <img class="theme-shot theme-shot-dark" src="./assets/screenshots/overview-dark.webp" width="2360" height="1560" alt="AutoMAA 今日总览：展示简中服与日服两个客户端、两个演示账号和两套日常方案" />
+    <figcaption><strong>今日总览</strong><span>每套方案直接显示今日状态与下次定时，可按需展开执行范围并运行。</span></figcaption>
   </figure>
 
   <div class="product-shot-grid">
@@ -64,8 +64,8 @@ features:
       <figcaption><strong>客户端与账号队列</strong><span>每个客户端独立配置，顺序、连接与关闭边界都清晰可见。</span></figcaption>
     </figure>
     <figure class="product-shot">
-      <img class="theme-shot theme-shot-light" src="./assets/screenshots/task-settings-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="AutoMAA 任务配置：理智作战、公开招募、基建收菜和领取奖励可排序，并可分别启用自定义参数" />
-      <img class="theme-shot theme-shot-dark" src="./assets/screenshots/task-settings-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="AutoMAA 任务配置：理智作战、公开招募、基建收菜和领取奖励可排序，并可分别启用自定义参数" />
+      <img class="theme-shot theme-shot-light" src="./assets/screenshots/task-settings-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="AutoMAA 方案设置：执行账号、定时、步骤顺序与跟随常规关卡的作战参数" />
+      <img class="theme-shot theme-shot-dark" src="./assets/screenshots/task-settings-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="AutoMAA 方案设置：执行账号、定时、步骤顺序与跟随常规关卡的作战参数" />
       <figcaption><strong>熟悉的 MAA 任务参数</strong><span>需要时精细配置，不需要时关闭开关使用 MAA 推荐值。</span></figcaption>
     </figure>
   </div>

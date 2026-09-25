@@ -12,6 +12,7 @@ export default defineConfig({
     hostname: "https://rememorio.github.io/AutoMAA/",
   },
   head: [
+    ["link", { rel: "icon", type: "image/png", href: "/AutoMAA/favicon.png" }],
     ["meta", { name: "theme-color", content: "#12aead" }],
     ["meta", { property: "og:type", content: "website" }],
     ["meta", { property: "og:title", content: "AutoMAA 文档" }],
@@ -24,7 +25,8 @@ export default defineConfig({
         content: "可靠、可配置、可恢复的 macOS MAA 多客户端工作流",
       },
     ],
-    ["meta", { name: "twitter:card", content: "summary_large_image" }],
+    ["meta", { property: "og:image:alt", content: "AutoMAA Logo" }],
+    ["meta", { name: "twitter:card", content: "summary" }],
     ["meta", { name: "twitter:title", content: "AutoMAA 文档" }],
     [
       "meta",
@@ -36,6 +38,7 @@ export default defineConfig({
     ["meta", { name: "twitter:image", content: "https://rememorio.github.io/AutoMAA/og.png" }],
   ],
   themeConfig: {
+    logo: { src: "/automaa-logo.webp", alt: "AutoMAA" },
     siteTitle: "AutoMAA 文档",
     nav: [
       { text: "首页", link: "/" },

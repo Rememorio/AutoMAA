@@ -37,6 +37,12 @@ html {
   scroll-behavior: smooth;
 }
 
+.VPNavBarTitle .logo {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+}
+
 .VPNavBar:not(.home.top) {
   background: color-mix(in srgb, var(--vp-c-bg) 84%, transparent);
   backdrop-filter: saturate(150%) blur(16px);

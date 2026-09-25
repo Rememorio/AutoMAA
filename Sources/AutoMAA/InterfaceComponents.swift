@@ -1,4 +1,21 @@
+import AppKit
 import SwiftUI
+
+struct BrandLogo: View {
+    private static let image: NSImage = {
+        guard let url = Bundle.main.url(forResource: "AutoMAA-logo", withExtension: "png"),
+              let image = NSImage(contentsOf: url)
+        else { return NSApp.applicationIconImage }
+        return image
+    }()
+
+    var body: some View {
+        Image(nsImage: Self.image)
+            .resizable()
+            .scaledToFit()
+            .accessibilityHidden(true)
+    }
+}
 
 enum PageLayout {
     static let inset: CGFloat = 28

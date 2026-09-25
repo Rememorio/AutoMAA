@@ -51,6 +51,14 @@ README、文档站、更新日志和 GitHub Release 面向不了解维护过程�
 
 提交前运行 `./scripts/check-public-content.sh`；准备 Release Notes 时再把临时 Notes 文件传给同一脚本检查。
 
+## 品牌资源
+
+README、文档站、应用侧栏与关于页统一使用 `Assets/AutoMAA-logo.png`：相框外保持透明，直接适配深浅色页面。`Assets/AutoMAA-icon.png` 是带渐变底色的圆框版本，仅用于 macOS 应用图标；替换后运行 `./scripts/build-icon.sh` 生成 `Assets/AutoMAA.icns`。
+
+文档站首页与导航使用 `docs/public/automaa-logo.webp`，网站图标使用 `favicon.png`，分享预览使用 `og.png`，均从透明 Logo 派生。更换 Logo 时同时更新这些文件，保留透明通道，避免引用应用图标或遗留旧品牌图。网页 Logo 使用无损 WebP；图片尺寸转换不应改变原图比例或角色细节。
+
+这些视觉资产不属于 MIT License，完整声明见 [视觉资产说明](https://github.com/Rememorio/AutoMAA/blob/main/Assets/README.md)。
+
 ## 产品截图
 
 产品截图保存在 `docs/assets/screenshots/`。更新截图时：

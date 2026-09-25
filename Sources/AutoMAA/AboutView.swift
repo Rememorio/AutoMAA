@@ -17,11 +17,8 @@ struct AboutView: View {
 
     private var identity: some View {
         HStack(spacing: 20) {
-            Image(nsImage: NSApp.applicationIconImage)
-                .resizable()
-                .scaledToFit()
+            BrandLogo()
                 .frame(width: 72, height: 72)
-                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 7) {
                 Text("AutoMAA")
                     .font(.system(size: 28, weight: .bold, design: .rounded))
@@ -102,7 +99,7 @@ struct AboutView: View {
         Panel {
             VStack(alignment: .leading, spacing: 11) {
                 SectionHeading(title: "开源与致谢", symbol: "heart.fill")
-                Text("AutoMAA 源代码与文档采用 MIT License；应用图标及宣传视觉资产不在该许可范围内。项目建立在 MAA、MaaCore、maa-cli 及其社区长期积累的成果之上，是独立的非官方社区项目。")
+                Text("AutoMAA 源代码与文档采用 MIT License；Logo、应用图标及宣传视觉资产不在该许可范围内。项目建立在 MAA、MaaCore、maa-cli 及其社区长期积累的成果之上，是独立的非官方社区项目。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
