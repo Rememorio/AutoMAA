@@ -3,8 +3,11 @@ set -euo pipefail
 
 PROJECT_DIR="${0:A:h:h}"
 SOURCE="${1:-$PROJECT_DIR/Assets/AutoMAA-icon.png}"
-ICONSET="$PROJECT_DIR/Assets/AutoMAA.iconset"
+ICON_WORK_DIR="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/automaa-icon.XXXXXX")"
+ICONSET="$ICON_WORK_DIR/AutoMAA.iconset"
 OUTPUT="$PROJECT_DIR/Assets/AutoMAA.icns"
+
+trap '/bin/rm -rf -- "$ICON_WORK_DIR"' EXIT INT TERM
 
 /bin/mkdir -p "$ICONSET"
 /usr/bin/sips -z 16 16 "$SOURCE" --out "$ICONSET/icon_16x16.png"
