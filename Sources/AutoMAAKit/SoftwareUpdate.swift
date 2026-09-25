@@ -330,7 +330,10 @@ public enum SoftwareUpdateVerifier {
 
 public protocol SoftwareUpdateServing: Sendable {
     func check() async throws -> SoftwareUpdateRelease?
-    func prepare(_ release: SoftwareUpdateRelease, directories: AppDirectories) async throws -> PreparedSoftwareUpdate
+    func prepare(
+        _ release: SoftwareUpdateRelease, directories: AppDirectories,
+        progress: @escaping @Sendable (UpdateProgress) async -> Void
+    ) async throws -> PreparedSoftwareUpdate
     func restorePreparedUpdate(directories: AppDirectories) async throws -> PreparedSoftwareUpdate?
 }
 
@@ -349,6 +352,12 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
         configuration.timeoutIntervalForRequest = UpdatePolicy.checkTimeout
         configuration.timeoutIntervalForResource = UpdatePolicy.packageTimeout
         session = URLSession(configuration: configuration)
+    }
+
+    init(currentVersion: String, session: URLSession) {
+        self.currentVersion = currentVersion
+        self.repository = Self.defaultRepository
+        self.session = session
     }
 
     public func check() async throws -> SoftwareUpdateRelease? {
@@ -380,14 +389,20 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
         return try SoftwareUpdateReleaseResolver.newerRelease(from: data, currentVersion: currentVersion)
     }
 
-    public func prepare(_ release: SoftwareUpdateRelease, directories: AppDirectories) async throws -> PreparedSoftwareUpdate {
+    public func prepare(
+        _ release: SoftwareUpdateRelease, directories: AppDirectories,
+        progress: @escaping @Sendable (UpdateProgress) async -> Void
+    ) async throws -> PreparedSoftwareUpdate {
         try SoftwareUpdateReleaseResolver.validate(release)
         return try await UpdateDeadline(timeout: UpdatePolicy.packageTimeout).perform(operation: "准备 AutoMAA 更新") {
-            try await self.prepareRelease(release, directories: directories)
+            try await self.prepareRelease(release, directories: directories, progress: progress)
         }
     }
 
-    private func prepareRelease(_ release: SoftwareUpdateRelease, directories: AppDirectories) async throws -> PreparedSoftwareUpdate {
+    private func prepareRelease(
+        _ release: SoftwareUpdateRelease, directories: AppDirectories,
+        progress: @escaping @Sendable (UpdateProgress) async -> Void
+    ) async throws -> PreparedSoftwareUpdate {
         try Task.checkCancellation()
         try directories.prepare()
         let updatesRoot = directories.root.appending(path: "Updates", directoryHint: .isDirectory)
@@ -408,8 +423,9 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
         do {
             let checksumURL = workingDirectory.appending(path: release.checksum.name)
             let diskImageURL = workingDirectory.appending(path: release.diskImage.name)
-            try await download(release.checksum, to: checksumURL)
-            try await download(release.diskImage, to: diskImageURL)
+            try await download(release.checksum, to: checksumURL, message: "正在下载校验文件…", progress: progress)
+            try await download(release.diskImage, to: diskImageURL, message: "正在下载 AutoMAA 更新包…", progress: progress)
+            await progress(.init(message: "下载完成，正在校验更新包…"))
 
             let checksumData = try Data(contentsOf: checksumURL)
             let expected = try SoftwareUpdateVerifier.expectedSHA256(
@@ -420,6 +436,7 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
             guard expected == actual else { throw SoftwareUpdateError.checksumMismatch }
 
             try await verifyDiskImage(diskImageURL)
+            await progress(.init(message: "正在检查应用版本、架构与代码签名…"))
             let stagedApplication = try await stageApplication(
                 from: diskImageURL,
                 in: workingDirectory,
@@ -474,33 +491,60 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
         }
     }
 
-    private func download(_ asset: SoftwareUpdateAsset, to destination: URL) async throws {
+    private func download(
+        _ asset: SoftwareUpdateAsset, to destination: URL, message: String,
+        progress: @escaping @Sendable (UpdateProgress) async -> Void
+    ) async throws {
         var lastError: Error = SoftwareUpdateError.network("未知网络错误")
         for attempt in 0..<UpdatePolicy.maximumAttempts {
             do {
                 try Task.checkCancellation()
-                try await downloadOnce(asset, to: destination)
+                let title = attempt == 0 ? message : "重试下载（\(attempt)/\(UpdatePolicy.maximumAttempts - 1)）· \(message)"
+                await progress(.init(message: title, download: .init(receivedBytes: 0, totalBytes: Int64(asset.size))))
+                try await downloadOnce(asset, to: destination) { download in
+                    await progress(.init(message: title, download: download))
+                }
                 return
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
                 lastError = error
                 guard attempt + 1 < UpdatePolicy.maximumAttempts, isRetryable(error) else { throw error }
+                await progress(.init(message: "下载中断，正在等待重试…"))
                 try await Task.sleep(for: UpdatePolicy.retryDelay)
             }
         }
         throw lastError
     }
 
-    private func downloadOnce(_ asset: SoftwareUpdateAsset, to destination: URL) async throws {
+    func downloadOnce(
+        _ asset: SoftwareUpdateAsset, to destination: URL,
+        progress: @escaping @Sendable (DownloadProgress) async -> Void
+    ) async throws {
         var request = URLRequest(url: asset.downloadURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: UpdatePolicy.checkTimeout)
         request.setValue("application/octet-stream", forHTTPHeaderField: "Accept")
         request.setValue("AutoMAA/\(currentVersion)", forHTTPHeaderField: "User-Agent")
         let temporaryURL: URL
         let response: URLResponse
+        let (updates, continuation) = AsyncStream<DownloadProgress>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let observer = Task {
+            for await update in updates {
+                guard !Task.isCancelled else { break }
+                await progress(update)
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        let delegate = UpdateDownloadDelegate(updates: continuation, expectedSize: Int64(asset.size))
         do {
-            (temporaryURL, response) = try await session.download(for: request)
+            (temporaryURL, response) = try await session.download(for: request, delegate: delegate)
+            delegate.stopObserving()
+            continuation.finish()
+            await observer.value
         } catch {
+            delegate.stopObserving()
+            continuation.finish()
+            observer.cancel()
+            await observer.value
             if Task.isCancelled || (error as? URLError)?.code == .cancelled {
                 throw CancellationError()
             }

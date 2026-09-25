@@ -85,7 +85,8 @@ struct SettingsView: View {
                     }
                 case let .downloading(release):
                     UpdateProgressRow(
-                        message: "正在下载并校验 AutoMAA v\(release.version)…",
+                        message: model.applicationUpdateProgress?.message ?? "正在准备下载 AutoMAA v\(release.version)…",
+                        progress: model.applicationUpdateProgress?.download,
                         startedAt: model.applicationUpdateStartedAt,
                         limit: "上限 \(UpdatePolicy.durationDescription(UpdatePolicy.packageTimeout))，含重试与校验",
                         cancel: { model.cancelApplicationUpdate() }
@@ -400,7 +401,8 @@ struct SettingsView: View {
                         }
                     } else {
                         UpdateProgressRow(
-                            message: (activity.automatic ? "自动更新 · " : "") + activity.message,
+                            message: (activity.automatic ? "自动更新 · " : "") + (activity.progress?.message ?? activity.message),
+                            progress: activity.progress?.download,
                             startedAt: activity.startedAt,
                             limit: "上限 \(UpdatePolicy.durationDescription(activity.component.timeout))，含重试与校验",
                             isCancelling: activity.isCancelling,

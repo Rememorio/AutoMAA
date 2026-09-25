@@ -132,6 +132,7 @@ struct MAACommandTimeoutPolicy: Sendable, Equatable {
 @MainActor
 public final class WorkflowRunner {
     public typealias EventSink = @MainActor @Sendable (RunnerEvent) -> Void
+    public typealias UpdateProgressSink = @MainActor @Sendable (UpdateProgress?) -> Void
     public typealias NoticeSink = @MainActor @Sendable ([WorkflowNotice], UUID) async -> NotificationDeliveryResult
 
     private let directories: AppDirectories
@@ -151,6 +152,7 @@ public final class WorkflowRunner {
     private let now: @MainActor @Sendable () -> Date
     private let noticeSink: NoticeSink?
     private let eventSink: EventSink
+    private let updateProgressSink: UpdateProgressSink?
     private var currentPlanID: UUID?
     private var currentRunID: UUID?
     private var currentSensitiveValues: [String] = []
@@ -160,6 +162,7 @@ public final class WorkflowRunner {
     public convenience init(
         directories: AppDirectories = .init(),
         resourceProbeExecutable: URL? = nil,
+        updateProgressSink: UpdateProgressSink? = nil,
         eventSink: @escaping EventSink = { _ in }
     ) {
         self.init(
@@ -169,6 +172,7 @@ public final class WorkflowRunner {
             shutdownPolicy: .playCover,
             resourceProbeExecutable: resourceProbeExecutable,
             noticeSink: nil,
+            updateProgressSink: updateProgressSink,
             eventSink: eventSink
         )
     }
@@ -202,6 +206,7 @@ public final class WorkflowRunner {
         coreReleaseManifestFetcher: any MAACoreReleaseManifestFetching = MAACoreReleaseManifestClient(),
         now: @escaping @MainActor @Sendable () -> Date = { Date() },
         noticeSink: NoticeSink? = nil,
+        updateProgressSink: UpdateProgressSink? = nil,
         eventSink: @escaping EventSink = { _ in }
     ) {
         self.directories = directories
@@ -221,6 +226,7 @@ public final class WorkflowRunner {
         self.now = now
         self.noticeSink = noticeSink
         self.eventSink = eventSink
+        self.updateProgressSink = updateProgressSink
     }
 
     public func run(
@@ -1132,7 +1138,7 @@ public final class WorkflowRunner {
         }
         guard !Task.isCancelled else { return .cancelled }
         guard deadline.remaining > 0 else { return .failed(timeoutMessage) }
-        emit(.updating, "正在下载\(component.title)", 0, .info, updateInformation: information)
+        emit(.updating, component.includesCore ? "正在获取 MAA 下载信息与同步识别数据…" : "正在同步识别数据（此阶段不提供下载量）…", 0, .info, updateInformation: information)
         let outcome = await runMaintenanceCommand(
             executable: cliPath,
             arguments: component.arguments,
@@ -1142,7 +1148,13 @@ public final class WorkflowRunner {
                 "MAA_DATA_DIR": staging.data.path,
                 "MAA_CACHE_DIR": staging.cache.path,
                 "MAA_STATE_DIR": staging.state.path,
-            ]
+            ],
+            progressReader: {
+                if case let .core(channel) = component {
+                    return MAAUpdateProgressReader(cache: staging.cache, channel: channel)
+                }
+                return nil
+            }()
         )
         let result = outcome.result
         guard !result.cancelled, !Task.isCancelled else { return .cancelled }
@@ -1382,13 +1394,15 @@ public final class WorkflowRunner {
         arguments: [String],
         deadline: UpdateDeadline,
         operation: String,
-        environment: [String: String] = [:]
+        environment: [String: String] = [:],
+        progressReader: MAAUpdateProgressReader? = nil
     ) async -> MaintenanceCommandOutcome {
-        let first = await runCommand(
+        let first = await runMaintenanceAttempt(
             executable: executable,
             arguments: arguments,
             timeout: deadline.remaining,
-            environment: environment
+            environment: environment,
+            progressReader: progressReader
         )
         guard MAAMaintenanceFailureClassifier.isTransientNetworkFailure(first), !Task.isCancelled,
               deadline.remaining > 0 else {
@@ -1412,16 +1426,46 @@ public final class WorkflowRunner {
         guard deadline.remaining > 0 else {
             return .init(result: first, recoveredAfterRetry: false)
         }
-        let retried = await runCommand(
+        let retried = await runMaintenanceAttempt(
             executable: executable,
             arguments: arguments,
             timeout: deadline.remaining,
-            environment: environment
+            environment: environment,
+            progressReader: progressReader
         )
         return .init(
             result: retried,
             recoveredAfterRetry: retried.exitCode == 0 && !retried.timedOut
         )
+    }
+
+    private func runMaintenanceAttempt(
+        executable: String, arguments: [String], timeout: TimeInterval,
+        environment: [String: String], progressReader: MAAUpdateProgressReader?
+    ) async -> CommandResult {
+        let observer: Task<Void, Never>?
+        if let progressReader, let updateProgressSink {
+            observer = Task.detached(priority: .utility) {
+                var previous: UpdateProgress?
+                while !Task.isCancelled {
+                    let update = progressReader.read()
+                    guard !Task.isCancelled else { break }
+                    if update != previous {
+                        await updateProgressSink(update)
+                        previous = update
+                    }
+                    do { try await Task.sleep(for: .milliseconds(250)) }
+                    catch { break }
+                }
+            }
+        } else {
+            observer = nil
+        }
+        let result = await runCommand(executable: executable, arguments: arguments, timeout: timeout, environment: environment)
+        observer?.cancel()
+        await observer?.value
+        updateProgressSink?(nil)
+        return result
     }
 
     private func launch(

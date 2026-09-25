@@ -34,6 +34,7 @@ private actor StubSoftwareUpdateService: SoftwareUpdateServing {
     var slowRestoration = false
     var restorationFails = false
     var downloadFails = false
+    private var progressHandlers: [@Sendable (UpdateProgress) async -> Void] = []
 
     init(release: SoftwareUpdateRelease, prepared: PreparedSoftwareUpdate, restored: PreparedSoftwareUpdate? = nil) {
         self.release = release
@@ -52,9 +53,12 @@ private actor StubSoftwareUpdateService: SoftwareUpdateServing {
 
     func prepare(
         _ release: SoftwareUpdateRelease,
-        directories: AppDirectories
+        directories: AppDirectories,
+        progress: @escaping @Sendable (UpdateProgress) async -> Void
     ) async throws -> PreparedSoftwareUpdate {
         prepareCount += 1
+        progressHandlers.append(progress)
+        await progress(.init(message: "正在下载更新包", download: .init(receivedBytes: 25, totalBytes: 100)))
         if downloadFails { throw URLError(.cannotConnectToHost) }
         if slowDownloads {
             if returnsLateResult {
@@ -89,10 +93,40 @@ private actor StubSoftwareUpdateService: SoftwareUpdateServing {
     }
 
     func failDownload() { downloadFails = true }
+
+    func reportProgress(_ update: UpdateProgress, attempt: Int) async {
+        await progressHandlers[attempt](update)
+    }
 }
 
 @Suite("Application updates")
 struct ApplicationUpdateTests {
+    @Test("download progress clears on cancellation and ignores callbacks from an earlier attempt")
+    @MainActor
+    func progressLifecycle() async throws {
+        let fixture = try makeFixture(automaticallyDownloads: false)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        await fixture.service.delay(downloads: true)
+        fixture.model.downloadApplicationUpdate(fixture.service.release)
+        try await waitUntil { fixture.model.applicationUpdateProgress?.download?.receivedBytes == 25 }
+        fixture.model.cancelApplicationUpdate()
+        #expect(fixture.model.applicationUpdateProgress == nil)
+        try await waitUntil { !fixture.model.applicationUpdateState.isBusy }
+        let stale = UpdateProgress(message: "过期进度", download: .init(receivedBytes: 90, totalBytes: 100))
+        await fixture.service.reportProgress(stale, attempt: 0)
+        #expect(fixture.model.applicationUpdateProgress == nil)
+
+        fixture.model.downloadApplicationUpdate(fixture.service.release)
+        try await waitUntil { fixture.model.applicationUpdateProgress?.download?.receivedBytes == 25 }
+        await fixture.service.reportProgress(stale, attempt: 0)
+        #expect(fixture.model.applicationUpdateProgress?.download?.receivedBytes == 25)
+        await fixture.service.reportProgress(.init(message: "正在校验更新包"), attempt: 1)
+        #expect(fixture.model.applicationUpdateProgress?.message == "正在校验更新包")
+        #expect(fixture.model.applicationUpdateProgress?.download == nil)
+        fixture.model.cancelApplicationUpdate()
+        try await waitUntil { !fixture.model.applicationUpdateState.isBusy }
+    }
+
     @Test("restarting for an update preserves unsaved edits until saving succeeds")
     @MainActor
     func failedSavePreventsUpdateRestart() async throws {
@@ -135,6 +169,7 @@ struct ApplicationUpdateTests {
             try await fixture.model.loadReleaseNotes(for: .application("9.9.9"))
         }
         if case .downloading = fixture.model.applicationUpdateState {} else { Issue.record("说明读取影响了下载") }
+        #expect(fixture.model.applicationUpdateProgress?.download?.receivedBytes == 25)
         #expect(fixture.model.applicationUpdateState.canCancel)
         fixture.model.cancelApplicationUpdate()
         try await waitUntil { !fixture.model.applicationUpdateState.isBusy }

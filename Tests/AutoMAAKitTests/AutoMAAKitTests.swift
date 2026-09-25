@@ -1631,6 +1631,9 @@ final class AutoMAAKitTests: XCTestCase {
         let cli = root.appending(path: "maa-cli")
         try writeFakeMAACLI(at: cli, installation: installation, body: """
         if [ "$1" = "update" ]; then
+          printf '%s' '{"version":"v1.2.3","details":{"assets":[{"name":"MAA-v1.2.3-macos-runtime-universal.zip","size":1000}]}}' > "$MAA_CACHE_DIR/core-manifest-stable.json"
+          /bin/dd if=/dev/zero of="$MAA_CACHE_DIR/MAA-v1.2.3-macos-runtime-universal.zip.partial" bs=250 count=1
+          /bin/sleep 0.6
           printf '%s\\n' "$@" > "$MAA_CONFIG_DIR/update-arguments.txt"
           printf '%s\\n' "updated core" > "$MAA_DATA_DIR/lib/libMaaCore.dylib"
           printf '%s\\n' "updated base resource" > "$MAA_DATA_DIR/resource/version.json"
@@ -1638,15 +1641,23 @@ final class AutoMAAKitTests: XCTestCase {
         fi
         """)
 
+        var downloads: [DownloadProgress] = []
+        var lastProgress: UpdateProgress?
         let succeeded = await WorkflowRunner(
             directories: directories,
-            resourceProbeExecutable: installation.probe
+            resourceProbeExecutable: installation.probe,
+            updateProgressSink: { update in
+                lastProgress = update
+                if let download = update?.download { downloads.append(download) }
+            }
         ).updateCore(cliPath: cli.path)
         let entries = HistoryStore(directories: directories).load()
         let runID = try XCTUnwrap(entries.first?.runID)
         let arguments = try String(contentsOf: directories.maaConfig.appending(path: "update-arguments.txt"), encoding: .utf8)
 
         XCTAssertTrue(succeeded)
+        XCTAssertTrue(downloads.contains { $0.fractionCompleted == 0.25 })
+        XCTAssertNil(lastProgress)
         XCTAssertEqual(arguments, "update\nstable\n--test-time\n10\n--batch\n")
         XCTAssertEqual(entries.map(\.phase), [.updating, .updating, .updating, .updating, .updating, .updating, .completed])
         XCTAssertTrue(entries.allSatisfy { $0.runID == runID })

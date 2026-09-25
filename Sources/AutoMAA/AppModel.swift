@@ -125,6 +125,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var isCheckingMAAEnvironment = false
     @Published private(set) var applicationUpdateState: ApplicationUpdateState = .idle
     @Published private(set) var applicationUpdateRelease: SoftwareUpdateRelease?
+    @Published private(set) var applicationUpdateProgress: UpdateProgress?
+    private var applicationUpdateProgressID: UUID?
     @Published private(set) var releaseNotesState: ReleaseNotesCache.State = .init()
     @Published var updateDetailsRequest: UpdateDetailsRequest?
     @Published private(set) var applicationUpdateStartedAt: Date?
@@ -993,7 +995,12 @@ final class AppModel: ObservableObject {
         let cliPath = configuration.cliPath
         let runner = WorkflowRunner(
             directories: directories,
-            resourceProbeExecutable: resourceProbeExecutable
+            resourceProbeExecutable: resourceProbeExecutable,
+            updateProgressSink: { [weak self] update in
+                guard let self, self.maaUpdateActivity?.isFinished == false,
+                      !self.isCancellingRun else { return }
+                self.maaUpdateActivity?.progress = update
+            }
         ) { [weak self] event in
             self?.consume(event)
         }
@@ -1101,12 +1108,23 @@ final class AppModel: ObservableObject {
 
     private func prepareApplicationUpdate(_ release: SoftwareUpdateRelease) async {
         rememberApplicationRelease(release)
+        let progressID = UUID()
+        applicationUpdateProgressID = progressID
+        applicationUpdateProgress = nil
+        defer {
+            if applicationUpdateProgressID == progressID {
+                applicationUpdateProgressID = nil
+                applicationUpdateProgress = nil
+            }
+        }
         do {
             try validateAutomaticUpdateAvailability()
             try Task.checkCancellation()
             applicationUpdateState = .downloading(release)
             applicationUpdateStartedAt = Date()
-            let prepared = try await softwareUpdateService.prepare(release, directories: directories)
+            let prepared = try await softwareUpdateService.prepare(release, directories: directories) { [weak self] update in
+                await self?.receiveApplicationUpdateProgress(update, id: progressID)
+            }
             try Task.checkCancellation()
             applicationUpdateState = .ready(prepared)
             showBanner("v\(release.version) 已下载并通过校验，可以重启更新")
@@ -1122,6 +1140,12 @@ final class AppModel: ObservableObject {
             applicationUpdateState = .failed(error.localizedDescription)
             showBanner("下载更新失败：\(error.localizedDescription)")
         }
+    }
+
+    private func receiveApplicationUpdateProgress(_ update: UpdateProgress, id: UUID) {
+        guard applicationUpdateProgressID == id,
+              case .downloading = applicationUpdateState else { return }
+        applicationUpdateProgress = update
     }
 
     private func resumeAutomaticApplicationUpdateIfNeeded() {
@@ -1261,6 +1285,7 @@ final class AppModel: ObservableObject {
         guard applicationUpdateState.canCancel else { return }
         automaticApplicationDownloadPaused = true
         applicationUpdateState = .cancelling
+        applicationUpdateProgress = nil
         applicationUpdateTask?.cancel()
     }
 
@@ -1766,6 +1791,7 @@ final class AppModel: ObservableObject {
         statusMessage = event.message
         progress = event.progress
         if runningPlanID == nil, maaUpdateActivity?.isFinished == false {
+            maaUpdateActivity?.progress = nil
             maaUpdateActivity?.phase = event.phase
             maaUpdateActivity?.message = event.message
             maaUpdateActivity?.details = event.log.details
