@@ -106,6 +106,8 @@ final class AppModel: ObservableObject {
     @Published var runningPlanID: UUID?
     @Published private var externalRunState: ExternalRunState?
     @Published var bannerMessage: String?
+    @Published private(set) var configurationSaveError: String?
+    @Published var readinessRequest: PlanReadinessRequest?
     @Published var installedPlanIDs: Set<UUID>
     @Published private(set) var fightStageMemory: FightStageMemory
     @Published private(set) var weeklyAnnihilation: WeeklyAnnihilationState
@@ -463,10 +465,16 @@ final class AppModel: ObservableObject {
                 )
             }
             try configurationStore.save(configuration)
+            configurationSaveError = nil
             if showConfirmation { showBanner("配置已保存") }
             return true
         } catch {
-            showBanner("保存失败：\(error.localizedDescription)")
+            let message = SensitiveDataRedactor.redact(
+                error.localizedDescription,
+                sensitiveValues: configuration.clients.flatMap { $0.accounts.map(\.accountSelector) }
+            )
+            configurationSaveError = message
+            showBanner("保存失败：\(message)")
             return false
         }
     }
@@ -476,7 +484,7 @@ final class AppModel: ObservableObject {
                          weeklyAnnihilation: weeklyAnnihilation, now: currentDate)
     }
 
-    func runTitle(for planID: UUID, readyTitle: String = "运行") -> String {
+    func runTitle(for planID: UUID, readyTitle: String = "运行方案") -> String {
         let state = continuation(for: planID)
         if state.pending == 0 { return state.unconfirmed > 0 ? "结果待确认" : "今日已完成" }
         if state.unconfirmed > 0 { return "继续其他任务" }

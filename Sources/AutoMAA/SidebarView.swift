@@ -4,6 +4,7 @@ import SwiftUI
 
 struct SidebarView: View {
     @EnvironmentObject private var model: AppModel
+    @State private var expandedClientIDs: Set<UUID> = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -61,7 +62,7 @@ struct SidebarView: View {
                                 model.addPlan(plan)
                             }
                         } label: {
-                            Image(systemName: "plus.circle")
+                            Image(systemName: "plus").frame(width: 28, height: 28).contentShape(Rectangle())
                         }
                         .menuStyle(.borderlessButton)
                         .fixedSize()
@@ -72,7 +73,10 @@ struct SidebarView: View {
 
                 Section {
                     ForEach(model.configuration.clients) { client in
-                        DisclosureGroup {
+                        DisclosureGroup(isExpanded: Binding(
+                            get: { expandedClientIDs.contains(client.id) },
+                            set: { if $0 { expandedClientIDs.insert(client.id) } else { expandedClientIDs.remove(client.id) } }
+                        )) {
                             ForEach(client.accounts) { account in
                                 HStack(spacing: 9) {
                                     Image(systemName: account.enabled ? "person.crop.circle" : "person.crop.circle.badge.xmark")
@@ -111,7 +115,7 @@ struct SidebarView: View {
                         Button {
                             model.addClient()
                         } label: {
-                            Image(systemName: "plus.circle")
+                            Image(systemName: "plus").frame(width: 28, height: 28).contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .help("添加客户端")
@@ -133,6 +137,9 @@ struct SidebarView: View {
             statusFooter
         }
         .background(.thinMaterial)
+        .onChange(of: model.selection, initial: true) { _, selection in
+            if case let .account(clientID, _) = selection { expandedClientIDs.insert(clientID) }
+        }
     }
 
     private var brand: some View {
@@ -175,32 +182,8 @@ struct SidebarView: View {
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-            } else {
-                currentPlanPicker
-
-                if model.canRun {
-                    Button {
-                        model.runSelectedPlan()
-                    } label: {
-                        Label(model.currentPlanID.map { model.runTitle(for: $0, readyTitle: "运行这个方案") } ?? "运行这个方案", systemImage: "play.fill")
-                            .fontWeight(.semibold)
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.maaAction)
-                    .controlSize(.large)
-                    .help(model.currentPlanID.map { model.runHelp(for: $0) } ?? "请选择方案")
-                    .disabled(model.currentPlanID.map { model.continuation(for: $0).pending == 0 } ?? true)
-                } else {
-                    Button {} label: {
-                        Label("配置未完成", systemImage: "exclamationmark.circle")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
-                    .disabled(true)
-                    .help("请先处理当前方案的配置问题")
-                }
+                Button("查看运行") { model.selection = .activity }
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(14)
@@ -208,44 +191,6 @@ struct SidebarView: View {
         .background(.bar)
         .overlay(alignment: .top) {
             Divider()
-        }
-    }
-
-    private var currentPlanPicker: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text("查看与运行方案")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-
-            Menu {
-                ForEach(model.configuration.plans) { plan in
-                    Button {
-                        model.selectCurrentPlan(plan.id)
-                    } label: {
-                        if model.currentPlanID == plan.id {
-                            Label(plan.displayName, systemImage: "checkmark")
-                        } else {
-                            Text(plan.displayName)
-                        }
-                    }
-                }
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "clock.arrow.circlepath")
-                        .foregroundStyle(Color.maaAccent)
-                    Text(model.currentPlan?.displayName ?? "选择方案")
-                        .font(.caption.weight(.semibold))
-                        .lineLimit(1)
-                    Spacer()
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                .contentShape(Rectangle())
-            }
-            .menuStyle(.borderlessButton)
-            .disabled(model.configuration.plans.isEmpty)
-            .help("切换要查看和运行的方案，不会打开编辑页")
         }
     }
 
@@ -272,52 +217,18 @@ struct SidebarView: View {
     }
 
     private var statusColor: Color {
-        if model.isWorkflowRunning { return model.activePhase.statusTint }
-        return switch currentReadinessState {
-        case .ready: .green
-        case .warnings: .orange
-        case .errors, .blockedByOtherPlan, nil: .red
-        }
+        model.isWorkflowRunning ? model.activePhase.statusTint : .secondary
     }
 
     private var statusSymbol: String {
-        if model.isWorkflowRunning { return model.activePhase.statusSymbol }
-        return switch currentReadinessState {
-        case .ready: "checkmark.circle.fill"
-        case .warnings: "exclamationmark.circle.fill"
-        case .errors, .blockedByOtherPlan, nil: "exclamationmark.triangle.fill"
-        }
+        model.isWorkflowRunning ? model.activePhase.statusSymbol : "pause.circle"
     }
 
     private var statusTitle: String {
-        if model.isWorkflowRunning { return model.activePhase.displayName }
-        return switch currentReadinessState {
-        case .ready: "已准备就绪"
-        case .warnings: "可以运行"
-        case .errors, .blockedByOtherPlan, nil: "需要完善配置"
-        }
+        model.isWorkflowRunning ? model.activePhase.displayName : "当前空闲"
     }
 
     private var statusDetail: String {
-        if model.isWorkflowRunning { return model.activeStatusMessage }
-        switch currentReadinessState {
-        case .ready:
-            let plan = model.currentPlan
-            let accounts = model.configuration.clients.filter(\.enabled).flatMap { $0.accounts.filter { plan?.includes($0) == true } }.count
-            return "\(accounts) 个账号 · \(plan?.enabledTasks.count ?? 0) 个步骤"
-        case let .warnings(count):
-            return "\(count) 项提醒"
-        case let .errors(count):
-            return "\(count) 项问题待处理"
-        case let .blockedByOtherPlan(count):
-            return "其他方案有 \(count) 项问题"
-        case nil:
-            return "请先创建自动化方案"
-        }
-    }
-
-    private var currentReadinessState: PlanReadinessState? {
-        guard let currentPlanID = model.currentPlanID else { return nil }
-        return model.planReadiness(for: currentPlanID).state
+        model.isWorkflowRunning ? model.activeStatusMessage : (model.activeScheduleCount > 0 ? "定时任务会自动运行" : "尚未启用定时运行")
     }
 }

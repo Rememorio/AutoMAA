@@ -107,7 +107,7 @@ struct SettingsView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         HStack {
-                            DetailDisclosure(details: "更新包已通过 SHA-256、Bundle ID、版本、架构和代码签名校验。")
+                            DetailDisclosure(details: "更新包已通过 SHA-256、Bundle ID、版本、架构和代码签名校验。", title: "校验详情")
                             Spacer()
                             Button("重启并立即更新") { model.restartAndInstallApplicationUpdate(prepared) }
                                 .buttonStyle(.borderedProminent)
@@ -152,8 +152,15 @@ struct SettingsView: View {
                         .font(.subheadline.weight(.semibold))
                 }
                 Spacer()
-                Button(model.applicationUpdateRelease == nil ? "本版本更新内容" : "更新内容") {
-                    model.showApplicationNotes()
+                if model.applicationUpdateRelease != nil {
+                    Menu {
+                        Button("新版本更新内容") { model.showApplicationNotes() }
+                        Button(hasUnreadNotes ? "本版本更新内容 · 未读" : "本版本更新内容") {
+                            model.showApplicationNotes(currentVersion: true)
+                        }
+                    } label: { releaseNotesLabel }
+                } else {
+                    Button { model.showApplicationNotes(currentVersion: true) } label: { releaseNotesLabel }
                 }
             }
             if let release = model.applicationUpdateRelease {
@@ -175,17 +182,22 @@ struct SettingsView: View {
                     }
                 }
             }
-            if model.releaseNotesState.unreadVersion == model.currentApplicationVersion {
-                HStack {
-                    Label("已更新到 v\(model.currentApplicationVersion)", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                    Button("查看本次变化") { model.showApplicationNotes(currentVersion: true) }
-                }.font(.callout)
-            }
+
         }
         .environment(\.openURL, OpenURLAction { url in
             ReleaseNotes.safePageURL(url) == nil ? .discarded : .systemAction
         })
+    }
+
+    private var hasUnreadNotes: Bool {
+        model.releaseNotesState.unreadVersion == model.currentApplicationVersion
+    }
+
+    private var releaseNotesLabel: some View {
+        HStack(spacing: 6) {
+            Text("更新内容")
+            if hasUnreadNotes { Text("未读").font(.caption.weight(.medium)).foregroundStyle(Color.maaAccent) }
+        }
     }
 
     private var applicationCheckMessage: String {
@@ -425,7 +437,8 @@ struct SettingsView: View {
                 HStack {
                     Button("打开配置目录") { NSWorkspace.shared.open(model.directories.root) }
                     Spacer()
-                    Button("立即保存") { model.saveNow() }
+                    Label(model.configurationSaveError == nil ? "自动保存" : "尚未保存", systemImage: model.configurationSaveError == nil ? "checkmark.circle" : "exclamationmark.circle")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Text("配置修改会自动保存。重置完成记录后，今天已成功的步骤也会重新执行。")
                     .font(.caption)
@@ -433,7 +446,7 @@ struct SettingsView: View {
                 Divider()
                 HStack {
                     Spacer()
-                    Button("重置今日完成记录…", role: .destructive) { showsResetConfirmation = true }
+                    Button("重置今日完成记录…", role: .destructive) { showsResetConfirmation = true }.tint(.red)
                         .disabled(model.isWorkflowRunning)
                 }
             }

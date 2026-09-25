@@ -121,7 +121,7 @@ struct AccountEditorView: View {
     private var deletePanel: some View {
         HStack {
             Spacer()
-            Button("删除账号", role: .destructive) { confirmDelete = true }
+            Button("删除账号", role: .destructive) { confirmDelete = true }.tint(.red)
         }
         .padding(.top, 4)
     }

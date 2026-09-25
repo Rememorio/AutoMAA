@@ -14,7 +14,7 @@ struct FightRecoveryActions: View {
                 HStack(spacing: 9) { actions }
                 VStack(alignment: .leading, spacing: 9) { actions }
             }
-            .controlSize(.small)
+            .controlSize(.regular)
             if model.isFightRecoveryBusy {
                 Text("运行或更新进行中，结束后可处理")
                     .font(.caption).foregroundStyle(.secondary)

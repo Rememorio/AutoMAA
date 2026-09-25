@@ -184,7 +184,7 @@ struct ActivityHistoryRefreshTests {
         plan.stepOrder = [.fight]
         model.configuration = AppConfiguration(cliPath: "/usr/bin/true", clients: [client], plans: [plan])
         let step = WorkflowStep(planID: plan.id, clientID: client.id, accountID: account.id, task: .fight)
-        #expect(model.runTitle(for: plan.id) == "运行")
+        #expect(model.runTitle(for: plan.id) == "运行方案")
         let first = LogEntry(level: .info, message: "正在执行理智作战", phase: .runningTask,
                              planID: plan.id, clientID: client.id, accountID: account.id, task: .fight)
         HistoryStore(directories: directories).append(first)

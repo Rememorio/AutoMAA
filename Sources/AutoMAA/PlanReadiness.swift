@@ -1,5 +1,58 @@
 import AutoMAAKit
 import Foundation
+import SwiftUI
+
+struct PlanReadinessRequest: Identifiable {
+    let id: UUID
+}
+
+struct PlanReadinessSheet: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    let planID: UUID
+
+    var body: some View {
+        let readiness = model.planReadiness(for: planID)
+        VStack(alignment: .leading, spacing: 20) {
+            Text("运行检查").font(.title2.bold())
+            Text(model.configuration.plans.first { $0.id == planID }?.displayName ?? "方案已移除")
+                .foregroundStyle(.secondary)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if readiness.directIssues.isEmpty, readiness.externalBlockers.isEmpty {
+                        Label("配置已就绪", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                    }
+                    ForEach(readiness.directIssues + readiness.externalBlockers) { issue in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label(issue.message, systemImage: issue.severity == .error ? "exclamationmark.circle" : "info.circle")
+                                .fixedSize(horizontal: false, vertical: true)
+                            if case let .plan(id) = issue.scope {
+                                Button("编辑相关方案") { dismiss(); model.selection = .plan(id) }
+                            }
+                        }
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+            HStack {
+                Menu("前往配置") {
+                    Button("编辑方案") { dismiss(); model.selection = .plan(planID) }
+                    Button("全局设置") { dismiss(); model.selection = .settings }
+                    Divider()
+                    ForEach(model.configuration.clients) { client in
+                        Button(client.displayName) { dismiss(); model.selection = .client(client.id) }
+                    }
+                    if model.configuration.clients.isEmpty {
+                        Button("添加客户端") { dismiss(); model.addClient() }
+                    }
+                }
+                Spacer()
+                Button("完成") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(24)
+        .frame(width: 520, height: 380)
+    }
+}
 
 enum PlanReadinessState: Equatable {
     case ready

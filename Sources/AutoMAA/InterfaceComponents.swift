@@ -106,23 +106,80 @@ struct ReorderButtons: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            Button { move(-1) } label: { Image(systemName: "chevron.up") }
+            Button { move(-1) } label: { Image(systemName: "chevron.up").frame(width: 24, height: 24) }
                 .disabled(index == 0)
                 .help("上移\(name)")
                 .accessibilityLabel("上移\(name)")
-            Button { move(1) } label: { Image(systemName: "chevron.down") }
+            Button { move(1) } label: { Image(systemName: "chevron.down").frame(width: 24, height: 24) }
                 .disabled(index == count - 1)
                 .help("下移\(name)")
                 .accessibilityLabel("下移\(name)")
         }
         .buttonStyle(.bordered)
-        .controlSize(.small)
+        .tint(.secondary)
         .fixedSize()
+    }
+}
+
+struct FullWidthDisclosureStyle: DisclosureGroupStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            DisclosureHeader(isExpanded: Binding(get: { configuration.isExpanded }, set: { configuration.isExpanded = $0 })) {
+                configuration.label
+            }
+            if configuration.isExpanded {
+                configuration.content
+                    .disclosureGroupStyle(FullWidthDisclosureStyle())
+                    .padding(.top, 8)
+            }
+        }
+    }
+}
+
+private struct DisclosureHeader<Label: View>: View {
+    @Binding var isExpanded: Bool
+    @ViewBuilder var label: Label
+    @State private var isHovered = false
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        Button { isExpanded.toggle() } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 12)
+                    .accessibilityHidden(true)
+                label.frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 6)
+            .frame(minHeight: 36)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable()
+        .focused($isFocused)
+        .onKeyPress(keys: [.space, .return]) { _ in
+            isExpanded.toggle()
+            return .handled
+        }
+        .onKeyPress(.rightArrow) { isExpanded = true; return .handled }
+        .onKeyPress(.leftArrow) { isExpanded = false; return .handled }
+        .background(Color.primary.opacity(isHovered ? 0.045 : 0), in: RoundedRectangle(cornerRadius: 7))
+        .overlay {
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(isFocused ? Color.maaAccent : .clear, lineWidth: 2)
+        }
+        .onHover { isHovered = $0 }
+        .accessibilityValue(isExpanded ? "已展开" : "已收起")
+        .accessibilityHint(isExpanded ? "收起内容" : "展开内容")
     }
 }
 
 struct DetailDisclosure: View {
     let details: String
+    var title = "诊断详情"
     @State private var isExpanded = false
 
     var body: some View {
@@ -136,9 +193,9 @@ struct DetailDisclosure: View {
                 .padding(10)
                 .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 8))
         } label: {
-            Text(isExpanded ? "收起详情" : "查看详情")
+            Text(title)
         }
-        .font(.caption)
+        .font(.callout)
     }
 }
 

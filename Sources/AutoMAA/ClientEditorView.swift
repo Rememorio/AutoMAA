@@ -174,7 +174,7 @@ struct ClientEditorView: View {
     private var deletePanel: some View {
         HStack {
             Spacer()
-            Button("删除客户端", role: .destructive) { confirmDeleteClient = true }
+            Button("删除客户端", role: .destructive) { confirmDeleteClient = true }.tint(.red)
         }
         .padding(.top, 4)
     }

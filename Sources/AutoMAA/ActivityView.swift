@@ -223,22 +223,17 @@ struct ActivityView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 ForEach(recoveryPlans) { plan in
                     let progress = model.continuation(for: plan.id)
-                    DisclosureGroup {
-                        VStack(alignment: .leading, spacing: 14) {
-                            ForEach(progress.fightRecoveryItems) { item in
-                                Divider()
-                                FightRecoveryRow(item: item, context: model.pendingWorkContext(item.step),
-                                    pendingTitle: progress.pendingItems.first { $0.id == item.id }?.title)
-                            }
-                        }
-                        .padding(.top, 8)
-                    } label: {
+                    VStack(alignment: .leading, spacing: 14) {
                         HStack {
-                            Text(plan.displayName)
+                            Text(plan.displayName).font(.subheadline.weight(.semibold))
                             Spacer()
-                            Text("\(progress.fightRecoveryItems.count) 项待核实").foregroundStyle(.secondary)
+                            Text("\(progress.fightRecoveryItems.count) 项待核实").font(.caption).foregroundStyle(.secondary)
                         }
-                        .font(.callout)
+                        ForEach(progress.fightRecoveryItems) { item in
+                            Divider()
+                            FightRecoveryRow(item: item, context: model.pendingWorkContext(item.step),
+                                pendingTitle: progress.pendingItems.first { $0.id == item.id }?.title)
+                        }
                     }
                 }
             }
@@ -250,7 +245,7 @@ struct ActivityView: View {
         return Panel {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(progress.hasStarted ? "当前待办" : "今日状态").font(.headline)
+                    Text(progress.hasStarted && progress.pending > 0 ? "当前待办" : "今日状态").font(.headline)
                     Spacer()
                     Picker("方案", selection: Binding(get: { planID }, set: { model.selectCurrentPlan($0) })) {
                         ForEach(model.configuration.plans) { plan in Text(plan.displayName).tag(plan.id) }
@@ -262,11 +257,11 @@ struct ActivityView: View {
                     HStack(spacing: 14) {
                         progressDescription(progress, planID: planID)
                         Spacer()
-                        PlanRunButton(planID: planID)
+                        if progress.hasStarted, progress.pending > 0 { PlanRunControl(planID: planID) }
                     }
                     VStack(alignment: .leading, spacing: 10) {
                         progressDescription(progress, planID: planID)
-                        PlanRunButton(planID: planID)
+                        if progress.hasStarted, progress.pending > 0 { PlanRunControl(planID: planID) }
                     }
                 }
                 let recoveryIDs = Set(progress.fightRecoveryItems.map(\.id))
@@ -283,7 +278,11 @@ struct ActivityView: View {
     private func progressDescription(_ progress: PlanContinuation, planID: UUID) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             if progress.hasStarted {
-                Text("\(progress.resolved) 项已处理 · \(progress.pending) 项可继续 · \(progress.unconfirmed) 项待确认")
+                Text(progress.pending == 0 && progress.unconfirmed == 0
+                     ? "今日任务已完成"
+                     : "\(progress.resolved) 项已处理"
+                        + (progress.pending > 0 ? " · \(progress.pending) 项可继续" : "")
+                        + (progress.unconfirmed > 0 ? " · \(progress.unconfirmed) 项待确认" : ""))
                     .font(.callout).monospacedDigit()
                 if progress.unconfirmed > 0 {
                     Text("继续其他任务会保留待确认作战。请先核实结果，再决定是否重新尝试。")
@@ -420,7 +419,6 @@ struct ActivityView: View {
         } label: {
             sessionHeader(session).contentShape(Rectangle())
         }
-        .disclosureGroupStyle(.automatic)
     }
 
     private func sessionHeader(_ session: ActivitySession) -> some View {
@@ -438,6 +436,9 @@ struct ActivityView: View {
                     Label(session.historyStatusTitle,
                           systemImage: session.hasUnfinishedActivity ? "questionmark.circle" : sessionSymbol(phase: phase, level: session.finalLevel))
                         .font(.caption).foregroundStyle(tint)
+                }
+                if session.finalPhase == .failed, let failure = session.entries.last(where: { $0.level == .error }) {
+                    Text(failure.message).font(.callout).foregroundStyle(.secondary).lineLimit(2)
                 }
                 Text(sessionSummary(session))
                     .font(.caption).foregroundStyle(.secondary)
@@ -564,9 +565,7 @@ struct ActivityEventRow: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
 
-                if let details = entry.details, !details.isEmpty {
-                    DetailDisclosure(details: details)
-                }
+                ActivityEntryDetails(entry: entry)
             }
             .padding(.bottom, drawsConnector ? 8 : 0)
 

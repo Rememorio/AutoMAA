@@ -14,7 +14,12 @@ struct PendingWorkList: View {
         LazyVStack(alignment: .leading, spacing: 12) {
             ForEach(accounts, id: \.key) { account in
                 let remaining = items.filter { $0.step.clientID == account.clientID && $0.step.accountID == account.accountID }
-                DisclosureGroup {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text(model.pendingWorkContext(account)).font(.callout.weight(.medium))
+                        Spacer()
+                        Text("剩余 \(remaining.count) 项").font(.caption).foregroundStyle(.secondary)
+                    }
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(remaining) { item in
                             VStack(alignment: .leading, spacing: 4) {
@@ -28,12 +33,6 @@ struct PendingWorkList: View {
                         }
                     }
                     .padding(.top, 8)
-                } label: {
-                    HStack {
-                        Text(model.pendingWorkContext(account)).font(.callout.weight(.medium))
-                        Spacer()
-                        Text("剩余 \(remaining.count) 项").font(.caption).foregroundStyle(.secondary)
-                    }
                 }
             }
         }

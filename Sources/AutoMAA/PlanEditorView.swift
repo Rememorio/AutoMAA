@@ -7,6 +7,7 @@ struct PlanEditorView: View {
     @EnvironmentObject private var model: AppModel
     @Binding var plan: AutomationPlan
     @State private var confirmDelete = false
+    @State private var editsSchedule = false
     @State private var useCustomFightStage = false
     @State private var fightStageEditor: FightStageEditorContext?
 
@@ -19,16 +20,24 @@ struct PlanEditorView: View {
             schedulePanel
             orderPanel
             LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
-                fightCard
-                recruitCard
-                infrastCard
-                mallCard
-                awardCard
+                ForEach(plan.stepOrder) { task in
+                    switch task {
+                    case .fight: fightCard
+                    case .recruit: recruitCard
+                    case .infrast: infrastCard
+                    case .mall: mallCard
+                    case .award: awardCard
+                    }
+                }
                 policyCard
             }
             actions
         }
         .navigationTitle(plan.displayName)
+        .onAppear { editsSchedule = !plan.schedule.enabled || scheduleNeedsAttention }
+        .onChange(of: scheduleNeedsAttention) { _, needsAttention in
+            if needsAttention { editsSchedule = true }
+        }
         .confirmationDialog("删除「\(plan.displayName)」？", isPresented: $confirmDelete) {
             Button("删除方案", role: .destructive) { model.deletePlan(plan.id) }
         } message: {
@@ -55,7 +64,7 @@ struct PlanEditorView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            PlanRunButton(planID: plan.id, readyTitle: "立即运行", controlSize: .large)
+            PlanRunControl(planID: plan.id, controlSize: .large)
                 .fontWeight(.semibold)
         }
     }
@@ -114,25 +123,32 @@ struct PlanEditorView: View {
                     .accessibilityLabel("启用定时运行")
                     .disabled(model.isWorkflowRunning)
                 }
-                ForEach(Array(plan.schedule.rules.enumerated()), id: \.element.id) { index, rule in
-                    scheduleRuleRow(rule, index: index)
-                }
-                HStack {
-                    Button {
-                        model.addPlanScheduleRule(plan.id)
-                    } label: {
-                        Label("添加时段", systemImage: "plus")
+                DisclosureGroup(isExpanded: $editsSchedule) {
+                    ForEach(Array(plan.schedule.rules.enumerated()), id: \.element.id) { index, rule in
+                        scheduleRuleRow(rule, index: index)
                     }
-                    .disabled(model.isWorkflowRunning || plan.schedule.scheduledWeekdays.count == ScheduleWeekday.allCases.count)
-                    .help(plan.schedule.scheduledWeekdays.count == ScheduleWeekday.allCases.count
-                          ? "先从现有时段取消一个星期"
-                          : "为尚未安排的星期添加另一个时间")
-                    Spacer()
-                    if plan.schedule.enabled {
-                        Label("修改后自动应用", systemImage: "arrow.triangle.2.circlepath")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    HStack {
+                        Button {
+                            model.addPlanScheduleRule(plan.id)
+                        } label: {
+                            Label("添加时段", systemImage: "plus")
+                        }
+                        .disabled(model.isWorkflowRunning || plan.schedule.scheduledWeekdays.count == ScheduleWeekday.allCases.count)
+                        .help(plan.schedule.scheduledWeekdays.count == ScheduleWeekday.allCases.count
+                              ? "先从现有时段取消一个星期"
+                              : "为尚未安排的星期添加另一个时间")
+                        Spacer()
+                        if plan.schedule.enabled {
+                            Label("修改后自动应用", systemImage: "arrow.triangle.2.circlepath")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
+                    Text("macOS 会在登录会话中独立唤起，无需保持 AutoMAA 打开。若需准时执行，请接通电源、保持系统唤醒且不要停留在锁屏；显示器可以单独熄灭。")
+                        .font(.caption).foregroundStyle(.secondary)
+                } label: {
+                    Text(PlanScheduleFormatter.summary(plan.schedule)).font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 HStack(spacing: 8) {
                     StatusDot(color: scheduleStatusColor)
@@ -140,9 +156,6 @@ struct PlanEditorView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                Text("macOS 会在登录会话中独立唤起，无需保持 AutoMAA 打开。若需准时执行，请接通电源、保持系统唤醒且不要停留在锁屏；显示器可以单独熄灭。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -162,10 +175,10 @@ struct PlanEditorView: View {
                     Button(role: .destructive) {
                         model.removePlanScheduleRule(plan.id, ruleID: rule.id)
                     } label: {
-                        Image(systemName: "trash")
+                        Image(systemName: "trash").frame(width: 28, height: 28).contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.red)
                     .help("删除这个时段")
                     .accessibilityLabel("删除时段 \(index + 1)")
                     .disabled(model.isWorkflowRunning)
@@ -180,7 +193,7 @@ struct PlanEditorView: View {
                     } label: {
                         Text(weekday.shortTitle)
                             .font(.caption.weight(.semibold))
-                            .frame(width: 30, height: 28)
+                            .frame(width: 32, height: 32)
                             .foregroundStyle(Color.primary)
                             .background(
                                 selected ? Color.maaAccent.opacity(0.16) : Color.primary.opacity(0.055),
@@ -216,7 +229,7 @@ struct PlanEditorView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), alignment: .leading)], spacing: 8) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), alignment: .leading)], spacing: 8) {
                     ForEach(Array(plan.stepOrder.enumerated()), id: \.element) { index, task in
                         HStack(spacing: 7) {
                             Text("\(index + 1)")
@@ -298,8 +311,9 @@ struct PlanEditorView: View {
                     Text("\(value)").tag(Int?.some(value))
                 }
             }
-            Divider()
-            Toggle("博朗台碎石模式", isOn: $plan.fight.drGrandet)
+            DisclosureGroup("高级选项") {
+                Toggle("博朗台碎石模式", isOn: $plan.fight.drGrandet)
+            }
         }
     }
 
@@ -495,7 +509,7 @@ struct PlanEditorView: View {
         HStack {
             Button("复制方案") { model.duplicatePlan(plan.id) }
             Spacer()
-            Button("删除方案", role: .destructive) { confirmDelete = true }
+            Button("删除方案", role: .destructive) { confirmDelete = true }.tint(.red)
         }
         .padding(.top, 4)
     }
@@ -538,7 +552,6 @@ struct PlanEditorView: View {
                 Button(row.stage == nil ? "设置常规目标" : "修改") {
                     fightStageEditor = FightStageEditorContext(row: row)
                 }
-                .controlSize(.small)
                 .disabled(model.isWorkflowRunning)
             }
 
@@ -549,6 +562,12 @@ struct PlanEditorView: View {
     private func fightStageStatusText(_ row: FightStageMemoryRow) -> String {
         row.stage.map { "恢复目标：\($0)；游戏中的新常规关卡优先" }
             ?? "运行时先识别游戏关卡；可预设已解锁的常规目标用于恢复。"
+    }
+
+    private var scheduleNeedsAttention: Bool {
+        scheduleProblem != nil || scheduleConflict != nil
+            || (!model.isSynchronizingSchedules && plan.schedule.enabled && !model.isPlanScheduleCurrent(plan))
+            || (!plan.schedule.enabled && scheduleInstalled)
     }
 
     private var scheduleInstalled: Bool {
@@ -575,7 +594,7 @@ struct PlanEditorView: View {
         if plan.schedule.enabled {
             if model.isPlanScheduleCurrent(plan) {
                 let next = PlanScheduleFormatter.nextRunLabel(plan.schedule).map { " · 下次 \($0)" } ?? ""
-                return "已启用 · \(PlanScheduleFormatter.summary(plan.schedule))\(next)"
+                return "已启用\(next)"
             }
             if model.isSynchronizingSchedules { return "正在同步系统定时任务…" }
             return scheduleInstalled
@@ -842,32 +861,32 @@ private struct PlanTaskCard<Content: View, Strategy: View>: View {
                     Toggle("", isOn: $enabled)
                         .labelsHidden()
                         .toggleStyle(.switch)
-                        .controlSize(.small)
                         .accessibilityLabel("启用\(task.title)")
                 }
-                VStack(alignment: .leading, spacing: 11) {
-                    Divider()
-                    strategy
-                    HStack {
-                        Text("参数")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Toggle("自定义参数", isOn: $usesCustomSettings)
-                            .accessibilityLabel("\(task.title)自定义参数")
-                            .toggleStyle(.switch)
-                            .controlSize(.mini)
-                    }
-                    if usesCustomSettings {
-                        VStack(alignment: .leading, spacing: 9) { content }
-                    } else {
-                        Label(defaultSummary, systemImage: "arrow.uturn.backward.circle.fill")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                if enabled {
+                    VStack(alignment: .leading, spacing: 11) {
+                        Divider()
+                        strategy
+                        HStack {
+                            Text("参数")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Toggle("自定义参数", isOn: $usesCustomSettings)
+                                .accessibilityLabel("\(task.title)自定义参数")
+                                .toggleStyle(.switch)
+                                .controlSize(.small)
+                        }
+                        if usesCustomSettings {
+                            VStack(alignment: .leading, spacing: 9) { content }
+                        } else {
+                            Label(defaultSummary, systemImage: "arrow.uturn.backward.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                 }
-                .disabled(!enabled)
             }
         }
     }

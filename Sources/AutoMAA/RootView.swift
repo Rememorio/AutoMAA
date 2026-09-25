@@ -12,12 +12,31 @@ struct RootView: View {
                 .navigationSplitViewColumnWidth(min: 210, ideal: 230, max: 270)
         } detail: {
             detail
+                .disclosureGroupStyle(FullWidthDisclosureStyle())
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color(nsColor: .windowBackgroundColor))
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    if let error = model.configurationSaveError {
+                        HStack(spacing: 12) {
+                            Label("配置尚未保存", systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                            Text(error).font(.caption).textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 0)
+                            Button("重试保存") { model.saveNow() }
+                        }
+                        .padding(14)
+                        .background(.bar)
+                    }
+                }
         }
         .navigationSplitViewStyle(.balanced)
         .sheet(item: $model.updateDetailsRequest) { request in
             UpdateDetailsView(model: model, request: request)
+        }
+        .sheet(item: $model.readinessRequest) { request in
+            PlanReadinessSheet(planID: request.id)
+                .environmentObject(model)
         }
         .tint(.maaAccent)
         .overlay(alignment: .top) {
@@ -58,7 +77,7 @@ struct RootView: View {
             DashboardView()
         case let .plan(id):
             if let binding = model.planBinding(id) {
-                PlanEditorView(plan: binding)
+                PlanEditorView(plan: binding).id(binding.wrappedValue.id)
             } else {
                 ContentUnavailableView("方案不存在", systemImage: "clock.badge.exclamationmark")
             }
