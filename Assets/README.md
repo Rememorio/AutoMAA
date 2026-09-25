@@ -5,7 +5,7 @@
 | 资源 | 用途 |
 | --- | --- |
 | `AutoMAA-logo.png` | 透明背景的倾斜相框 Logo，用于 README、文档站、应用侧栏与关于页 |
-| `AutoMAA-icon.png`、`AutoMAA.icns` | 渐变背景的圆框图标，仅用于 macOS 应用 |
+| `AutoMAA-icon.png`、`AutoMAA.icns` | 渐变背景的圆框图标，圆角矩形外侧透明，仅用于 macOS 应用 |
 | `AutoMAA-slogan.png` | 项目宣传字图 |
 | `docs/public/automaa-logo.webp`、`favicon.png`、`og.png` | 透明 Logo 的网页、网站图标与分享预览版本 |
 | `docs/public/automaa-slogan.webp` | 宣传字图的网页版本 |
