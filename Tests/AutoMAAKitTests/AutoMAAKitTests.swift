@@ -964,6 +964,26 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertNil(params["skip_robot"])
     }
 
+    func testRecruitOmitsIneffectiveExpediteLimitInBothParameterModes() throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var config = populatedConfiguration()
+        let writer = MAAConfigurationWriter(directories: AppDirectories(root: root))
+        for custom in [false, true] {
+            config.plans[0].recruit.usesCustomSettings = custom
+            config.plans[0].recruit.expedite = true
+            try writer.prepare(config)
+            let params = try generatedParams(
+                .recruit, plan: config.plans[0], client: config.clients[0],
+                account: config.clients[0].accounts[0], writer: writer, root: root
+            )
+            XCTAssertNil(params["expedite_times"])
+            XCTAssertNil(params["skip_robot"])
+            XCTAssertEqual(params["expedite"] as? Bool, custom)
+            XCTAssertNotNil(params["times"])
+        }
+    }
+
     func testCustomInfrastScheduleUsesModeAndFile() throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }

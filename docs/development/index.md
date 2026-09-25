@@ -14,6 +14,12 @@ open .build/AutoMAA.app --args --data-directory /tmp/automaa-development
 
 构建产物位于 `.build/AutoMAA.app`。上面的启动命令使用独立数据目录，同时隔离配置、日志和 LaunchAgent，并关闭系统 LaunchAgent 集成与自动更新检查。界面测试始终使用这一入口，不读取或覆盖日常使用的配置。
 
+## 上游协议范围
+
+任务生成与作战结果解析对照 [MaaCore v6.18.0](https://github.com/MaaAssistantArknights/MaaAssistantArknights/releases/tag/v6.18.0)、[MAA 集成文档](https://docs.maa.plus/zh-cn/protocol/integration.html) 和 [maa-cli v0.7.5](https://github.com/MaaAssistantArknights/maa-cli/releases/tag/v0.7.5)。临期理智药使用 `medicine_expire_days`，公招保留标签使用 `preserve_tags`；不生成旧字段 `expiring_medicine`、`skip_robot` 或已失效的 `expedite_times`。
+
+AutoMAA 仅提供已建模的日常任务参数，不等同于上游 GUI 的完整能力。v6.18.0 新增的三星招聘许可保留量、基建副手换班和限时活动签到暂未提供配置入口；不会自动启用这些选项。基建设施继续按方案中明确列出的设施派发。maa-cli 的 Profile 连接方式、额外资源加载顺序和服务器游戏日偏移保持独立核对。
+
 ## 代码从哪里看
 
 | 目录 | 职责 |
@@ -29,9 +35,9 @@ open .build/AutoMAA.app --args --data-directory /tmp/automaa-development
 
 修改配置通常从 `Models.swift` 与 `ConfigurationValidation.swift` 开始，任务参数转换位于 `MAAConfigurationWriter.swift`，运行顺序、重试和断点位于 `WorkflowRunner.swift`。可测试逻辑应留在 `AutoMAAKit`，避免在界面层重复实现。
 
-作战结果判定与续跑状态位于 `FightExecution.swift`，关卡记忆位于 `FightStageMemory.swift`。当前实现对照 MaaCore v6.17.2 和 maa-cli v0.7.5：每次作战命令通过 `MAA_STATE_DIR` 使用独立 Core 日志，结算依据 `StageDrops` 回调，`cur_times` 按每次结算累加；缺少该值时使用由 `FightTimes.series` 绑定到对应开战与结算的批次倍率，两者均未知时显示次数下限。`SanityBeforeStage` 与紧随其后的消耗、倍率共同判断单局理智不足，不以整批连战消耗代替单局消耗。maa-cli 摘要的次数在开打时增加，不能单独证明完成；剿灭导航失败也不能证明周奖励已满。
+作战结果判定与续跑状态位于 `FightExecution.swift`，关卡记忆位于 `FightStageMemory.swift`。当前实现对照 MaaCore v6.18.0 和 maa-cli v0.7.5：每次作战命令通过 `MAA_STATE_DIR` 使用独立 Core 日志，结算依据 `StageDrops` 回调，`cur_times` 按每次结算累加；缺少该值时使用由 `FightTimes.series` 绑定到对应开战与结算的批次倍率，两者均未知时显示次数下限。`SanityBeforeStage` 与紧随其后的消耗、倍率共同判断单局理智不足，不以整批连战消耗代替单局消耗。maa-cli 摘要的次数在开打时增加，不能单独证明完成；剿灭导航失败也不能证明周奖励已满。
 
-作战类型与显示名称分开保存。`ProcessTask` 开始处理 `EndOfAction` 或 `EndOfActionAnnihilation` 时记录结算类型，再与对应的掉落结果关联；有效周奖励进度也能证明是剿灭，不要求达到上限。Core 先运行掉落插件，再转发 `SubTaskCompleted`，因此不能等待完成事件再判断前面的掉落。未知类型、无效编号和不完整结果不会覆盖常规关卡记忆。上游依据见 [StageDropsTaskPlugin](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/v6.17.2/src/MaaCore/Task/Fight/StageDropsTaskPlugin.cpp)、[AbstractTask 回调顺序](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/v6.17.2/src/MaaCore/Task/AbstractTask.cpp#L123-L151)、[StageNavigationTask](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/v6.17.2/src/MaaCore/Task/Fight/StageNavigationTask.cpp) 和 [maa-cli 作战摘要](https://github.com/MaaAssistantArknights/maa-cli/blob/v0.7.5/crates/maa-cli/src/run/callback/summary.rs)。对应行为使用隔离回调样例与工作流测试覆盖。
+作战类型与显示名称分开保存。`ProcessTask` 开始处理 `EndOfAction` 或 `EndOfActionAnnihilation` 时记录结算类型，再与对应的掉落结果关联；有效周奖励进度也能证明是剿灭，不要求达到上限。Core 先运行掉落插件，再转发 `SubTaskCompleted`，因此不能等待完成事件再判断前面的掉落。未知类型、无效编号和不完整结果不会覆盖常规关卡记忆。上游依据见 [StageDropsTaskPlugin](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/v6.18.0/src/MaaCore/Task/Fight/StageDropsTaskPlugin.cpp)、[AbstractTask 回调顺序](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/v6.18.0/src/MaaCore/Task/AbstractTask.cpp#L123-L151)、[StageNavigationTask](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/v6.18.0/src/MaaCore/Task/Fight/StageNavigationTask.cpp) 和 [maa-cli 作战摘要](https://github.com/MaaAssistantArknights/maa-cli/blob/v0.7.5/crates/maa-cli/src/run/callback/summary.rs)。对应行为使用隔离回调样例与工作流测试覆盖。
 
 已有目标时，自动换关只接受作战前的 `StageNavigationTask` 失败，或已点击上次作战入口后的导航失败；进入 `FightBegin`、发现战斗画面、超时或掉线都会阻止自动换关。选关与各次尝试在 `WorkflowRunner` 中串行执行，已选兜底在派发前持久化。兜底结果与原目标分开保存，不能更新恢复记录；所有服务器共享这套判断。
 
@@ -45,7 +51,7 @@ open .build/AutoMAA.app --args --data-directory /tmp/automaa-development
 
 选择顺序为当前/上次常规关卡、账号恢复目标、方案兜底。剿灭前保存常规目标；没有目标时可使用配置兜底；已有目标的每个后续候选仅在明确未开战的选关失败后尝试一次。最近成功关卡、待恢复目标与临时兜底分别保存；只有成功结算更新成功记录。待确认续跑固定使用已派发目标，不重新跟随游戏。手动选择与自动兜底恰好相同时无法区分，手动设置常规目标可以解除该恢复状态。
 
-识别流程依据 [MaaCore v6.17.5 的任务资源](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/v6.17.5/resource/tasks/tasks.json)、[Custom 接口](https://docs.maa.plus/zh-cn/protocol/integration.html)和 [maa-cli Profile 资源配置](https://github.com/MaaAssistantArknights/maa-cli/blob/v0.7.5/crates/maa-cli/src/config/asst.rs)。继承模板匹配的节点需要显式指定图片名，避免 Core 按新任务名查找不存在的图片。
+识别流程依据 [MaaCore v6.18.0 的任务资源](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/v6.18.0/resource/tasks/tasks.json)、[Custom 接口](https://docs.maa.plus/zh-cn/protocol/integration.html)和 [maa-cli Profile 资源配置](https://github.com/MaaAssistantArknights/maa-cli/blob/v0.7.5/crates/maa-cli/src/config/asst.rs)。继承模板匹配的节点需要显式指定图片名，避免 Core 按新任务名查找不存在的图片。
 
 ## 修改与验证
 
