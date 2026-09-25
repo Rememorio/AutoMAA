@@ -159,6 +159,7 @@ struct SettingsView: View {
                             model.showApplicationNotes(currentVersion: true)
                         }
                     } label: { releaseNotesLabel }
+                    .fixedSize(horizontal: true, vertical: false)
                 } else {
                     Button { model.showApplicationNotes(currentVersion: true) } label: { releaseNotesLabel }
                 }
@@ -377,7 +378,8 @@ struct SettingsView: View {
                     } primaryAction: {
                         model.updateMAACore()
                     }
-                        .disabled(model.isWorkflowRunning || model.applicationUpdateState.blocksWorkflow)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .disabled(model.isWorkflowRunning || model.applicationUpdateState.blocksWorkflow)
                 }
                 if let activity = model.maaUpdateActivity {
                     if activity.isFinished {

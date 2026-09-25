@@ -48,6 +48,7 @@ struct PlanReadinessSheet: View {
                         Button("添加客户端") { dismiss(); model.addClient() }
                     }
                 }
+                .fixedSize(horizontal: true, vertical: false)
                 Spacer()
                 Button("完成") { dismiss() }.keyboardShortcut(.cancelAction)
             }
