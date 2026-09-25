@@ -7,6 +7,7 @@ struct FightRecoveryActions: View {
     let context: String
     @State private var confirmsWeeklyCompletion = false
     @State private var confirmsRetry = false
+    @State private var confirmsManualHandling = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -35,6 +36,12 @@ struct FightRecoveryActions: View {
         } message: {
             Text("\(context)。\(model.fightRetryHint(item.step))本次仅处理该账号的理智作战。")
         }
+        .confirmationDialog("今天不再重试这项常规作战？", isPresented: $confirmsManualHandling) {
+            Button("已核实，今天不再重试") { model.handleRegularFightWithoutRetry(item) }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("\(context)。请先检查游戏结果。仅停止本方案中该账号今天的常规作战重试，保留原始未确认记录，不记为自动成功。其他任务、方案和每周剿灭不受影响；不会启动游戏。")
+        }
     }
 
     @ViewBuilder
@@ -49,6 +56,12 @@ struct FightRecoveryActions: View {
             .buttonStyle(.bordered)
             .fixedSize()
             .disabled(!model.canRun(planID: item.step.planID))
+        if item.canHandleRegularWithoutRetry {
+            Button("今天不再重试…") { confirmsManualHandling = true }
+                .buttonStyle(.bordered)
+                .fixedSize()
+                .disabled(model.isFightRecoveryBusy)
+        }
     }
 }
 

@@ -1,6 +1,11 @@
 import AutoMAAKit
 import Foundation
 
+struct ActivityNavigationRequest: Identifiable, Equatable {
+    let id = UUID()
+    let runID: UUID
+}
+
 enum ActivityFilter: String, CaseIterable, Identifiable {
     case all, attention, failed
 
@@ -36,8 +41,10 @@ extension ActivitySession {
         if phase == .failed { return "失败" }
         if phase == .cancelled { return "已取消" }
         if let summary = runSummary, summary.isPartial {
+            if summary.manuallyHandledSteps > 0 { return "部分处理" }
             return summary.completedSteps + summary.unnecessarySteps > 0 ? "部分完成" : "未完成"
         }
+        if phase == .completed, (runSummary?.manuallyHandledSteps ?? 0) > 0 { return "已处理" }
         if phase == .completed, level == .warning { return "完成 · 提醒" }
         if phase == .completed, (runSummary?.pendingWeeklyAnnihilation ?? 0) > 0 { return "本轮结束" }
         if let phase { return phase.displayName }

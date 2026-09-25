@@ -141,63 +141,80 @@ struct ActivityView: View {
     }
 
     private var activityContent: some View {
-        GeometryReader { viewport in
-            let gutter = NSScroller.preferredScrollerStyle == .legacy
-                ? NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) : 0
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: PageLayout.sectionSpacing, pinnedViews: [.sectionHeaders]) {
-                    VStack(alignment: .leading, spacing: 14) {
-                        if !recoveryPlans.isEmpty { currentRecovery }
-                        if model.isWorkflowRunning { currentActivity }
-                        if let planID = model.currentPlanID, !model.isWorkflowRunning {
-                            currentPlanProgress(planID)
-                        }
-                    }
-                    .padding(.horizontal, PageLayout.inset)
-                    .padding(.top, PageLayout.inset)
-
-                    Section {
-                        Group {
-                            if displayedSessions.isEmpty {
-                                ContentUnavailableView(
-                                    historicalSessions.isEmpty ? "还没有历史记录" : "没有匹配的历史记录",
-                                    systemImage: historicalSessions.isEmpty ? "clock.arrow.circlepath" : "magnifyingglass",
-                                    description: Text(historicalSessions.isEmpty
-                                        ? "运行方案或更新 MAA 后，这里会按每次运行整理进度与结果。"
-                                        : "试试其他关键词，或清除筛选查看全部记录。")
-                                )
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 40)
-                            } else {
-                                ForEach(ActivityDay.groups(displayedSessions)) { day in
-                                    VStack(alignment: .leading, spacing: 10) {
-                                        Text(dayTitle(day.date))
-                                            .font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
-                                            .accessibilityAddTraits(.isHeader)
-                                        Panel {
-                                            VStack(spacing: 0) {
-                                                ForEach(Array(day.sessions.enumerated()), id: \.element.id) { index, session in
-                                                    if index > 0 { Divider().padding(.vertical, 12) }
-                                                    sessionRow(session)
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+        ScrollViewReader { proxy in
+            GeometryReader { viewport in
+                let gutter = NSScroller.preferredScrollerStyle == .legacy
+                    ? NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) : 0
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: PageLayout.sectionSpacing, pinnedViews: [.sectionHeaders]) {
+                        VStack(alignment: .leading, spacing: 14) {
+                            if !recoveryPlans.isEmpty { currentRecovery }
+                            if model.isWorkflowRunning { currentActivity }
+                            if let planID = model.currentPlanID, !model.isWorkflowRunning {
+                                currentPlanProgress(planID)
                             }
                         }
                         .padding(.horizontal, PageLayout.inset)
-                    } header: {
-                        controls
+                        .padding(.top, PageLayout.inset)
+
+                        Section {
+                            Group {
+                                if displayedSessions.isEmpty {
+                                    ContentUnavailableView(
+                                        historicalSessions.isEmpty ? "还没有历史记录" : "没有匹配的历史记录",
+                                        systemImage: historicalSessions.isEmpty ? "clock.arrow.circlepath" : "magnifyingglass",
+                                        description: Text(historicalSessions.isEmpty
+                                            ? "运行方案或更新 MAA 后，这里会按每次运行整理进度与结果。"
+                                            : "试试其他关键词，或清除筛选查看全部记录。")
+                                    )
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 40)
+                                } else {
+                                    ForEach(ActivityDay.groups(displayedSessions)) { day in
+                                        VStack(alignment: .leading, spacing: 10) {
+                                            Text(dayTitle(day.date))
+                                                .font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                                                .accessibilityAddTraits(.isHeader)
+                                            Panel {
+                                                VStack(spacing: 0) {
+                                                    ForEach(Array(day.sessions.enumerated()), id: \.element.id) { index, session in
+                                                        if index > 0 { Divider().padding(.vertical, 12) }
+                                                        sessionRow(session)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        .id(day.id)
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, PageLayout.inset)
+                        } header: {
+                            controls
+                        }
                     }
+                    .padding(.bottom, PageLayout.inset)
+                    .frame(maxWidth: PageLayout.readingWidth)
+                    .frame(width: max(0, viewport.size.width - gutter))
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(.bottom, PageLayout.inset)
-                .frame(maxWidth: PageLayout.readingWidth)
-                .frame(width: max(0, viewport.size.width - gutter))
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .scrollIndicators(.visible)
+                .clipped()
+                .task(id: model.activityNavigationRequest?.id) {
+                    guard let request = model.activityNavigationRequest,
+                          let session = sessions.first(where: { $0.runID == request.runID }) else { return }
+                    if session.runID == currentRunID {
+                        proxy.scrollTo("current-activity", anchor: .top)
+                    } else {
+                        proxy.scrollTo(Calendar.current.startOfDay(for: session.startedAt), anchor: .top)
+                        expandedSessionIDs.insert(session.id)
+                        await Task.yield()
+                        guard !Task.isCancelled else { return }
+                        proxy.scrollTo(session.id, anchor: .center)
+                    }
+                    model.finishActivityNavigation(request)
+                }
             }
-            .scrollIndicators(.visible)
-            .clipped()
         }
     }
 
@@ -279,11 +296,15 @@ struct ActivityView: View {
         VStack(alignment: .leading, spacing: 5) {
             if progress.hasStarted {
                 Text(progress.pending == 0 && progress.unconfirmed == 0
-                     ? "今日任务已完成"
+                     ? progress.completionTitle
                      : "\(progress.resolved) 项已处理"
                         + (progress.pending > 0 ? " · \(progress.pending) 项可继续" : "")
                         + (progress.unconfirmed > 0 ? " · \(progress.unconfirmed) 项待确认" : ""))
                     .font(.callout).monospacedDigit()
+                if progress.manuallyHandled > 0 {
+                    Text("\(progress.manuallyHandled) 项作战已人工处理，今天不再重试")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 if progress.unconfirmed > 0 {
                     Text("继续其他任务会保留待确认作战。请先核实结果，再决定是否重新尝试。")
                         .font(.caption).foregroundStyle(.secondary)
@@ -353,6 +374,7 @@ struct ActivityView: View {
                 liveActivityFeed(entries)
             }
         }
+        .id("current-activity")
     }
 
     private func liveActivityFeed(_ entries: [LogEntry]) -> some View {
@@ -417,7 +439,7 @@ struct ActivityView: View {
             .padding(.leading, 6)
             .padding(.bottom, 6)
         } label: {
-            sessionHeader(session).contentShape(Rectangle())
+            sessionHeader(session).contentShape(Rectangle()).id(session.id)
         }
     }
 
@@ -451,7 +473,8 @@ struct ActivityView: View {
     private func sessionSummary(_ session: ActivitySession) -> String {
         var parts: [String] = []
         if let summary = session.runSummary {
-            parts.append("\(summary.completedSteps + summary.unnecessarySteps)/\(summary.totalSteps) 项已处理")
+            parts.append("\(summary.completedSteps + summary.unnecessarySteps + summary.manuallyHandledSteps)/\(summary.totalSteps) 项已处理")
+            if summary.manuallyHandledSteps > 0 { parts.append("\(summary.manuallyHandledSteps) 项人工处理") }
             if summary.unconfirmedSteps > 0 { parts.append("\(summary.unconfirmedSteps) 项未确认") }
             if summary.failedSteps > 0 { parts.append("\(summary.failedSteps) 项失败") }
             if summary.unexecutedSteps > 0 { parts.append("\(summary.unexecutedSteps) 项未执行") }

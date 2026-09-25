@@ -1,7 +1,7 @@
 import Foundation
 
 public enum FightResultStatus: String, Codable, Sendable {
-    case completed, unnecessary, unconfirmed, failed
+    case completed, unnecessary, unconfirmed, failed, manuallyHandled
 }
 
 public enum FightKind: String, Codable, Sendable {
@@ -50,7 +50,7 @@ public struct FightResult: Codable, Equatable, Sendable {
         self.fallbackFrom = fallbackFrom
     }
 
-    public var isResolved: Bool { status == .completed || status == .unnecessary }
+    public var isResolved: Bool { status == .completed || status == .unnecessary || status == .manuallyHandled }
 
     public var description: String {
         let label = switch status {
@@ -58,6 +58,7 @@ public struct FightResult: Codable, Equatable, Sendable {
         case .unnecessary: reason == .navigationUnavailable ? "本次跳过" : "无需作战"
         case .unconfirmed: "结果未确认"
         case .failed: "失败"
+        case .manuallyHandled: "已人工处理，今天不再重试"
         }
         let count = times > 0 ? "（\(stage ?? "作战") × \((unrecognizedSettlements ?? 0) > 0 ? "至少 " : "")\(times)）" : ""
         let fallback = fallbackFrom.map { " · 兜底作战（原目标：\($0.isEmpty ? "游戏当前/上次" : $0)）" } ?? ""
@@ -70,11 +71,23 @@ public struct FightProgress: Codable, Equatable, Sendable {
     public var annihilation: FightResult?
     public var regular: FightResult?
     public var fallbackStage: String?
+    public var regularManuallyHandledAt: Date?
 
     public init(regularStage: String) { self.regularStage = regularStage }
 
+    public var isRegularHandled: Bool { regular?.isResolved == true || isRegularManuallyHandled }
+    public var isRegularManuallyHandled: Bool {
+        regularManuallyHandledAt != nil && regular?.status == .unconfirmed && regular?.kind != .annihilation
+    }
+
+    public var handledRegularResult: FightResult? {
+        guard isRegularManuallyHandled, var result = regular else { return nil }
+        result.status = .manuallyHandled
+        return result
+    }
+
     public static func needsAnnihilation(_ progress: Self?, weeklyStatus: WeeklyAnnihilationStatus) -> Bool {
-        let continuingRegular = progress?.annihilation?.isResolved == true && progress?.regular?.isResolved != true
+        let continuingRegular = progress?.annihilation?.isResolved == true && progress?.isRegularHandled != true
         return (weeklyStatus == .pending || weeklyStatus == .unconfirmed) && !continuingRegular
     }
 
@@ -322,6 +335,8 @@ public struct PlanContinuation: Equatable, Sendable {
     public var pending = 0
     public var unconfirmed = 0
     public var resolved = 0
+    public var manuallyHandled = 0
+    public var completionTitle: String { manuallyHandled > 0 ? "今日已处理" : "今日已完成" }
     public var hasStarted = false
     public var pendingItems: [PendingWorkflowItem] = []
     public var fightRecoveryItems: [FightRecoveryItem] = []
@@ -341,6 +356,7 @@ public struct PlanContinuation: Equatable, Sendable {
                 for task in plan.enabledTasks {
                     let key = WorkflowStep(planID: planID, clientID: client.id, accountID: account.id, task: task).key
                     hasStarted = hasStarted || state.fightResults?[key] != nil || state.fightProgress?[key] != nil
+                    if state.fightProgress?[key]?.isRegularManuallyHandled == true { manuallyHandled += 1 }
                     if state.isResolved(key) { resolved += 1 }
                     else if state.needsFightConfirmation(key) { unconfirmed += 1 }
                     else {
@@ -354,7 +370,7 @@ public struct PlanContinuation: Equatable, Sendable {
                             if FightProgress.needsAnnihilation(progress, weeklyStatus: weeklyStatus) {
                                 targets.append(.weeklyAnnihilation)
                             }
-                            if progress?.regular?.isResolved != true { targets.append(.regularFight) }
+                            if progress?.isRegularHandled != true { targets.append(.regularFight) }
                         } else { targets = [.task] }
                         let entry = weeklyAnnihilation.entry(clientID: client.id, accountID: account.id)
                         let currentEntry = entry?.clientKind == client.kind
@@ -390,7 +406,8 @@ public struct PlanContinuation: Equatable, Sendable {
                                     ? "Annihilation" : progress?.pendingStage ?? ""
                                 fightRecoveryItems.append(.init(
                                     step: .init(planID: planID, clientID: client.id, accountID: account.id, task: .fight),
-                                    result: result, canConfirmWeeklyCompletion: canConfirm, retryStage: retryStage
+                                    result: result, canConfirmWeeklyCompletion: canConfirm, retryStage: retryStage,
+                                    canHandleRegularWithoutRetry: state.canHandleRegularWithoutRetry(key, expected: result)
                                 ))
                             }
                         }
@@ -438,6 +455,7 @@ public struct FightRecoveryItem: Equatable, Identifiable, Sendable {
     public let result: FightResult
     public let canConfirmWeeklyCompletion: Bool
     public let retryStage: String
+    public let canHandleRegularWithoutRetry: Bool
 
     public var id: String { step.key }
     public var title: String {

@@ -180,7 +180,14 @@ struct ManualInterventionError: LocalizedError {
 }
 
 public final class ProcessLock: @unchecked Sendable {
+    public let identity = UUID()
     private var descriptor: Int32 = -1
+
+    public static func currentIdentity(at url: URL) -> UUID? {
+        guard isHeld(at: url), let value = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        let lines = value.split(separator: "\n")
+        return lines.count == 2 ? UUID(uuidString: String(lines[1])) : nil
+    }
 
     public static func isHeld(at url: URL) -> Bool {
         let descriptor = Darwin.open(url.path, O_RDWR)
@@ -198,7 +205,7 @@ public final class ProcessLock: @unchecked Sendable {
             descriptor = -1
             throw RuntimeError.alreadyRunning
         }
-        let value = "\(getpid())\n"
+        let value = "\(getpid())\n\(identity.uuidString)\n"
         value.withCString { pointer in
             _ = ftruncate(descriptor, 0)
             _ = write(descriptor, pointer, strlen(pointer))

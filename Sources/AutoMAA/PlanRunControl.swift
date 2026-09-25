@@ -27,7 +27,7 @@ struct PlanRunControl: View {
                 }
                 .controlSize(controlSize)
             } else {
-                status("今日已完成", symbol: "checkmark.circle.fill", tint: .green)
+                status(progress.completionTitle, symbol: progress.manuallyHandled > 0 ? "checkmark.circle" : "checkmark.circle.fill", tint: progress.manuallyHandled > 0 ? .secondary : .green)
             }
         case .running:
             status("正在运行", symbol: "arrow.triangle.2.circlepath", tint: .maaAccent)

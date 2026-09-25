@@ -26,8 +26,11 @@ struct PlanReadinessSheet: View {
                         VStack(alignment: .leading, spacing: 8) {
                             Label(issue.message, systemImage: issue.severity == .error ? "exclamationmark.circle" : "info.circle")
                                 .fixedSize(horizontal: false, vertical: true)
-                            if case let .plan(id) = issue.scope {
-                                Button("编辑相关方案") { dismiss(); model.selection = .plan(id) }
+                            if let target = issue.repairTarget {
+                                Button(target.actionTitle) {
+                                    dismiss()
+                                    model.showConfigurationRepair(target)
+                                }
                             }
                         }
                     }
@@ -51,6 +54,17 @@ struct PlanReadinessSheet: View {
         }
         .padding(24)
         .frame(width: 520, height: 380)
+    }
+}
+
+extension ConfigurationRepairTarget {
+    var actionTitle: String {
+        switch self {
+        case .settings: "前往全局设置"
+        case .plan: "编辑相关方案"
+        case .client: "编辑相关客户端"
+        case .account: "编辑相关账号"
+        }
     }
 }
 

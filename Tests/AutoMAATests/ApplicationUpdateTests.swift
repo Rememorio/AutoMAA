@@ -9,6 +9,19 @@ private struct UnavailableReleaseNotesService: ReleaseNotesServing {
     func resources(comparisonURL: URL) async throws -> ReleaseNotesCollection { throw URLError(.notConnectedToInternet) }
 }
 
+@MainActor
+private final class InstallerValidationSpy {
+    var rejectsInstallerStart = false
+    private(set) var reachedInstallerValidation = false
+
+    func validate() throws {
+        if rejectsInstallerStart {
+            reachedInstallerValidation = true
+            throw SoftwareUpdateError.installerUnavailable
+        }
+    }
+}
+
 private actor StubSoftwareUpdateService: SoftwareUpdateServing {
     let release: SoftwareUpdateRelease
     let prepared: PreparedSoftwareUpdate
@@ -80,6 +93,33 @@ private actor StubSoftwareUpdateService: SoftwareUpdateServing {
 
 @Suite("Application updates")
 struct ApplicationUpdateTests {
+    @Test("restarting for an update preserves unsaved edits until saving succeeds")
+    @MainActor
+    func failedSavePreventsUpdateRestart() async throws {
+        let installer = InstallerValidationSpy()
+        let fixture = try makeFixture(automaticallyDownloads: true, availabilityValidator: {
+            try installer.validate()
+        })
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        fixture.model.checkForApplicationUpdate()
+        try await waitUntil {
+            if case .ready = fixture.model.applicationUpdateState { return true }
+            return false
+        }
+        fixture.model.configuration.plans[0].name = "尚未保存的方案"
+        installer.rejectsInstallerStart = true
+        let configurationURL = fixture.model.directories.configuration
+        try FileManager.default.removeItem(at: configurationURL)
+        try FileManager.default.createDirectory(at: configurationURL, withIntermediateDirectories: false)
+
+        fixture.model.restartAndInstallApplicationUpdate(fixture.service.prepared)
+
+        #expect(fixture.model.configurationSaveError != nil)
+        #expect(fixture.model.configuration.plans[0].name == "尚未保存的方案")
+        #expect(!installer.reachedInstallerValidation)
+        if case .ready = fixture.model.applicationUpdateState {} else { Issue.record("保存失败后应保留已准备好的更新") }
+    }
+
     @Test("notes failures leave automatic downloads and their cancellation available")
     @MainActor
     func unavailableNotesDoNotInterruptUpdates() async throws {
@@ -320,7 +360,8 @@ struct ApplicationUpdateTests {
     @MainActor
     private func makeFixture(
         automaticallyDownloads: Bool,
-        startup: Bool = false
+        startup: Bool = false,
+        availabilityValidator: @escaping @MainActor () throws -> Void = {}
     ) throws -> (root: URL, model: AppModel, service: StubSoftwareUpdateService) {
         let root = FileManager.default.temporaryDirectory
             .appending(path: "automaa-application-update-\(UUID().uuidString)", directoryHint: .isDirectory)
@@ -363,7 +404,7 @@ struct ApplicationUpdateTests {
             managesSystemLaunchAgents: false,
             checksForUpdatesAutomatically: startup,
             softwareUpdateService: service,
-            applicationUpdateAvailabilityValidator: {},
+            applicationUpdateAvailabilityValidator: availabilityValidator,
             releaseNotesService: UnavailableReleaseNotesService()
         )
         return (root, model, service)

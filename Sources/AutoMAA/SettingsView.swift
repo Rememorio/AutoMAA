@@ -391,8 +391,10 @@ struct SettingsView: View {
                                 DetailDisclosure(details: details)
                                     .id(details)
                             }
-                            Button("查看活动记录") { model.selection = .activity }
-                                .font(.caption)
+                            if let runID = activity.runID {
+                                Button("查看本次记录") { model.showActivity(runID: runID) }
+                                    .font(.caption)
+                            }
                         }
                     } else {
                         UpdateProgressRow(

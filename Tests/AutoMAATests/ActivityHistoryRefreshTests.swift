@@ -5,6 +5,35 @@ import Testing
 
 @Suite("Activity history refresh")
 struct ActivityHistoryRefreshTests {
+    @Test("the app requests a safe stop for the observed background run and stays busy until it exits")
+    @MainActor
+    func requestsBackgroundStop() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "automaa-background-stop-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        let model = AppModel(directories: directories, launchAgentsDirectory: root.appending(path: "LaunchAgents"),
+            managesSystemLaunchAgents: false, checksForUpdatesAutomatically: false, allowsAutomaticMAAMaintenance: false)
+        var lock: ProcessLock? = try ProcessLock(url: directories.lock)
+        let identity = WorkflowRunIdentity(runID: UUID(), planID: model.configuration.plans[0].id,
+                                          lockID: try #require(lock).identity)
+        let control = WorkflowRunControl(directories: directories)
+        try control.activate(identity)
+        model.reloadActivityHistory()
+        #expect(model.canCancelRun)
+        #expect(model.activePlanID == identity.planID)
+        model.cancelCurrentOperation()
+        #expect(control.isStopRequested(for: identity))
+        #expect(model.isCancellingRun)
+        #expect(model.isWorkflowRunning)
+        #expect(!model.canCancelRun)
+        #expect(model.activePhase == .closing)
+        control.finish(identity)
+        lock = nil
+        model.reloadActivityHistory()
+        #expect(!model.isCancellingRun)
+        #expect(!model.isWorkflowRunning)
+    }
+
     @Test("weekly recovery stays visible while other tasks run and confirmation never launches a workflow")
     @MainActor
     func weeklyRecoveryDoesNotDependOnRunCompletionOrHistory() throws {

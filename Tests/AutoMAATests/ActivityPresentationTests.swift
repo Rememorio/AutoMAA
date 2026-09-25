@@ -5,6 +5,20 @@ import Testing
 
 @Suite("Activity presentation")
 struct ActivityPresentationTests {
+    @Test("manually handled work is described as handled rather than automatically completed")
+    func manualHandlingStatus() {
+        let handled = session([.init(level: .success, message: "本轮已处理", phase: .completed,
+            runSummary: .init(completedSteps: 0, failedSteps: 0, unexecutedSteps: 0, totalSteps: 1,
+                              manuallyHandledSteps: 1))])
+        #expect(handled.historyStatusTitle == "已处理")
+        #expect(!ActivityFilter.failed.includes(handled))
+        let partial = session([.init(level: .warning, message: "仍有任务未执行", phase: .completed,
+            runSummary: .init(completedSteps: 0, failedSteps: 0, unexecutedSteps: 1, totalSteps: 2,
+                              manuallyHandledSteps: 1))])
+        #expect(partial.historyStatusTitle == "部分处理")
+        #expect(ActivityFilter.attention.includes(partial))
+    }
+
     @Test("attention keeps successful context and failure excludes recovered errors")
     func sessionFilters() {
         let recovered = session([

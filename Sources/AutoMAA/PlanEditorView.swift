@@ -8,7 +8,8 @@ struct PlanEditorView: View {
     @Binding var plan: AutomationPlan
     @State private var confirmDelete = false
     @State private var editsSchedule = false
-    @State private var useCustomFightStage = false
+    @State private var editsOrder = false
+    @State private var useCustomFightStage: Bool?
     @State private var fightStageEditor: FightStageEditorContext?
 
     private let columns = [GridItem(.adaptive(minimum: 340), spacing: 14, alignment: .topLeading)]
@@ -16,21 +17,29 @@ struct PlanEditorView: View {
     var body: some View {
         AppPage(width: PageLayout.contentWidth) {
             header
-            targetPanel
-            schedulePanel
-            orderPanel
             LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
-                ForEach(plan.stepOrder) { task in
-                    switch task {
-                    case .fight: fightCard
-                    case .recruit: recruitCard
-                    case .infrast: infrastCard
-                    case .mall: mallCard
-                    case .award: awardCard
+                targetPanel
+                schedulePanel
+            }
+            orderPanel
+            ForEach(taskGroups, id: \.self) { tasks in
+                if tasks == [.fight] {
+                    fightCard
+                } else {
+                    LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
+                        ForEach(tasks) { task in
+                            switch task {
+                            case .fight: EmptyView()
+                            case .recruit: recruitCard
+                            case .infrast: infrastCard
+                            case .mall: mallCard
+                            case .award: awardCard
+                            }
+                        }
                     }
                 }
-                policyCard
             }
+            policyCard
             actions
         }
         .navigationTitle(plan.displayName)
@@ -78,7 +87,9 @@ struct PlanEditorView: View {
                     Toggle("所有已启用账号", isOn: $plan.includesAllEnabledAccounts)
                         .toggleStyle(.switch)
                 }
-                Text("使用“所有已启用账号”时，今后新添加的账号会自动加入；关闭后可精确选择。")
+                Text(plan.includesAllEnabledAccounts
+                     ? "当前 \(targetAccounts.count) 个账号；新启用的账号会自动加入。"
+                     : "已选 \(targetAccounts.count) 个启用账号；停用的账号不会执行。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if !plan.includesAllEnabledAccounts {
@@ -221,14 +232,7 @@ struct PlanEditorView: View {
 
     private var orderPanel: some View {
         Panel {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    SectionHeading(title: "步骤顺序", symbol: "arrow.up.arrow.down")
-                    Spacer()
-                    Text("每个方案独立记录当日完成状态")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+            DisclosureGroup(isExpanded: $editsOrder) {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), alignment: .leading)], spacing: 8) {
                     ForEach(Array(plan.stepOrder.enumerated()), id: \.element) { index, task in
                         HStack(spacing: 7) {
@@ -251,69 +255,99 @@ struct PlanEditorView: View {
                         .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 8))
                     }
                 }
+            } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                    SectionHeading(title: "步骤顺序", symbol: "arrow.up.arrow.down")
+                    Text(plan.stepOrder.map { plan.isEnabled($0) ? $0.title : "\($0.title)（未启用）" }.joined(separator: " → "))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
+    }
+
+    private var taskGroups: [[TaskKind]] {
+        var groups: [[TaskKind]] = []
+        for task in plan.stepOrder {
+            if task == .fight || groups.isEmpty || groups.last == [.fight] {
+                groups.append([task])
+            } else {
+                groups[groups.count - 1].append(task)
+            }
+        }
+        return groups
     }
 
     private var fightCard: some View {
         PlanTaskCard(task: .fight, enabled: $plan.fight.enabled, usesCustomSettings: $plan.fight.usesCustomSettings,
                      strategy: { weeklyAnnihilationSettings }) {
-            Picker("关卡策略", selection: fightStageStrategy) {
-                ForEach(FightStageStrategy.allCases) { strategy in
-                    Text(strategy.title).tag(strategy)
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("关卡与兜底").font(.subheadline.weight(.medium))
+                    Picker("关卡策略", selection: fightStageStrategy) {
+                        ForEach(FightStageStrategy.allCases) { strategy in
+                            Text(strategy.title).tag(strategy)
+                        }
+                    }
+                    if plan.fight.stageStrategy == .fixed {
+                        LabeledContent("关卡") {
+                            if customFightStage.wrappedValue {
+                                TextField("如 1-7 或活动关卡", text: $plan.fight.stage)
+                                    .textFieldStyle(.roundedBorder)
+                                    .accessibilityLabel("固定关卡")
+                                    .frame(width: 190)
+                            } else {
+                                Picker("关卡", selection: $plan.fight.stage) {
+                                    if FightStagePreset(rawValue: plan.fight.stage) == nil {
+                                        Text("自定义：\(plan.fight.stage)").tag(plan.fight.stage)
+                                    }
+                                    ForEach(FightStagePreset.allCases.filter { $0 != .currentOrLast }) { preset in
+                                        Text(preset.title).tag(preset.rawValue)
+                                    }
+                                }
+                                .labelsHidden()
+                                .frame(width: 190)
+                            }
+                        }
+                        Toggle("手动输入关卡名", isOn: customFightStage)
+                    }
+                    LabeledContent("兜底关卡（可选）") {
+                        TextField("如 1-7；留空关闭", text: $plan.fight.fallbackStage)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 190)
+                            .accessibilityLabel("兜底关卡，留空关闭")
+                    }
+                }
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("用药与次数").font(.subheadline.weight(.medium))
+                    optionalStepper("吃理智药", value: $plan.fight.medicine, defaultValue: 999, range: 0...999, unit: "次")
+                    optionalStepper("临期理智药", value: $plan.fight.medicineExpireDays, defaultValue: 2, range: 1...365, unit: "天")
+                    optionalStepper("吃源石", value: $plan.fight.stone, defaultValue: 0, range: 0...99, unit: "颗")
+                    optionalStepper("指定次数", value: $plan.fight.times, defaultValue: 5, range: 1...9_999, unit: "次")
+                    Picker("连战次数", selection: $plan.fight.series) {
+                        Text("保持当前").tag(Int?.none)
+                        Text("关闭连战").tag(Int?.some(-1))
+                        Text("AUTO").tag(Int?.some(0))
+                        ForEach((1...10).reversed(), id: \.self) { value in
+                            Text("\(value)").tag(Int?.some(value))
+                        }
+                    }
+                    DisclosureGroup("高级选项") {
+                        Toggle("博朗台碎石模式", isOn: $plan.fight.drGrandet)
+                    }
                 }
             }
             Text(plan.fight.weeklyAnnihilation.enabled && plan.fight.stageStrategy != .fixed
                  ? "优先识别游戏当前/上次的常规关卡；需要剿灭时先保存常规目标，剿灭结束后恢复。本周已满时继续跟随常规关卡。"
                  : plan.fight.stageStrategy.detail)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            if plan.fight.stageStrategy == .fixed {
-                LabeledContent("关卡") {
-                    if customFightStage.wrappedValue {
-                        TextField("如 1-7 或活动关卡", text: $plan.fight.stage)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 190)
-                    } else {
-                        Picker("关卡", selection: $plan.fight.stage) {
-                            ForEach(FightStagePreset.allCases.filter { $0 != .currentOrLast }) { preset in
-                                Text(preset.title).tag(preset.rawValue)
-                            }
-                        }
-                        .labelsHidden()
-                        .frame(width: 190)
-                    }
-                }
-                Toggle("手动输入关卡名", isOn: customFightStage)
-            } else if plan.fight.stageStrategy == .rememberedRegular && !plan.fight.weeklyAnnihilation.enabled {
-                fightRecoverySettings
-            }
-            LabeledContent("兜底关卡（可选）") {
-                TextField("如 1-7；留空关闭", text: $plan.fight.fallbackStage)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 190)
-                    .accessibilityLabel("兜底关卡，留空关闭")
-            }
             Text("没有可用的常规目标，或选关失败且尚未开战时使用；每个候选只尝试一次。临时兜底不替代原目标或剿灭，建议选择已解锁的常驻关卡。")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Divider()
-            optionalStepper("吃理智药", value: $plan.fight.medicine, defaultValue: 999, range: 0...999)
-            optionalStepper("使用临期理智药（天数）", value: $plan.fight.medicineExpireDays, defaultValue: 2, range: 1...365)
-            optionalStepper("吃源石", value: $plan.fight.stone, defaultValue: 0, range: 0...99)
-            optionalStepper("指定次数", value: $plan.fight.times, defaultValue: 5, range: 1...9_999)
-            Picker("连战次数", selection: $plan.fight.series) {
-                Text("保持当前").tag(Int?.none)
-                Text("关闭连战").tag(Int?.some(-1))
-                Text("AUTO").tag(Int?.some(0))
-                ForEach((1...10).reversed(), id: \.self) { value in
-                    Text("\(value)").tag(Int?.some(value))
-                }
-            }
-            DisclosureGroup("高级选项") {
-                Toggle("博朗台碎石模式", isOn: $plan.fight.drGrandet)
-            }
+        } details: {
+            fightAccountDetails
         }
     }
 
@@ -324,39 +358,30 @@ struct PlanEditorView: View {
                 Picker("本周开始日", selection: $plan.fight.weeklyAnnihilation.startDay) {
                     ForEach(ScheduleWeekday.allCases) { day in Text(day.title).tag(day) }
                 }
-                Text("按各服游戏日计算。从指定日开始，每次运行本方案时优先补打；确认本周奖励已满后跳过。剿灭只使用自然理智，不使用药品或源石。")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                ForEach(model.configuration.clients.filter(\.enabled)) { client in
-                    ForEach(client.accounts.filter(plan.includes)) { account in
-                        let status = model.weeklyAnnihilation.status(for: plan.fight.weeklyAnnihilation,
-                                                                  client: client, accountID: account.id, at: model.currentDate)
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text("\(client.displayName) / \(account.displayName) · \(status.title)")
-                                .font(.caption)
-                                .foregroundStyle(status == .unconfirmed ? Color.orange : Color.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                            if let item = model.continuation(for: plan.id).fightRecoveryItems.first(where: {
-                                $0.step.clientID == client.id && $0.step.accountID == account.id
-                            }) {
-                                FightRecoveryActions(item: item, context: "\(client.displayName) / \(account.displayName)")
-                            }
-                        }
-                    }
-                }
-                if !plan.fight.usesCustomSettings || plan.fight.stageStrategy != .fixed { fightRecoverySettings }
             }
         }
     }
 
-    private var fightRecoverySettings: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text(plan.fight.weeklyAnnihilation.enabled ? "后续常规关卡" : "账号常规目标")
-                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            ForEach(fightStageMemoryRows) { row in fightStageMemoryRow(row) }
+    private var fightAccountDetails: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if plan.fight.weeklyAnnihilation.enabled {
+                Text("按各服游戏日计算。从指定日开始，每次运行本方案时优先补打；确认本周奖励已满后跳过。剿灭只使用自然理智，不使用药品或源石。")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if (plan.fight.weeklyAnnihilation.enabled || showsRecoveryStage), !fightStageMemoryRows.isEmpty {
+                Divider()
+                Text(showsRecoveryStage ? "账号状态与常规目标" : "每周剿灭状态")
+                    .font(.subheadline.weight(.medium))
+                ForEach(fightStageMemoryRows) { row in fightStageMemoryRow(row) }
+            }
         }
-        .padding(10)
-        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+    }
+
+    private var showsRecoveryStage: Bool {
+        plan.fight.weeklyAnnihilation.enabled
+            ? !plan.fight.usesCustomSettings || plan.fight.stageStrategy != .fixed
+            : plan.fight.usesCustomSettings && plan.fight.stageStrategy == .rememberedRegular
     }
 
     private var recruitCard: some View {
@@ -381,13 +406,11 @@ struct PlanEditorView: View {
                 }
             }
             LabeledContent("三星首选标签") {
-                TextField("可留空", text: stringList($plan.recruit.firstTags))
-                    .textFieldStyle(.roundedBorder)
+                DelimitedListField("三星首选标签", prompt: "可留空", values: $plan.recruit.firstTags)
                     .frame(width: 210)
             }
             LabeledContent("保留并跳过") {
-                TextField("例如 支援机械", text: stringList($plan.recruit.preserveTags))
-                    .textFieldStyle(.roundedBorder)
+                DelimitedListField("保留并跳过的标签", prompt: "例如 支援机械", values: $plan.recruit.preserveTags)
                     .frame(width: 210)
             }
         }
@@ -432,6 +455,8 @@ struct PlanEditorView: View {
                     Divider()
                     Text("上岗最低心情：\(Int(plan.infrast.threshold * 100))%")
                     Slider(value: $plan.infrast.threshold, in: 0...1, step: 0.05)
+                        .accessibilityLabel("上岗最低心情")
+                        .accessibilityValue("\(Int(plan.infrast.threshold * 100))%")
                     Text("仅筛选本次换班时的候选干员，不会在心情降到该值时自动换班。每天完整换班一次建议 90%；降低阈值会增加可选干员，但可能在下次换班前疲劳。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -455,13 +480,11 @@ struct PlanEditorView: View {
             if plan.mall.shopping {
                 Divider()
                 LabeledContent("优先购买") {
-                    TextField("招聘许可、龙门币", text: stringList($plan.mall.buyFirst))
-                        .textFieldStyle(.roundedBorder)
+                    DelimitedListField("优先购买的物品", prompt: "招聘许可、龙门币", values: $plan.mall.buyFirst)
                         .frame(width: 210)
                 }
                 LabeledContent("购物黑名单") {
-                    TextField("家具零件", text: stringList($plan.mall.blacklist))
-                        .textFieldStyle(.roundedBorder)
+                    DelimitedListField("购物黑名单", prompt: "家具零件", values: $plan.mall.blacklist)
                         .frame(width: 210)
                 }
                 Toggle("信用溢出时无视黑名单", isOn: $plan.mall.forceShoppingIfCreditFull)
@@ -525,7 +548,11 @@ struct PlanEditorView: View {
                     clientID: client.id,
                     accountID: account.id,
                     label: "\(client.displayName) / \(account.displayName)",
-                    stage: model.fightStageMemory.stage(clientID: client.id, accountID: account.id)
+                    stage: model.fightStageMemory.stage(clientID: client.id, accountID: account.id),
+                    weeklyStatus: plan.fight.weeklyAnnihilation.enabled
+                        ? model.weeklyAnnihilation.status(for: plan.fight.weeklyAnnihilation, client: client,
+                                                         accountID: account.id, at: model.currentDate)
+                        : nil
                 )
             }
         }
@@ -533,30 +560,47 @@ struct PlanEditorView: View {
 
     private func fightStageMemoryRow(_ row: FightStageMemoryRow) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Image(systemName: "location.fill")
                     .foregroundStyle(Color.maaAccent)
                 Text(row.label)
-                    .lineLimit(1)
-                Spacer(minLength: 8)
-                Text(row.stage == nil ? "未设置" : "已记录")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(row.stage == nil ? Color.orange : Color.secondary)
-            }
-            HStack(spacing: 8) {
-                Text(fightStageStatusText(row))
-                    .font(.caption)
-                    .foregroundStyle(row.stage == nil ? Color.orange : Color.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
-                Button(row.stage == nil ? "设置常规目标" : "修改") {
-                    fightStageEditor = FightStageEditorContext(row: row)
+                if let status = row.weeklyStatus {
+                    Text(status.title)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(status == .unconfirmed ? Color.orange : Color.secondary)
+                        .fixedSize()
+                } else {
+                    Text(row.stage == nil ? "未设置" : "已记录")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(row.stage == nil ? Color.orange : Color.secondary)
+                        .fixedSize()
                 }
-                .disabled(model.isWorkflowRunning)
             }
-
+            if showsRecoveryStage {
+                HStack(alignment: .top, spacing: 8) {
+                    Text(fightStageStatusText(row))
+                        .font(.caption)
+                        .foregroundStyle(row.stage == nil ? Color.orange : Color.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 8)
+                    Button(row.stage == nil ? "设置常规目标" : "修改") {
+                        fightStageEditor = FightStageEditorContext(row: row)
+                    }
+                    .accessibilityLabel("设置\(row.label)的常规目标")
+                    .disabled(model.isWorkflowRunning)
+                }
+            }
+            if row.weeklyStatus != nil,
+               let item = model.continuation(for: plan.id).fightRecoveryItems.first(where: {
+                   $0.step.clientID == row.clientID && $0.step.accountID == row.accountID
+               }) {
+                FightRecoveryActions(item: item, context: row.label)
+            }
         }
-        .padding(.vertical, 3)
+        .padding(10)
+        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
     }
 
     private func fightStageStatusText(_ row: FightStageMemoryRow) -> String {
@@ -656,17 +700,6 @@ struct PlanEditorView: View {
         }
     }
 
-    private func stringList(_ values: Binding<[String]>) -> Binding<String> {
-        Binding {
-            values.wrappedValue.joined(separator: "、")
-        } set: { text in
-            values.wrappedValue = text
-                .components(separatedBy: CharacterSet(charactersIn: "、,，;；"))
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-        }
-    }
-
     private func chooseInfrastSchedule() {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
@@ -689,9 +722,8 @@ struct PlanEditorView: View {
 
     private var customFightStage: Binding<Bool> {
         Binding {
-            useCustomFightStage || FightStagePreset(rawValue: plan.fight.stage) == nil
+            useCustomFightStage ?? (FightStagePreset(rawValue: plan.fight.stage) == nil)
         } set: { enabled in
-            if !enabled { plan.fight.stage = FightStagePreset.oneSeven.rawValue }
             useCustomFightStage = enabled
         }
     }
@@ -724,13 +756,16 @@ struct PlanEditorView: View {
         _ title: String,
         value: Binding<Int?>,
         defaultValue: Int,
-        range: ClosedRange<Int>
+        range: ClosedRange<Int>,
+        unit: String
     ) -> some View {
         HStack {
             Toggle(title, isOn: optionalToggle(value, defaultValue: defaultValue))
             Spacer()
             if value.wrappedValue != nil {
-                Stepper("\(value.wrappedValue ?? defaultValue)", value: optionalValue(value, defaultValue: defaultValue), in: range)
+                Stepper("\(value.wrappedValue ?? defaultValue) \(unit)", value: optionalValue(value, defaultValue: defaultValue), in: range)
+                    .accessibilityLabel(title)
+                    .accessibilityValue("\(value.wrappedValue ?? defaultValue) \(unit)")
                     .fixedSize()
             }
         }
@@ -742,6 +777,7 @@ private struct FightStageMemoryRow: Identifiable {
     let accountID: UUID
     let label: String
     let stage: String?
+    let weeklyStatus: WeeklyAnnihilationStatus?
 
     var id: String { "\(clientID.uuidString)-\(accountID.uuidString)" }
 }
@@ -828,25 +864,28 @@ private struct FightStageEditorSheet: View {
     }
 }
 
-private struct PlanTaskCard<Content: View, Strategy: View>: View {
+private struct PlanTaskCard<Content: View, Strategy: View, Details: View>: View {
     let task: TaskKind
     @Binding var enabled: Bool
     @Binding var usesCustomSettings: Bool
     let content: Content
     let strategy: Strategy
+    let details: Details
 
     init(
         task: TaskKind,
         enabled: Binding<Bool>,
         usesCustomSettings: Binding<Bool>,
         @ViewBuilder strategy: () -> Strategy,
-        @ViewBuilder content: () -> Content
+        @ViewBuilder content: () -> Content,
+        @ViewBuilder details: () -> Details
     ) {
         self.task = task
         _enabled = enabled
         _usesCustomSettings = usesCustomSettings
         self.content = content()
         self.strategy = strategy()
+        self.details = details()
     }
 
     var body: some View {
@@ -885,6 +924,7 @@ private struct PlanTaskCard<Content: View, Strategy: View>: View {
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
+                        details
                     }
                 }
             }
@@ -902,8 +942,9 @@ private struct PlanTaskCard<Content: View, Strategy: View>: View {
     }
 }
 
-extension PlanTaskCard where Strategy == EmptyView {
+extension PlanTaskCard where Strategy == EmptyView, Details == EmptyView {
     init(task: TaskKind, enabled: Binding<Bool>, usesCustomSettings: Binding<Bool>, @ViewBuilder content: () -> Content) {
-        self.init(task: task, enabled: enabled, usesCustomSettings: usesCustomSettings, strategy: { EmptyView() }, content: content)
+        self.init(task: task, enabled: enabled, usesCustomSettings: usesCustomSettings,
+                  strategy: { EmptyView() }, content: content, details: { EmptyView() })
     }
 }

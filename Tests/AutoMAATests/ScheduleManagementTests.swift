@@ -137,4 +137,59 @@ struct ScheduleManagementTests {
         }
         Issue.record("Schedule synchronization did not finish")
     }
+
+    @Test("an unrelated invalid draft does not prevent disabling an installed schedule")
+    @MainActor
+    func disablingSchedulePersistsInvalidDraft() async throws {
+        try await verifyDisableRecovery(blocksConfigurationWrite: false)
+    }
+
+    @Test("retrying a failed save also removes the disabled system schedule")
+    @MainActor
+    func saveRetryConvergesSchedules() async throws {
+        try await verifyDisableRecovery(blocksConfigurationWrite: true)
+    }
+
+    @MainActor
+    private func verifyDisableRecovery(blocksConfigurationWrite: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "automaa-disable-schedule-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        let launchAgents = root.appending(path: "LaunchAgents")
+        let model = AppModel(directories: directories, launchAgentsDirectory: launchAgents,
+            managesSystemLaunchAgents: false, checksForUpdatesAutomatically: false,
+            allowsAutomaticMAAMaintenance: false, runnerExecutableURL: URL(filePath: "/usr/bin/true"))
+        model.configuration.cliPath = "/usr/bin/true"
+        model.configuration.clients = [ClientConfiguration(name: "测试客户端", kind: .official,
+            appPath: root.appending(path: "Test.app").path, address: "127.0.0.1:61388", profileName: "test-client",
+            bundleIdentifier: "dev.automaa.tests.schedule", accounts: [AccountConfiguration(name: "测试账号")])]
+        let planID = model.configuration.plans[0].id
+        let manager = LaunchAgentManager(directories: directories, launchAgentsDirectory: launchAgents,
+                                        systemIntegrationEnabled: false)
+        model.setPlanScheduleEnabled(planID, true)
+        try await waitForScheduleSynchronization(model)
+        #expect(manager.isInstalled(planID: planID))
+        model.configuration.plans[1].fight.enabled = true
+        model.configuration.plans[1].fight.usesCustomSettings = true
+        model.configuration.plans[1].fight.stageStrategy = .fixed
+        model.configuration.plans[1].fight.stage = ""
+        if blocksConfigurationWrite {
+            try FileManager.default.removeItem(at: directories.configuration)
+            try FileManager.default.createDirectory(at: directories.configuration, withIntermediateDirectories: false)
+        }
+        model.setPlanScheduleEnabled(planID, false)
+        if blocksConfigurationWrite {
+            #expect(model.configurationSaveError != nil)
+            #expect(manager.isInstalled(planID: planID))
+            try FileManager.default.removeItem(at: directories.configuration)
+            #expect(model.saveNow(showConfirmation: false))
+        }
+        try await waitForScheduleSynchronization(model)
+        #expect(model.configurationSaveError == nil)
+        #expect(!manager.isInstalled(planID: planID))
+        #expect(!model.canRun(planID: planID))
+        let saved = try ConfigurationStore(directories: directories).load()
+        #expect(!saved.plans[0].schedule.enabled)
+        #expect(saved.plans[1].fight.stage.isEmpty)
+    }
 }

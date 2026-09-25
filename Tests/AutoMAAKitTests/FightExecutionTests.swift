@@ -520,6 +520,44 @@ private final class FightFixture {
 
 @MainActor
 final class FightWorkflowTests: XCTestCase {
+    func testManualHandlingSkipsRegularWithoutBlockingOtherTasksOrWeeklyTopUps() async throws {
+        for priority in [false, true] {
+            let fixture = try FightFixture(priority: priority, award: true)
+            defer { fixture.cleanup() }
+            let original = FightResult(status: .unconfirmed, stage: "1-7", reason: .interruptedBattle, kind: .regular)
+            var state = ExecutionState(dateKey: ExecutionStateStore.todayKey)
+            var progress = FightProgress(regularStage: "1-7")
+            progress.regular = original
+            if priority { progress.annihilation = .init(status: .unnecessary, reason: .insufficientSanity) }
+            state.fightProgress = [fixture.step.key: progress]
+            state.record(original, for: fixture.step.key)
+            try state.handleRegularWithoutRetry(fixture.step, expected: original, at: Date())
+            try ExecutionStateStore(directories: fixture.directories).save(state)
+            let report: WorkflowReport
+            let calls: [FightTestCommands.Call]
+            if priority {
+                (report, calls) = await fixture.run([.init(result: command(), callbacks: closedAnnihilationEntrance)])
+                XCTAssertEqual(calls.count, 2)
+                XCTAssertEqual(try parameters(calls[0])["stage"] as? String, "Annihilation")
+            } else {
+                (report, calls) = await fixture.run([])
+                XCTAssertEqual(calls.count, 1)
+            }
+            XCTAssertTrue(report.isSuccess)
+            XCTAssertEqual(report.runSummary?.completedSteps, 1)
+            XCTAssertEqual(report.runSummary?.manuallyHandledSteps, 1)
+            XCTAssertFalse(fixture.state.completedSteps.contains(fixture.step.key))
+            XCTAssertEqual(fixture.state.fightProgress?[fixture.step.key]?.regular, original)
+            XCTAssertEqual(fixture.state.fightResults?[fixture.step.key]?.status, .manuallyHandled)
+            let continuation = PlanContinuation(configuration: fixture.configuration, planID: fixture.plan.id,
+                state: fixture.state, history: [], now: Date())
+            XCTAssertEqual(continuation.unconfirmed, 0)
+            XCTAssertEqual(continuation.manuallyHandled, 1)
+            XCTAssertTrue(continuation.fightRecoveryItems.isEmpty)
+            XCTAssertFalse(fixture.runtime.running)
+        }
+    }
+
     func testInspectionFailureTimeoutAndCancellationNeverDispatchAFightOrFallback() async throws {
         for failure in [command(exit: 1), command(timeout: true), command(cancelled: true)] {
             let fixture = try FightFixture(priority: true)

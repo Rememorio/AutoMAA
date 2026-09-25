@@ -19,9 +19,13 @@ enum AutoMAARunnerMain {
 
         do {
             let configuration = try ConfigurationStore().load()
-            guard let planID = requestedPlanID(), configuration.plans.contains(where: { $0.id == planID }) else {
+            guard let planID = requestedPlanID(), let plan = configuration.plans.first(where: { $0.id == planID }) else {
                 fputs("AutoMAA Runner: 缺少或无效的 --plan 参数\n", stderr)
                 exit(EXIT_FAILURE)
+            }
+            guard ScheduledWorkflowPolicy.mayRun(plan, environment: ProcessInfo.processInfo.environment) else {
+                print("AutoMAA Runner: 该方案的定时运行已关闭，跳过本次唤起")
+                exit(EXIT_SUCCESS)
             }
             let formatter = ISO8601DateFormatter()
             var runID: UUID?

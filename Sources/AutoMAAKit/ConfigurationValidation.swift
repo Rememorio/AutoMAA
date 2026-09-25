@@ -10,22 +10,38 @@ public enum ConfigurationProblemScope: Equatable, Sendable {
     case plan(UUID)
 }
 
+public enum ConfigurationRepairTarget: Equatable, Sendable {
+    case settings
+    case plan(UUID)
+    case client(UUID)
+    case account(clientID: UUID, accountID: UUID)
+}
+
 public struct ConfigurationProblem: Identifiable, Equatable, Sendable {
     public let id: String
     public let severity: ConfigurationProblemSeverity
     public let message: String
     public let scope: ConfigurationProblemScope
+    public let repairTarget: ConfigurationRepairTarget?
 
     public init(
         id: String,
         severity: ConfigurationProblemSeverity,
         message: String,
-        scope: ConfigurationProblemScope = .shared
+        scope: ConfigurationProblemScope = .shared,
+        repairTarget: ConfigurationRepairTarget? = nil
     ) {
         self.id = id
         self.severity = severity
         self.message = message
         self.scope = scope
+        if let repairTarget {
+            self.repairTarget = repairTarget
+        } else if case let .plan(id) = scope {
+            self.repairTarget = .plan(id)
+        } else {
+            self.repairTarget = nil
+        }
     }
 }
 
@@ -136,7 +152,8 @@ public enum ConfigurationValidator {
             result.append(.init(
                 id: "maa-cli-missing",
                 severity: .error,
-                message: "找不到可执行的 maa-cli：\(configuration.cliPath)"
+                message: "找不到可执行的 maa-cli：\(configuration.cliPath)",
+                repairTarget: .settings
             ))
         }
         guard let planID, let plan = configuration.plans.first(where: { $0.id == planID }) else {
@@ -193,7 +210,8 @@ public enum ConfigurationValidator {
                     id: "client-\(client.id)-name-empty",
                     severity: .error,
                     message: "客户端名称不能为空",
-                    scope: .plan(plan.id)
+                    scope: .plan(plan.id),
+                    repairTarget: .client(client.id)
                 ))
             }
             if !fileManager.fileExists(atPath: client.appPath) {
@@ -201,7 +219,8 @@ public enum ConfigurationValidator {
                     id: "client-\(client.id)-app-missing",
                     severity: .warning,
                     message: "\(clientName) 的应用路径不存在，运行时会跳过该客户端",
-                    scope: .plan(plan.id)
+                    scope: .plan(plan.id),
+                    repairTarget: .client(client.id)
                 ))
             }
             if client.bundleIdentifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -209,7 +228,8 @@ public enum ConfigurationValidator {
                     id: "client-\(client.id)-bundle-missing",
                     severity: .warning,
                     message: "\(clientName) 缺少 Bundle Identifier，运行时会跳过该客户端",
-                    scope: .plan(plan.id)
+                    scope: .plan(plan.id),
+                    repairTarget: .client(client.id)
                 ))
             }
             if (try? PortAddress(client.address)) == nil {
@@ -217,7 +237,8 @@ public enum ConfigurationValidator {
                     id: "client-\(client.id)-address-invalid",
                     severity: .warning,
                     message: "\(clientName) 的 MaaTools 地址无效，运行时会跳过该客户端",
-                    scope: .plan(plan.id)
+                    scope: .plan(plan.id),
+                    repairTarget: .client(client.id)
                 ))
             }
 
@@ -240,7 +261,8 @@ public enum ConfigurationValidator {
                     id: "account-\(account.id)-name-empty",
                     severity: .error,
                     message: "\(clientName) 中的账号名称不能为空",
-                    scope: .plan(plan.id)
+                    scope: .plan(plan.id),
+                    repairTarget: .account(clientID: client.id, accountID: account.id)
                 ))
             }
             if !client.kind.supportsAccountSwitching {
@@ -249,7 +271,8 @@ public enum ConfigurationValidator {
                         id: "client-\(client.id)-account-switch-unsupported",
                         severity: .error,
                         message: "\(clientName) 的\(client.kind.title)不支持自动切换账号，请只启用一个账号",
-                        scope: .plan(plan.id)
+                        scope: .plan(plan.id),
+                        repairTarget: .client(client.id)
                     ))
                 }
                 for account in targetAccounts where !account.accountSelector.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -257,7 +280,8 @@ public enum ConfigurationValidator {
                         id: "account-\(account.id)-selector-unsupported",
                         severity: .error,
                         message: "\(account.displayName) 属于\(client.kind.title)，账号片段必须留空",
-                        scope: .plan(plan.id)
+                        scope: .plan(plan.id),
+                        repairTarget: .account(clientID: client.id, accountID: account.id)
                     ))
                 }
             } else if enabledAccounts.count > 1 {
@@ -266,7 +290,8 @@ public enum ConfigurationValidator {
                         id: "account-\(account.id)-selector-empty",
                         severity: .warning,
                         message: "\(account.displayName) 缺少唯一账号片段，运行时会跳过该账号",
-                        scope: .plan(plan.id)
+                        scope: .plan(plan.id),
+                        repairTarget: .account(clientID: client.id, accountID: account.id)
                     ))
                 }
                 let selectors = enabledAccounts
@@ -277,7 +302,8 @@ public enum ConfigurationValidator {
                         id: "client-\(client.id)-selector-duplicate",
                         severity: .error,
                         message: "\(clientName) 的账号片段不能重复",
-                        scope: .plan(plan.id)
+                        scope: .plan(plan.id),
+                        repairTarget: .client(client.id)
                     ))
                 }
             }

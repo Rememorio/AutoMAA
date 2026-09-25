@@ -240,14 +240,14 @@ struct StopOperationButton: View {
 
     var body: some View {
         Button { model.cancelRun() } label: {
-            Label(model.isCancellingRun ? "正在停止…" : model.runningPlanID == nil ? "取消更新" : "安全停止",
+            Label(model.isCancellingRun ? "正在停止…" : model.activePlanID == nil ? "取消更新" : "安全停止",
                   systemImage: "stop.fill")
                 .frame(minWidth: 76)
                 .frame(maxWidth: fillsWidth ? .infinity : nil)
         }
         .buttonStyle(.bordered)
-        .tint(model.runningPlanID == nil ? .maaAccent : .red)
+        .tint(model.activePlanID == nil ? .maaAccent : .red)
         .disabled(model.isCancellingRun)
-        .help(model.runningPlanID == nil ? "取消更新并清理临时文件" : "停止任务，关闭客户端并释放连接")
+        .help(model.activePlanID == nil ? "取消更新并清理临时文件" : "停止任务，关闭客户端并释放连接")
     }
 }

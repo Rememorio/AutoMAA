@@ -170,18 +170,20 @@ extension ExecutionState {
                     fightProgress?[key]?.annihilation = entry.result
                     // Both targets survive if a separate regular attempt also needs confirmation.
                     let regular = fightProgress?[key]?.regular
-                    record(regular?.status == .unconfirmed ? regular! : entry.result, for: key)
+                    record(regular?.status == .unconfirmed && fightProgress?[key]?.isRegularManuallyHandled != true ? regular! : entry.result, for: key)
                 } else if status == .pending {
                     let progress = fightProgress?[key]
-                    if progress?.annihilation?.isResolved == true, progress?.regular?.isResolved != true { continue }
-                    if let regular = progress?.regular, !regular.isResolved { continue }
+                    if progress?.annihilation?.isResolved == true, progress?.isRegularHandled != true { continue }
+                    if progress?.regular != nil, progress?.isRegularHandled != true { continue }
                     if progress?.annihilation?.status == .unconfirmed { continue }
                     fightProgress?[key]?.annihilation = nil
                     fightResults?.removeValue(forKey: key)
                     completedSteps.remove(key)
-                } else if status == .completed, fightProgress?[key]?.annihilation?.status == .unconfirmed {
+                } else if status == .completed,
+                          fightProgress?[key]?.annihilation?.status == .unconfirmed || fightProgress?[key]?.isRegularHandled == true {
                     fightProgress?[key]?.annihilation = weekly.entry(clientID: client.id, accountID: account.id)?.result
-                    if let regular = fightProgress?[key]?.regular { record(regular, for: key) }
+                    if let handled = fightProgress?[key]?.handledRegularResult { record(handled, for: key) }
+                    else if let regular = fightProgress?[key]?.regular { record(regular, for: key) }
                     else { fightResults?.removeValue(forKey: key) }
                 }
             }

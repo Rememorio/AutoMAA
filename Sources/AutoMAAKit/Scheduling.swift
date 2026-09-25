@@ -1,5 +1,11 @@
 import Foundation
 
+public enum ScheduledWorkflowPolicy {
+    public static func mayRun(_ plan: AutomationPlan, environment: [String: String]) -> Bool {
+        environment["AUTOMAA_RUNNER_IDENTITY"] == nil || plan.schedule.enabled
+    }
+}
+
 public enum ScheduleWeekday: String, Codable, CaseIterable, Identifiable, Sendable {
     case monday
     case tuesday

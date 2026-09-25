@@ -229,10 +229,48 @@ public final class WorkflowRunner {
         resumeToday: Bool = true,
         retryStep: WorkflowStep? = nil
     ) async -> WorkflowReport {
+        let runID = UUID()
+        let control = WorkflowRunControl(directories: directories)
+        let task = Task {
+            await runWorkflow(configuration, planID: planID, resumeToday: resumeToday,
+                              retryStep: retryStep, runID: runID)
+        }
+        let monitor = Task {
+            while !Task.isCancelled {
+                if let identity = control.activeRun(), identity.runID == runID,
+                   control.isStopRequested(for: identity) {
+                    task.cancel()
+                    return
+                }
+                do { try await Task.sleep(for: .milliseconds(200)) }
+                catch { return }
+            }
+        }
+        let report = await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+        monitor.cancel()
+        await monitor.value
+        return report
+    }
+
+    private func runWorkflow(
+        _ configuration: AppConfiguration,
+        planID: UUID,
+        resumeToday: Bool,
+        retryStep: WorkflowStep?,
+        runID: UUID
+    ) async -> WorkflowReport {
         var report = WorkflowReport()
         var lock: ProcessLock?
         var lease: CaffeinateLease?
-        beginActivity(sensitiveValues: configuration.clients.flatMap { $0.accounts.map(\.accountSelector) })
+        defer { withExtendedLifetime((lock, lease)) {} }
+        let control = WorkflowRunControl(directories: directories)
+        var identity: WorkflowRunIdentity?
+        defer { if let identity { control.finish(identity) } }
+        beginActivity(runID: runID, sensitiveValues: configuration.clients.flatMap { $0.accounts.map(\.accountSelector) })
         defer { endActivity() }
         currentPlanID = nil
         guard var plan = configuration.plans.first(where: { $0.id == planID }) else {
@@ -290,6 +328,11 @@ public final class WorkflowRunner {
                 throw CommandRunnerError.executableNotFound(configuration.cliPath)
             }
             lock = try ProcessLock(url: directories.lock)
+            if let lock {
+                let current = WorkflowRunIdentity(runID: runID, planID: planID, lockID: lock.identity)
+                try control.activate(current)
+                identity = current
+            }
             lease = CaffeinateLease()
             try MAAConfigurationWriter(directories: directories).prepare(
                 configuration,
@@ -416,7 +459,7 @@ public final class WorkflowRunner {
                 visitedSteps += clientStepCount
                 emit(
                     .runningTask,
-                    "\(clientText(client))的今日任务已全部完成，未启动",
+                    "\(clientText(client))的今日任务已全部处理，未启动",
                     Double(visitedSteps) / Double(totalSteps),
                     .info,
                     client: client
@@ -500,7 +543,7 @@ public final class WorkflowRunner {
                     visitedSteps += enabledTasks.count
                     emit(
                         .runningTask,
-                        "\(accountText(account))的今日任务已全部完成，无需再次准备",
+                        "\(accountText(account))的今日任务已全部处理，无需再次准备",
                         Double(visitedSteps) / Double(totalSteps),
                         .info,
                         client: client,
@@ -560,7 +603,7 @@ public final class WorkflowRunner {
                         visitedSteps += 1
                         emit(
                             .runningTask,
-                            "\(accountText(account))：\(task.title)今日已完成，已跳过",
+                            "\(accountText(account))：\(task.title)今日已处理，已跳过",
                             Double(visitedSteps) / Double(totalSteps),
                             .info,
                             client: client,
@@ -660,14 +703,14 @@ public final class WorkflowRunner {
                         let details = [result.totalDrops.map { "总掉落：" + $0 }, result.isResolved ? nil : outcome.failureDetails]
                             .compactMap { $0 }.joined(separator: "\n")
                         emit(.runningTask, "\(accountText(account))：理智作战\(outcome.fightDescription ?? result.description)",
-                             Double(visitedSteps) / Double(totalSteps), result.reason == .navigationUnavailable ? .warning : result.isResolved ? .success : result.status == .failed ? .error : .warning,
+                             Double(visitedSteps) / Double(totalSteps), result.status == .manuallyHandled ? .info : result.reason == .navigationUnavailable ? .warning : result.isResolved ? .success : result.status == .failed ? .error : .warning,
                              client: client, account: account, task: task,
                              details: details.isEmpty ? nil : details,
                              fightResult: result)
                         if result.status == .unconfirmed { break accountLoop }
                     }
                     if outcome.succeeded {
-                        if outcome.fightResult?.status != .unnecessary { report.succeededSteps += 1 }
+                        if outcome.fightResult == nil || outcome.fightResult?.status == .completed { report.succeededSteps += 1 }
                         if outcome.fightResult == nil { state.completedSteps.insert(key) }
                         state.updatedAt = Date()
                         do { try stateStore.save(state) }
@@ -771,6 +814,7 @@ public final class WorkflowRunner {
                 let result = state.fightResults?[key]
                 if state.needsFightConfirmation(key) { report.unconfirmedSteps += 1 }
                 if result?.status == .unnecessary { report.unnecessarySteps += 1 }
+                if result?.status == .manuallyHandled { report.manuallyHandledSteps += 1 }
                 if weeklyAnnihilation.status(for: plan.fight.weeklyAnnihilation, client: client, accountID: account.id, at: now()) == .pending {
                     report.pendingWeeklyAnnihilation += 1
                 }
@@ -1704,8 +1748,9 @@ public final class WorkflowRunner {
         let weeklyStatus = weekly.status(for: plan.fight.weeklyAnnihilation, client: client, accountID: account.id, at: now())
         let previous = state.fightProgress?[key]
         let needsAnnihilation = FightProgress.needsAnnihilation(previous, weeklyStatus: weeklyStatus)
-        let needsRegularTarget = FightStagePolicy.requiresExplicitRegularStage(in: plan.fight)
-            || (previous?.annihilation != nil && previous?.regular?.isResolved != true)
+        let needsRegularTarget = previous?.isRegularManuallyHandled != true
+            && (FightStagePolicy.requiresExplicitRegularStage(in: plan.fight)
+                || (previous?.annihilation != nil && previous?.regular?.isResolved != true))
         let resolution = FightStagePolicy.resolve(plan.fight, memory: memory, clientID: client.id, accountID: account.id)
         var stage: String
         var useCurrentStage = false
@@ -1760,6 +1805,7 @@ public final class WorkflowRunner {
                  client: client, account: account, task: .fight)
         }
         for isAnnihilation in (needsAnnihilation ? [true, false] : [false]) {
+            if !isAnnihilation, progress.isRegularManuallyHandled { continue }
             let previous = isAnnihilation ? progress.annihilation : progress.regular
             if previous?.isResolved == true { continue }
             if isAnnihilation {
@@ -1813,6 +1859,11 @@ public final class WorkflowRunner {
         if needsAnnihilation, weekly.status(for: plan.fight.weeklyAnnihilation, client: client, accountID: account.id, at: now()) == .pending {
             emit(.runningTask, "\(accountText(account))：本周剿灭尚未确认打满，后续运行将继续补打；已完成的常规任务保留",
                  0, .info, client: client, account: account, task: .fight)
+        }
+        if let handled = progress.handledRegularResult {
+            return TaskRunOutcome(succeeded: true, recoveredAfterRetry: false, notices: lastOutcome?.notices ?? [],
+                                  failureDetails: nil, fightResult: handled,
+                                  fightDescription: "：" + (phases.map { "剿灭" + $0.result.description } + ["常规" + handled.description]).joined(separator: "；"))
         }
         if let lastOutcome { return lastOutcome.summarizingFightPhases(phases) }
         let result = progress.regular ?? FightResult(status: .unconfirmed, reason: .missingEvidence)
@@ -2387,8 +2438,7 @@ public final class WorkflowRunner {
         return executable.deletingLastPathComponent().appending(path: "AutoMAAResourceProbe")
     }
 
-    private func beginActivity(sensitiveValues: [String] = []) {
-        let runID = UUID()
+    private func beginActivity(runID: UUID = UUID(), sensitiveValues: [String] = []) {
         currentRunID = runID
         currentSensitiveValues = sensitiveValues
         runProgress.reset()

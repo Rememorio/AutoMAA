@@ -80,6 +80,7 @@ private enum ScheduleSynchronizationFeedback {
 private struct ExternalRunState {
     let runID: UUID?
     let planID: UUID?
+    let controlIdentity: WorkflowRunIdentity?
     let phase: RunnerPhase
     let message: String
     let progress: Double
@@ -87,7 +88,11 @@ private struct ExternalRunState {
 
 @MainActor
 final class AppModel: ObservableObject {
-    @Published var configuration: AppConfiguration
+    @Published var configuration: AppConfiguration {
+        didSet {
+            if configuration.cliPath != oldValue.cliPath { invalidateMAAEnvironment() }
+        }
+    }
     @Published var selection: SidebarSelection = .overview {
         didSet {
             if case let .plan(planID) = selection {
@@ -99,6 +104,7 @@ final class AppModel: ObservableObject {
     @Published var activityEntries: [LogEntry]
     @Published var activitySearch = ""
     @Published var activityFilter: ActivityFilter = .all
+    @Published private(set) var activityNavigationRequest: ActivityNavigationRequest?
     @Published var phase: RunnerPhase = .idle
     @Published var statusMessage = "等待开始"
     @Published var progress = 0.0
@@ -146,9 +152,12 @@ final class AppModel: ObservableObject {
     private let maaMaintenanceStore: MAAMaintenanceStore
     private let importantNotificationCenter: ImportantNotificationCenter
     private let commandRunner = CommandRunner()
+    private let maaEnvironmentCheck: @Sendable (String) async throws -> CommandResult
     private let configuredRunnerExecutableURL: URL?
     private let resourceProbeExecutable: URL?
     private var saveTask: Task<Void, Never>?
+    private var maaEnvironmentTask: Task<Void, Never>?
+    private var maaEnvironmentRequestID: UUID?
     private var workflowTask: Task<Void, Never>?
     private var automaticMAAUpdateWakeTask: Task<Void, Never>?
     private var lastMAACoreUpdateAttempt: Date?
@@ -175,10 +184,14 @@ final class AppModel: ObservableObject {
         resourceProbeExecutable: URL? = nil,
         softwareUpdateService: (any SoftwareUpdateServing)? = nil,
         applicationUpdateAvailabilityValidator: (@MainActor () throws -> Void)? = nil,
-        releaseNotesService: any ReleaseNotesServing = ReleaseNotesService()
+        releaseNotesService: any ReleaseNotesServing = ReleaseNotesService(),
+        maaEnvironmentCheck: @escaping @Sendable (String) async throws -> CommandResult = { path in
+            try await CommandRunner().run(executable: path, arguments: ["version", "--batch"], timeout: 20)
+        }
     ) {
         self.directories = directories
         self.releaseNotesService = releaseNotesService
+        self.maaEnvironmentCheck = maaEnvironmentCheck
         releaseNotesCache = ReleaseNotesCache(directories: directories)
         self.checksForUpdatesAutomatically = checksForUpdatesAutomatically
         self.allowsAutomaticMAAMaintenance = allowsAutomaticMAAMaintenance
@@ -255,6 +268,7 @@ final class AppModel: ObservableObject {
 
     deinit {
         saveTask?.cancel()
+        maaEnvironmentTask?.cancel()
         workflowTask?.cancel()
         automaticMAAUpdateWakeTask?.cancel()
         applicationUpdateTask?.cancel()
@@ -290,7 +304,7 @@ final class AppModel: ObservableObject {
     }
 
     var canCancelRun: Bool {
-        isRunning && workflowTask != nil && !isCancellingRun
+        !isCancellingRun && ((isRunning && workflowTask != nil) || externalRunState?.controlIdentity != nil)
     }
 
     var activeRunID: UUID? {
@@ -458,13 +472,15 @@ final class AppModel: ObservableObject {
     func saveNow(showConfirmation: Bool = true) -> Bool {
         do {
             refreshExternalRunState()
-            if !isWorkflowRunning {
+            if !isWorkflowRunning,
+               !ConfigurationValidator.structuralProblems(in: configuration).contains(where: { $0.severity == .error }) {
                 try MAAConfigurationWriter(directories: directories).prepare(
                     configuration,
                     fightStageMemory: fightStageMemory
                 )
             }
             try configurationStore.save(configuration)
+            synchronizeSavedSchedulesIfNeeded()
             configurationSaveError = nil
             if showConfirmation { showBanner("配置已保存") }
             return true
@@ -486,7 +502,7 @@ final class AppModel: ObservableObject {
 
     func runTitle(for planID: UUID, readyTitle: String = "运行方案") -> String {
         let state = continuation(for: planID)
-        if state.pending == 0 { return state.unconfirmed > 0 ? "结果待确认" : "今日已完成" }
+        if state.pending == 0 { return state.unconfirmed > 0 ? "结果待确认" : state.completionTitle }
         if state.unconfirmed > 0 { return "继续其他任务" }
         return state.hasStarted ? "继续未完成" : readyTitle
     }
@@ -504,6 +520,29 @@ final class AppModel: ObservableObject {
     }
 
     var isFightRecoveryBusy: Bool { isWorkflowRunning || applicationUpdateState.blocksWorkflow }
+
+    func handleRegularFightWithoutRetry(_ item: FightRecoveryItem) {
+        reloadActivityHistory()
+        guard !isFightRecoveryBusy,
+              continuation(for: item.step.planID).fightRecoveryItems.contains(item),
+              item.canHandleRegularWithoutRetry else {
+            showBanner("作战状态已变化或仍在运行，请刷新后重新检查")
+            return
+        }
+        do {
+            executionState = try ExecutionStateStore(directories: directories).handleRegularWithoutRetry(item.step, expected: item.result)
+            historyStore.append(LogEntry(level: .info, message: "已人工处理：今天不再重试本方案的常规作战；原始结果仍未确认",
+                                         runID: UUID(), phase: .completed, planID: item.step.planID,
+                                         clientID: item.step.clientID, accountID: item.step.accountID, task: .fight,
+                                         runSummary: .init(completedSteps: 0, failedSteps: 0, unexecutedSteps: 0,
+                                                           totalSteps: 1, manuallyHandledSteps: 1),
+                                         fightResult: executionState.fightResults?[item.step.key]))
+            reloadActivityHistory()
+            showBanner("已记录：该账号今天不再重试本方案的常规作战")
+        } catch {
+            showBanner("处理结果未保存：\(error.localizedDescription)")
+        }
+    }
 
     func confirmWeeklyAnnihilation(_ step: WorkflowStep) {
         guard !isFightRecoveryBusy else {
@@ -772,20 +811,20 @@ final class AppModel: ObservableObject {
 
     func refreshMAAStatus(showResult: Bool = false) {
         guard !isCheckingMAAEnvironment else { return }
-        guard FileManager.default.isExecutableFile(atPath: configuration.cliPath) else {
+        let path = configuration.cliPath
+        guard FileManager.default.isExecutableFile(atPath: path) else {
             maaVersionSummary = "未找到 maa-cli"
             if showResult { showBanner("找不到可执行的 maa-cli") }
             return
         }
+        let requestID = UUID()
+        maaEnvironmentRequestID = requestID
         isCheckingMAAEnvironment = true
-        Task { [weak self] in
+        maaEnvironmentTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let result = try await self.commandRunner.run(
-                    executable: self.configuration.cliPath,
-                    arguments: ["version", "--batch"],
-                    timeout: 20
-                )
+                let result = try await self.maaEnvironmentCheck(path)
+                guard self.maaEnvironmentRequestID == requestID, self.configuration.cliPath == path else { return }
                 let output = SensitiveDataRedactor.redact(result.combinedOutput)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 self.maaVersionSummary = result.exitCode == 0 && !output.isEmpty
@@ -795,11 +834,22 @@ final class AppModel: ObservableObject {
                     self.showBanner(result.exitCode == 0 ? "MAA 环境检测完成" : "MAA 环境检测失败")
                 }
             } catch {
+                guard self.maaEnvironmentRequestID == requestID, self.configuration.cliPath == path else { return }
                 self.maaVersionSummary = "检测失败：\(error.localizedDescription)"
                 if showResult { self.showBanner("MAA 环境检测失败：\(error.localizedDescription)") }
             }
             self.isCheckingMAAEnvironment = false
+            self.maaEnvironmentTask = nil
+            self.maaEnvironmentRequestID = nil
         }
+    }
+
+    private func invalidateMAAEnvironment() {
+        maaEnvironmentTask?.cancel()
+        maaEnvironmentTask = nil
+        maaEnvironmentRequestID = nil
+        isCheckingMAAEnvironment = false
+        maaVersionSummary = "尚未检测"
     }
 
     func updateMAACore(channel: MAAUpdateChannel = .stable) {
@@ -1217,8 +1267,8 @@ final class AppModel: ObservableObject {
     func restartAndInstallApplicationUpdate(_ prepared: PreparedSoftwareUpdate) {
         reloadActivityHistory()
         guard !isWorkflowRunning, !applicationUpdateState.isBusy else { return }
+        guard saveNow(showConfirmation: false) else { return }
         do {
-            saveNow(showConfirmation: false)
             try validateAutomaticUpdateAvailability()
             do {
                 applicationUpdateInstallLock = try ProcessLock(url: directories.lock)
@@ -1268,7 +1318,19 @@ final class AppModel: ObservableObject {
     }
 
     func cancelRun() {
-        guard canCancelRun, let workflowTask else { return }
+        guard canCancelRun else { return }
+        if let identity = externalRunState?.controlIdentity {
+            do {
+                try WorkflowRunControl(directories: directories).requestStop(for: identity)
+                isCancellingRun = true
+                refreshExternalRunState()
+            } catch {
+                reloadActivityHistory()
+                showBanner("无法安全停止：\(error.localizedDescription)")
+            }
+            return
+        }
+        guard let workflowTask else { return }
         isCancellingRun = true
         if runningPlanID == nil {
             statusMessage = "正在取消更新并清理临时文件"
@@ -1305,6 +1367,33 @@ final class AppModel: ObservableObject {
             showBanner("活动记录已清除")
         } catch {
             showBanner("清理活动记录失败：\(error.localizedDescription)")
+        }
+    }
+
+    func showActivity(runID: UUID) {
+        reloadActivityHistory()
+        activityNavigationRequest = nil
+        guard activityEntries.contains(where: { $0.runID == runID }) else {
+            showBanner("该次运行记录已被清除，可在活动记录中打开诊断日志目录")
+            selection = .activity
+            return
+        }
+        activitySearch = ""
+        activityFilter = .all
+        activityNavigationRequest = .init(runID: runID)
+        selection = .activity
+    }
+
+    func finishActivityNavigation(_ request: ActivityNavigationRequest) {
+        if activityNavigationRequest == request { activityNavigationRequest = nil }
+    }
+
+    func showConfigurationRepair(_ target: ConfigurationRepairTarget) {
+        switch target {
+        case .settings: selection = .settings
+        case let .plan(id): selection = .plan(id)
+        case let .client(id): selection = .client(id)
+        case let .account(clientID, accountID): selection = .account(clientID, accountID)
         }
     }
 
@@ -1576,6 +1665,7 @@ final class AppModel: ObservableObject {
         }
         scheduleSynchronizationRevision += 1
         let revision = scheduleSynchronizationRevision
+        let plans = configuration.plans
         let predecessor = scheduleSynchronizationTask
         isSynchronizingSchedules = true
         scheduleSynchronizationTask = Task { [weak self] in
@@ -1597,7 +1687,7 @@ final class AppModel: ObservableObject {
             do {
                 try await self.launchAgentManager.synchronize(
                     runnerURL: self.runnerExecutableURL,
-                    plans: self.configuration.plans
+                    plans: plans
                 )
                 guard revision == self.scheduleSynchronizationRevision else { return }
                 self.installedPlanIDs = self.launchAgentManager.installedPlanIDs
@@ -1610,6 +1700,15 @@ final class AppModel: ObservableObject {
             guard revision == self.scheduleSynchronizationRevision else { return }
             self.isSynchronizingSchedules = false
             self.scheduleSynchronizationTask = nil
+        }
+    }
+
+    private func synchronizeSavedSchedulesIfNeeded() {
+        let desired = Set(configuration.plans.filter(\.schedule.enabled).map(\.id))
+        if desired != launchAgentManager.installedPlanIDs || configuration.plans.contains(where: {
+            $0.schedule.enabled && !launchAgentManager.isCurrent(runnerURL: runnerExecutableURL, plan: $0)
+        }) {
+            enqueueScheduleSynchronization(debounce: true)
         }
     }
 
@@ -1670,6 +1769,7 @@ final class AppModel: ObservableObject {
             maaUpdateActivity?.phase = event.phase
             maaUpdateActivity?.message = event.message
             maaUpdateActivity?.details = event.log.details
+            maaUpdateActivity?.runID = event.log.runID
             if let information = event.log.updateInformation { maaUpdateActivity?.information = information }
         }
         activityEntries.append(event.log)
@@ -1683,19 +1783,32 @@ final class AppModel: ObservableObject {
         }
         guard ProcessLock.isHeld(at: directories.lock) else {
             let ended = externalRunState != nil
+            if isCancellingRun, let runID = externalRunState?.runID {
+                if let terminal = activityEntries.last(where: { $0.runID == runID }),
+                   terminal.phase == .cancelled || terminal.phase == .failed {
+                    showBanner(terminal.message)
+                }
+            }
             externalRunState = nil
+            isCancellingRun = false
             if ended {
                 resumeAutomaticApplicationUpdateIfNeeded()
                 resumeAutomaticMAAUpdateIfNeeded()
             }
             return
         }
-        let latest = latestExternalRunEntry()
+        let control = WorkflowRunControl(directories: directories)
+        let identity = control.activeRun()
+        let latest = latestExternalRunEntry().flatMap { entry in
+            identity == nil || entry.runID == identity?.runID ? entry : nil
+        }
+        isCancellingRun = identity.map { control.isStopRequested(for: $0) } ?? false
         externalRunState = ExternalRunState(
-            runID: latest?.runID,
-            planID: latest?.planID,
-            phase: latest?.phase ?? .preparing,
-            message: latest?.message ?? "定时任务正在启动",
+            runID: identity?.runID ?? latest?.runID,
+            planID: identity?.planID ?? latest?.planID,
+            controlIdentity: identity,
+            phase: isCancellingRun ? .closing : latest?.phase ?? .preparing,
+            message: isCancellingRun ? "正在安全停止并释放当前连接" : latest?.message ?? "定时任务正在启动",
             progress: latest?.progress ?? 0
         )
     }
