@@ -77,7 +77,7 @@ enum StartupFailureClassifier {
         if isMAACoreInitializationFailure(output) {
             return .coreInitializationFailed
         }
-        if result.timedOut || isGameOffline(output)
+        if result.stopReason == .startupScreenshotFailure || result.timedOut || isGameOffline(output)
             || (result.exitCode != 0 && isScreenshotConnectionFailure(output)) {
             return .connectionLost
         }

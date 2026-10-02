@@ -1,25 +1,32 @@
 import Darwin
 import Foundation
 
+public enum CommandStopReason: Equatable, Sendable {
+    case startupScreenshotFailure
+}
+
 public struct CommandResult: Sendable {
     public let exitCode: Int32
     public let standardOutput: String
     public let standardError: String
     public let timedOut: Bool
     public let cancelled: Bool
+    public let stopReason: CommandStopReason?
 
     public init(
         exitCode: Int32,
         standardOutput: String,
         standardError: String,
         timedOut: Bool,
-        cancelled: Bool = false
+        cancelled: Bool = false,
+        stopReason: CommandStopReason? = nil
     ) {
         self.exitCode = exitCode
         self.standardOutput = standardOutput
         self.standardError = standardError
         self.timedOut = timedOut
         self.cancelled = cancelled
+        self.stopReason = stopReason
     }
 
     public var combinedOutput: String {
@@ -47,7 +54,8 @@ protocol CommandRunning: Sendable {
         arguments: [String],
         environment: [String: String],
         timeout: TimeInterval,
-        observeCancellation: Bool
+        observeCancellation: Bool,
+        startupScreenshotPolicy: StartupScreenshotPolicy?
     ) async throws -> CommandResult
 }
 
@@ -60,6 +68,18 @@ public struct CommandRunner: CommandRunning, Sendable {
         environment: [String: String] = [:],
         timeout: TimeInterval = 7_200,
         observeCancellation: Bool = true
+    ) async throws -> CommandResult {
+        try await run(executable: executable, arguments: arguments, environment: environment,
+                      timeout: timeout, observeCancellation: observeCancellation, startupScreenshotPolicy: nil)
+    }
+
+    func run(
+        executable: String,
+        arguments: [String],
+        environment: [String: String],
+        timeout: TimeInterval,
+        observeCancellation: Bool,
+        startupScreenshotPolicy: StartupScreenshotPolicy?
     ) async throws -> CommandResult {
         guard FileManager.default.isExecutableFile(atPath: executable) else {
             throw CommandRunnerError.executableNotFound(executable)
@@ -78,6 +98,17 @@ public struct CommandRunner: CommandRunning, Sendable {
             FileManager.default.createFile(atPath: stderrURL.path, contents: nil)
             let stdoutHandle = try FileHandle(forWritingTo: stdoutURL)
             let stderrHandle = try FileHandle(forWritingTo: stderrURL)
+            defer {
+                try? stdoutHandle.close()
+                try? stderrHandle.close()
+            }
+            var stdoutTail = try startupScreenshotPolicy.map { _ in try CommandOutputTail(url: stdoutURL) }
+            var stderrTail = try startupScreenshotPolicy.map { _ in try CommandOutputTail(url: stderrURL) }
+            defer {
+                try? stdoutTail?.handle.close()
+                try? stderrTail?.handle.close()
+            }
+            var screenshotMonitor = startupScreenshotPolicy.map { StartupScreenshotMonitor(policy: $0) }
 
             let process = Process()
             process.executableURL = URL(filePath: executable)
@@ -103,14 +134,33 @@ public struct CommandRunner: CommandRunning, Sendable {
             let deadline = ContinuousClock.now.advanced(by: .seconds(timeout))
             var timedOut = false
             var cancelled = false
+            var stopReason: CommandStopReason?
             while process.isRunning,
                   ContinuousClock.now < deadline,
                   (!observeCancellation || !Task.isCancelled) {
+                if screenshotMonitor != nil {
+                    let lines = (((try? stdoutTail?.readLines()) ?? []) + ((try? stderrTail?.readLines()) ?? []))
+                        .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                    // File streams do not preserve their relative ordering. Any other output in
+                    // the same batch conservatively resets the streak instead of forcing a restart.
+                    if let progress = lines.first(where: { !StartupFailureClassifier.isScreenshotConnectionFailure($0) }) {
+                        _ = screenshotMonitor?.consume(progress, at: .now)
+                    } else {
+                        for line in lines {
+                            if screenshotMonitor?.consume(line, at: .now) == true {
+                                stopReason = .startupScreenshotFailure
+                            }
+                        }
+                    }
+                    if stopReason != nil, process.isRunning { break }
+                    stopReason = nil
+                }
                 try? await Task.sleep(for: .milliseconds(150))
             }
             if process.isRunning {
                 cancelled = observeCancellation && Task.isCancelled
-                timedOut = !cancelled
+                if cancelled { stopReason = nil }
+                timedOut = !cancelled && stopReason == nil
                 // Git and download helpers must exit before their staging directory is removed.
                 await Task.detached {
                     kill(signalTarget, SIGTERM)
@@ -124,6 +174,8 @@ public struct CommandRunner: CommandRunning, Sendable {
                         try? await Task.sleep(for: .milliseconds(100))
                     }
                 }.value
+            } else {
+                stopReason = nil
             }
             try? stdoutHandle.close()
             try? stderrHandle.close()
@@ -135,7 +187,8 @@ public struct CommandRunner: CommandRunning, Sendable {
                 standardOutput: stdout.trimmingCharacters(in: .whitespacesAndNewlines),
                 standardError: stderr.trimmingCharacters(in: .whitespacesAndNewlines),
                 timedOut: timedOut,
-                cancelled: cancelled
+                cancelled: cancelled,
+                stopReason: stopReason
             )
         }
         if observeCancellation {

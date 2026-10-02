@@ -101,7 +101,7 @@ private actor StopTestCommands: CommandRunning {
     private(set) var wasCancelled = false
 
     func run(executable: String, arguments: [String], environment: [String: String], timeout: TimeInterval,
-             observeCancellation: Bool) async throws -> CommandResult {
+             observeCancellation: Bool, startupScreenshotPolicy: StartupScreenshotPolicy?) async throws -> CommandResult {
         if arguments.first == "run" {
             didStartTask = true
             do { try await Task.sleep(for: .seconds(20)) }

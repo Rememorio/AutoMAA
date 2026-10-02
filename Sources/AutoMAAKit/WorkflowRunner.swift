@@ -1540,7 +1540,8 @@ public final class WorkflowRunner {
             lastResult = await runCommand(
                 executable: configuration.cliPath,
                 arguments: arguments,
-                timeout: timeoutPolicy.startup
+                timeout: timeoutPolicy.startup,
+                startupScreenshotPolicy: .standard
             )
             guard !lastResult.cancelled, !Task.isCancelled else { throw RuntimeError.cancelled }
             let detail = shortOutput(lastResult, sensitiveValues: [selector].compactMap { $0 })
@@ -1563,7 +1564,9 @@ public final class WorkflowRunner {
                 break
             }
             if outcome == .connectionLost {
-                let message = if lastResult.timedOut {
+                let message = if lastResult.stopReason == .startupScreenshotFailure {
+                    "连续截图失败，已提前结束账号准备，正在重启\(clientText(client))后恢复\(accountText(account))"
+                } else if lastResult.timedOut {
                     "\(accountText(account))准备超时，正在重启\(clientText(client))后恢复"
                 } else if StartupFailureClassifier.isGameOffline(detail) {
                     "检测到游戏连接离线，正在重启\(clientText(client))后恢复\(accountText(account))"
@@ -1969,9 +1972,13 @@ public final class WorkflowRunner {
         }
         var outcome = try await runTask(.fight, plan: phasePlan, account: account, client: client, configuration: configuration)
         guard var result = outcome.fightResult else { return outcome }
+        if !result.isResolved, result.times == 0, result.stage?.isEmpty != false, !stage.isEmpty {
+            result.stage = stage
+        }
         if useCurrentStage, result.isResolved, result.times > 0, result.stage != stage || result.kind != .regular {
             result.status = .unconfirmed
             result.reason = .unexpectedStage
+            result.failurePhase = .battleOrSettlement
             outcome = TaskRunOutcome(succeeded: false, recoveredAfterRetry: false, notices: outcome.notices,
                                      failureDetails: outcome.failureDetails)
         }
@@ -2442,7 +2449,8 @@ public final class WorkflowRunner {
         timeout: TimeInterval,
         environment: [String: String] = [:],
         configurationDirectory: URL? = nil,
-        ignoreCancellation: Bool = false
+        ignoreCancellation: Bool = false,
+        startupScreenshotPolicy: StartupScreenshotPolicy? = nil
     ) async -> CommandResult {
         let command = arguments.first(where: { !$0.hasPrefix("-") }) ?? URL(filePath: executable).lastPathComponent
         let result: CommandResult
@@ -2454,7 +2462,8 @@ public final class WorkflowRunner {
                 arguments: arguments,
                 environment: commandEnvironment,
                 timeout: timeout,
-                observeCancellation: !ignoreCancellation
+                observeCancellation: !ignoreCancellation,
+                startupScreenshotPolicy: startupScreenshotPolicy
             )
         } catch {
             result = CommandResult(

@@ -39,6 +39,37 @@ private func settlementCallbacks(stage: String?, kind: FightKind?, times: Int = 
 }
 
 final class FightExecutionTests: XCTestCase {
+    func testFailurePhaseUsesObservedCallbacksWithoutGuessingWhyPreparationFailed() {
+        var observation = FightObservation()
+        let unknown = observation.result(for: command(exit: 1), configuredStage: nil)
+        XCTAssertEqual(unknown.failurePhase, .unknown)
+        XCTAssertTrue(unknown.description.contains("具体原因未确认"))
+        observation.consume(chainStart)
+        observation.consume(callback("SubTaskStart", #"{"taskchain":"Fight","details":{"task":"LastOrCurBattleBegin"}}"#))
+        XCTAssertEqual(observation.result(for: command(exit: 1), configuredStage: "ZZ-EX-4").failurePhase, .navigation)
+        observation.consume(callback("SubTaskStart", #"{"taskchain":"Fight","first":["FightBegin"],"details":{"task":"StartButton1"}}"#))
+        let preparation = observation.result(for: command(exit: 1), configuredStage: "ZZ-EX-4")
+        XCTAssertEqual(preparation.status, .failed)
+        XCTAssertEqual(preparation.reason, .commandFailed)
+        XCTAssertEqual(preparation.failurePhase, .battlePreparation)
+        XCTAssertFalse(FightStagePolicy.canChangeStage(after: preparation))
+        XCTAssertTrue(preparation.description.contains("目标：ZZ-EX-4"))
+        XCTAssertTrue(preparation.description.contains("开战准备阶段"))
+        observation.consume(battleStart)
+        let interrupted = observation.result(for: command(exit: 1), configuredStage: "ZZ-EX-4")
+        XCTAssertEqual(interrupted.status, .unconfirmed)
+        XCTAssertEqual(interrupted.failurePhase, .battleOrSettlement)
+        XCTAssertFalse(FightStagePolicy.canChangeStage(after: interrupted))
+    }
+
+    func testFailurePhaseIsOptionalInExistingHistoryAndRoundTripsInNewResults() throws {
+        let old = try JSONDecoder().decode(FightResult.self, from: Data(#"{"status":"failed","times":0,"reason":"commandFailed"}"#.utf8))
+        XCTAssertNil(old.failurePhase)
+        let value = FightResult(status: .failed, stage: "ZZ-EX-4", reason: .commandFailed, failurePhase: .battlePreparation)
+        XCTAssertEqual(try JSONDecoder().decode(FightResult.self, from: JSONEncoder().encode(value)), value)
+        XCTAssertFalse(FightResult(status: .completed, stage: "1-7", times: 1, failurePhase: .unknown).description.contains("阶段"))
+    }
+
     func testRejectedExplicitStageCanFallbackOnlyBeforeTheTaskStarts() {
         let rejection = "[test][ERR] Cannot set stage ZZ-7"
         var observation = FightObservation()
@@ -424,7 +455,7 @@ private actor FightTestCommands: CommandRunning {
     }
 
     func run(executable: String, arguments: [String], environment: [String: String], timeout: TimeInterval,
-             observeCancellation: Bool) async throws -> CommandResult {
+             observeCancellation: Bool, startupScreenshotPolicy: StartupScreenshotPolicy?) async throws -> CommandResult {
         if arguments.first == "startup", blockStateSave {
             try FileManager.default.removeItem(at: directories.executionState)
             try FileManager.default.createDirectory(at: directories.executionState, withIntermediateDirectories: true)
@@ -520,6 +551,29 @@ private final class FightFixture {
 
 @MainActor
 final class FightWorkflowTests: XCTestCase {
+    func testFailedCurrentStageKeepsConfirmedTargetAndDoesNotStartFallbackOrMarkCompletion() async throws {
+        let fixture = try FightFixture()
+        defer { fixture.cleanup() }
+        fixture.plan.fight.stageStrategy = .rememberedRegular
+        fixture.plan.fight.fallbackStage = "1-7"
+        fixture.inspection = .regular("ZZ-EX-4")
+        let callbacks = chainStart + "\n" + callback("SubTaskStart", #"{"taskchain":"Fight","first":["FightBegin"],"details":{"task":"StartButton1"}}"#)
+            + "\n" + callback("TaskChainError", #"{"taskchain":"Fight"}"#)
+        let (report, calls) = await fixture.run([.init(result: command(exit: 1), callbacks: callbacks)])
+        XCTAssertFalse(report.isSuccess)
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(try parameters(calls[0])["stage"] as? String, "")
+        let result = try XCTUnwrap(fixture.state.fightResults?[fixture.step.key])
+        XCTAssertEqual(result.stage, "ZZ-EX-4")
+        XCTAssertEqual(result.failurePhase, .battlePreparation)
+        XCTAssertEqual(result.reason, .commandFailed)
+        XCTAssertNil(result.fallbackFrom)
+        XCTAssertFalse(fixture.state.completedSteps.contains(fixture.step.key))
+        XCTAssertTrue(fixture.runtime.events.contains {
+            $0.log.level == .error && $0.message.contains("ZZ-EX-4") && $0.message.contains("开战准备阶段")
+        })
+    }
+
     func testManualHandlingSkipsRegularWithoutBlockingOtherTasksOrWeeklyTopUps() async throws {
         for priority in [false, true] {
             let fixture = try FightFixture(priority: priority, award: true)
@@ -602,6 +656,7 @@ final class FightWorkflowTests: XCTestCase {
             XCTAssertFalse(report.isSuccess)
             XCTAssertEqual(calls.count, 1)
             XCTAssertEqual(fixture.state.fightResults?[fixture.step.key]?.reason, .unexpectedStage)
+            XCTAssertEqual(fixture.state.fightResults?[fixture.step.key]?.failurePhase, .battleOrSettlement)
             XCTAssertTrue(fixture.state.needsFightConfirmation(fixture.step.key))
             XCTAssertNil(try FightStageMemoryStore(directories: fixture.directories).load().stage(
                 clientID: fixture.client.id, accountID: fixture.account.id))

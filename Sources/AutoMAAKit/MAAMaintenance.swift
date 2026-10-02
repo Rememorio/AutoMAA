@@ -404,6 +404,10 @@ enum MAAMaintenanceFailureClassifier {
         guard !result.cancelled, !result.timedOut else { return false }
         let output = result.combinedOutput.lowercased()
         guard result.exitCode != 0 || output.contains("failed to update resource repository") else { return false }
+        let failedHTTP2Stream = output.split(separator: "\n").contains { line in
+            (line.contains("http/2 stream") || line.contains("http2 stream"))
+                && (line.contains("not closed cleanly") || line.contains("was reset") || line.contains("stream error"))
+        }
         return [
             "couldn't connect",
             "could not connect",
@@ -423,6 +427,7 @@ enum MAAMaintenanceFailureClassifier {
             "early eof",
             "peer disconnected",
             "connection lost",
-        ].contains { output.contains($0) }
+            "error in the http2 framing layer",
+        ].contains { output.contains($0) } || failedHTTP2Stream
     }
 }

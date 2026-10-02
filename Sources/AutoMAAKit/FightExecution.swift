@@ -22,7 +22,20 @@ public enum FightStopReason: String, Codable, Sendable {
         case .unexpectedStage: "实际作战与已确认的常规目标不符；请检查游戏与 MAA 资源"
         case .interruptedBattle: "作战被中断，结果未确认；请检查游戏结果"
         case .missingEvidence: "未取得有效作战结果；请检查游戏后重新尝试"
-        case .commandFailed: "MAA 执行失败"
+        case .commandFailed: "MAA 执行失败，具体原因未确认"
+        }
+    }
+}
+
+public enum FightFailurePhase: String, Codable, Sendable {
+    case navigation, battlePreparation, battleOrSettlement, unknown
+
+    public var title: String {
+        switch self {
+        case .navigation: "选关阶段"
+        case .battlePreparation: "开战准备阶段"
+        case .battleOrSettlement: "作战或结算阶段"
+        case .unknown: "失败阶段未确认"
         }
     }
 }
@@ -36,10 +49,12 @@ public struct FightResult: Codable, Equatable, Sendable {
     public var kind: FightKind?
     public var unrecognizedSettlements: Int?
     public var fallbackFrom: String?
+    public var failurePhase: FightFailurePhase?
 
     public init(status: FightResultStatus, stage: String? = nil, times: Int = 0,
                 reason: FightStopReason? = nil, totalDrops: String? = nil, kind: FightKind? = nil,
-                unrecognizedSettlements: Int? = nil, fallbackFrom: String? = nil) {
+                unrecognizedSettlements: Int? = nil, fallbackFrom: String? = nil,
+                failurePhase: FightFailurePhase? = nil) {
         self.status = status
         self.stage = stage
         self.times = times
@@ -48,6 +63,7 @@ public struct FightResult: Codable, Equatable, Sendable {
         self.kind = kind
         self.unrecognizedSettlements = unrecognizedSettlements
         self.fallbackFrom = fallbackFrom
+        self.failurePhase = failurePhase
     }
 
     public var isResolved: Bool { status == .completed || status == .unnecessary || status == .manuallyHandled }
@@ -60,9 +76,17 @@ public struct FightResult: Codable, Equatable, Sendable {
         case .failed: "失败"
         case .manuallyHandled: "已人工处理，今天不再重试"
         }
-        let count = times > 0 ? "（\(stage ?? "作战") × \((unrecognizedSettlements ?? 0) > 0 ? "至少 " : "")\(times)）" : ""
+        let count: String
+        if times > 0 {
+            count = "（\(stage ?? "作战") × \((unrecognizedSettlements ?? 0) > 0 ? "至少 " : "")\(times)）"
+        } else if !isResolved, let stage, !stage.isEmpty {
+            count = "（目标：\(stage)）"
+        } else {
+            count = ""
+        }
         let fallback = fallbackFrom.map { " · 兜底作战（原目标：\($0.isEmpty ? "游戏当前/上次" : $0)）" } ?? ""
-        return label + count + (reason.map { " · \($0.title)" } ?? "") + fallback
+        let phase = !isResolved ? failurePhase.map { " · \($0.title)" } ?? "" : ""
+        return label + count + phase + (reason.map { " · \($0.title)" } ?? "") + fallback
     }
 }
 
@@ -144,6 +168,7 @@ struct FightObservation: Sendable {
     private var timesLimit = false
     private var enteredFightLoop = false
     private var navigationFailed = false
+    private var navigationStarted = false
     private var combatScreenObserved = false
     private var chainStarted = false
     private var chainCompleted = false
@@ -164,6 +189,9 @@ struct FightObservation: Sendable {
         let details = event["details"] as? [String: Any] ?? [:]
         let task = (details["task"] as? String ?? "").split(separator: "@").last.map(String.init) ?? ""
         let inFightLoop = (event["first"] as? [String]) == ["FightBegin"]
+        if task == "LastOrCurBattleBegin" || event["subtask"] as? String == "StageNavigationTask" {
+            navigationStarted = true
+        }
         if kind == "TaskChainStart" { chainStarted = true }
         if kind == "TaskChainCompleted" { chainCompleted = true }
         if kind == "TaskChainStopped" { chainStopped = true }
@@ -244,7 +272,8 @@ struct FightObservation: Sendable {
         let kind = kind ?? (configuredStage.map(FightStagePolicy.isAnnihilation) == true ? .annihilation : nil)
         func result(_ status: FightResultStatus, _ reason: FightStopReason? = nil) -> FightResult {
             FightResult(status: status, stage: stage, times: count, reason: reason, totalDrops: summary?.totalDrops, kind: kind,
-                        unrecognizedSettlements: unrecognizedSettlements > 0 ? unrecognizedSettlements : nil)
+                        unrecognizedSettlements: unrecognizedSettlements > 0 ? unrecognizedSettlements : nil,
+                        failurePhase: status == .failed || status == .unconfirmed ? failurePhase : nil)
         }
         if command.cancelled || command.timedOut || chainStopped || awaitingSettlement || offline
             || StartupFailureClassifier.isGameOffline(command.combinedOutput) {
@@ -278,6 +307,13 @@ struct FightObservation: Sendable {
         if timesLimit { return result(.unnecessary, .timesLimit) }
         if insufficient { return result(.unnecessary, .insufficientSanity) }
         return result(.unconfirmed, .missingEvidence)
+    }
+
+    private var failurePhase: FightFailurePhase {
+        if combatScreenObserved || awaitingSettlement || times > 0 { return .battleOrSettlement }
+        if enteredFightLoop { return .battlePreparation }
+        if navigationStarted || navigationFailed || rejectedStage != nil { return .navigation }
+        return .unknown
     }
 }
 

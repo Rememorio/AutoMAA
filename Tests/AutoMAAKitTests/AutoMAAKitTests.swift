@@ -70,6 +70,7 @@ private actor StubCommandRunner: CommandRunning {
     struct Call: Sendable {
         let arguments: [String]
         let timeout: TimeInterval
+        let startupScreenshotPolicy: StartupScreenshotPolicy?
     }
 
     private var startupResults: [CommandResult]
@@ -86,13 +87,14 @@ private actor StubCommandRunner: CommandRunning {
         arguments: [String],
         environment: [String: String],
         timeout: TimeInterval,
-        observeCancellation: Bool
+        observeCancellation: Bool,
+        startupScreenshotPolicy: StartupScreenshotPolicy?
     ) async throws -> CommandResult {
         if arguments.first == "run", arguments.dropFirst().first == FightStageInspection.taskName {
             try writeInspectionFixture(.unknown, environment: environment)
             return Self.success
         }
-        recordedCalls.append(Call(arguments: arguments, timeout: timeout))
+        recordedCalls.append(Call(arguments: arguments, timeout: timeout, startupScreenshotPolicy: startupScreenshotPolicy))
         switch arguments.first {
         case "dir":
             return CommandResult(
@@ -128,16 +130,17 @@ private actor MaintenanceDeadlineCommandRunner: CommandRunning {
     private(set) var timeLimits: [TimeInterval] = []
 
     func run(executable: String, arguments: [String], environment: [String: String], timeout: TimeInterval,
-             observeCancellation: Bool) async throws -> CommandResult {
+             observeCancellation: Bool, startupScreenshotPolicy: StartupScreenshotPolicy?) async throws -> CommandResult {
         guard arguments.first == "hot-update" else {
             return try await CommandRunner().run(executable: executable, arguments: arguments,
                                                  environment: environment, timeout: timeout,
-                                                 observeCancellation: observeCancellation)
+                                                 observeCancellation: observeCancellation,
+                                                 startupScreenshotPolicy: startupScreenshotPolicy)
         }
         timeLimits.append(timeout)
         if timeLimits.count == 1 {
             return .init(exitCode: 0, standardOutput: "",
-                         standardError: "Failed to update resource repository: Peer disconnected", timedOut: false)
+                         standardError: "Failed to update resource repository: Error in the HTTP2 framing layer", timedOut: false)
         }
         return .init(exitCode: 15, standardOutput: "", standardError: "", timedOut: true)
     }
@@ -2315,6 +2318,25 @@ final class AutoMAAKitTests: XCTestCase {
         )))
     }
 
+    func testMaintenanceRetriesHTTP2TransportFailuresWithoutRetryingValidationErrors() {
+        for error in ["Error in the HTTP2 framing layer", "HTTP/2 stream 3 was not closed cleanly: INTERNAL_ERROR (err 2)",
+                      "HTTP2 stream was reset"] {
+            XCTAssertTrue(MAAMaintenanceFailureClassifier.isTransientNetworkFailure(.init(
+                exitCode: 1, standardOutput: "", standardError: error, timedOut: false
+            )), error)
+            for result in [
+                CommandResult(exitCode: 0, standardOutput: "", standardError: error, timedOut: false),
+                CommandResult(exitCode: 1, standardOutput: "", standardError: error, timedOut: true),
+                CommandResult(exitCode: 1, standardOutput: "", standardError: error, timedOut: false, cancelled: true),
+            ] {
+                XCTAssertFalse(MAAMaintenanceFailureClassifier.isTransientNetworkFailure(result))
+            }
+        }
+        XCTAssertFalse(MAAMaintenanceFailureClassifier.isTransientNetworkFailure(.init(
+            exitCode: 1, standardOutput: "HTTP/2 stream completed successfully", standardError: "checksum mismatch", timedOut: false
+        )))
+    }
+
     @MainActor
     func testCoreUpdateDoesNotRaceWithAWorkflowLock() async throws {
         let root = temporaryRoot()
@@ -3345,6 +3367,29 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertEqual(runtime.events.count { $0.message.contains("正在重启客户端") }, 1)
         XCTAssertTrue(runtime.events.contains { $0.message.contains("截图连接异常") })
         XCTAssertFalse(runtime.events.contains { $0.message.contains("准备暂未完成") })
+    }
+
+    @MainActor
+    func testEarlyScreenshotStopUsesOneRecoveryAndOnlyMonitorsStartup() async throws {
+        let failure = CommandResult(exitCode: 0, standardOutput: "", standardError: "ScreencapFailed",
+                                    timedOut: false, stopReason: .startupScreenshotFailure)
+        for repeated in [false, true] {
+            let commands = StubCommandRunner(startupResults: repeated ? [failure, failure] : [failure])
+            let (report, runtime) = try await runTaskTimeoutScenario(tasks: [.award], commandRunner: commands, accountCount: 2)
+            let startups = await commands.calls(for: "startup")
+            let tasks = await commands.calls(for: "run")
+            XCTAssertEqual(report.isSuccess, !repeated)
+            XCTAssertTrue(startups.allSatisfy { $0.startupScreenshotPolicy == .standard })
+            XCTAssertTrue(tasks.allSatisfy { $0.startupScreenshotPolicy == nil })
+            XCTAssertEqual(runtime.events.count { $0.message.contains("正在重启客户端") }, 1)
+            XCTAssertTrue(runtime.events.contains { $0.message.contains("连续截图失败，已提前结束账号准备") })
+            XCTAssertFalse(runtime.events.contains { $0.message.contains("准备暂未完成") })
+            if repeated {
+                XCTAssertEqual(startups.count, 2)
+                XCTAssertTrue(tasks.isEmpty)
+                XCTAssertEqual(report.unexecutedSteps, 2)
+            }
+        }
     }
 
     @MainActor
