@@ -14,6 +14,10 @@ struct StartupScreenshotMonitor {
     private var lastFailure: ContinuousClock.Instant?
     private var failures = 0
 
+    init(policy: StartupScreenshotPolicy) {
+        self.policy = policy
+    }
+
     mutating func consume(_ line: String, at now: ContinuousClock.Instant) -> Bool {
         guard !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         guard StartupFailureClassifier.isScreenshotConnectionFailure(line) else {
