@@ -17,15 +17,15 @@ private final class ChunkedDownloadProtocol: URLProtocol, @unchecked Sendable {
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
-        let task = Task {
+        let task = Task { @Sendable [self] in
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1",
-                                           headerFields: ["Content-Length": String(Self.size)])!
+                                           headerFields: ["Content-Length": String(ChunkedDownloadProtocol.size)])!
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             for _ in 0..<8 {
                 do { try await Task.sleep(for: .milliseconds(50)) }
                 catch { return }
                 guard !Task.isCancelled else { return }
-                client?.urlProtocol(self, didLoad: Self.chunk)
+                client?.urlProtocol(self, didLoad: ChunkedDownloadProtocol.chunk)
             }
             client?.urlProtocolDidFinishLoading(self)
         }
