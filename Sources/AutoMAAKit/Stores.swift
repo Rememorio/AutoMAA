@@ -238,7 +238,7 @@ public struct DiagnosticLogStore: Sendable {
         let timestamp = ISO8601DateFormatter().string(from: Date())
         let body = output.isEmpty ? "(no output)" : output
         let earlyStop = result.stopReason == .startupScreenshotFailure ? " · stopped after repeated screenshot failures" : ""
-        let record = "\n[\(timestamp)] \(command) · exit \(result.exitCode)\(result.timedOut ? " · timed out" : "")\(earlyStop)\n\(body)\n"
+        let record = "\n[\(timestamp)] \(command) · exit \(result.exitCode)\(result.timedOut ? " · timed out" : "")\(result.cancelled ? " · cancelled" : "")\(earlyStop)\n\(body)\n"
         let url = url(for: runID)
         guard let data = record.data(using: .utf8) else { return }
         if !FileManager.default.fileExists(atPath: url.path) {

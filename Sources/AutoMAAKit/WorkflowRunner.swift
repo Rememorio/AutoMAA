@@ -1534,13 +1534,16 @@ public final class WorkflowRunner {
         var remainingRetries = max(0, policy.maxRetries)
         var didRestartClient = false
         var didRetry = false
+        var attempt = 0
         var lastResult = CommandResult(exitCode: -1, standardOutput: "", standardError: "", timedOut: false)
         while true {
             guard !Task.isCancelled else { throw RuntimeError.cancelled }
-            lastResult = await runCommand(
+            attempt += 1
+            lastResult = await runDiagnosticCommand(
                 executable: configuration.cliPath,
                 arguments: arguments,
                 timeout: timeoutPolicy.startup,
+                context: "\(clientText(client)) · \(accountText(account)) · 账号准备 · 第 \(attempt) 次",
                 startupScreenshotPolicy: .standard
             )
             guard !lastResult.cancelled, !Task.isCancelled else { throw RuntimeError.cancelled }
@@ -1579,8 +1582,8 @@ public final class WorkflowRunner {
                     message: message,
                     account: account,
                     details: lastResult.timedOut
-                        ? timeoutDetails(timeout: timeoutPolicy.startup, output: detail)
-                        : detail
+                        ? timeoutDetails(timeout: timeoutPolicy.startup, output: commandFailureDetails(lastResult))
+                        : commandFailureDetails(lastResult)
                 ) {
                     didRestartClient = true
                     continue
@@ -1598,7 +1601,7 @@ public final class WorkflowRunner {
                 .info,
                 client: client,
                 account: account,
-                details: detail
+                details: commandFailureDetails(lastResult)
             )
             try? await Task.sleep(for: .seconds(2))
         }
@@ -1611,7 +1614,7 @@ public final class WorkflowRunner {
             scope: diagnosis.scope,
             reason: "\(accountText(account))准备失败",
             guidance: diagnosis.guidance,
-            details: detail
+            details: commandFailureDetails(lastResult)
         )
     }
 
@@ -2042,12 +2045,16 @@ public final class WorkflowRunner {
                 : nil
             if let observationRoot { try FileManager.default.createDirectory(at: observationRoot, withIntermediateDirectories: true) }
             defer { if let observationRoot { try? FileManager.default.removeItem(at: observationRoot) } }
-            let result = await runCommand(
-                executable: configuration.cliPath,
-                arguments: ["run", taskName] + commonArguments(client),
-                timeout: timeout,
-                environment: observationRoot.map { ["MAA_STATE_DIR": $0.path] } ?? [:]
-            )
+            let result: CommandResult
+            if let observationRoot {
+                result = await runCommand(executable: configuration.cliPath,
+                    arguments: ["run", taskName] + commonArguments(client), timeout: timeout,
+                    environment: ["MAA_STATE_DIR": observationRoot.path])
+            } else {
+                result = await runDiagnosticCommand(executable: configuration.cliPath,
+                    arguments: ["run", taskName] + commonArguments(client), timeout: timeout,
+                    context: "\(clientText(client)) · \(accountText(account)) · \(task.title) · 第 \(attempt) 次")
+            }
             let evidence = if let observationRoot {
                 await Task.detached(priority: .utility) { FightCommandEvidence.read(from: observationRoot) }.value
             } else { FightCommandEvidence() }
@@ -2094,7 +2101,7 @@ public final class WorkflowRunner {
                     failureDetails: nil
                 )
             }
-            failureDetails = shortOutput(result, sensitiveValues: client.accounts.map(\.accountSelector))
+            failureDetails = commandFailureDetails(result)
             if result.timedOut {
                 guard attempt < attempts,
                       try await restartClientForRecovery(
@@ -2443,6 +2450,79 @@ public final class WorkflowRunner {
         return trimmed.isEmpty ? "default" : trimmed
     }
 
+    private func runDiagnosticCommand(
+        executable: String,
+        arguments: [String],
+        timeout: TimeInterval,
+        context: String,
+        startupScreenshotPolicy: StartupScreenshotPolicy? = nil
+    ) async -> CommandResult {
+        let root = FileManager.default.temporaryDirectory.appending(path: "automaa-diagnostics-\(UUID())", directoryHint: .isDirectory)
+        var preparationFailure: String?
+        do {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true,
+                                                   attributes: [.posixPermissions: 0o700])
+        } catch {
+            preparationFailure = "无法创建本次命令的核心诊断目录，最后执行步骤未确认"
+        }
+        let start = ContinuousClock.now
+        var result = await runCommand(executable: executable, arguments: arguments, timeout: timeout,
+            environment: preparationFailure == nil ? ["MAA_STATE_DIR": root.path] : [:],
+            startupScreenshotPolicy: startupScreenshotPolicy, logContext: context)
+        let duration = start.duration(to: .now).components
+        let elapsed = Double(duration.seconds) + Double(duration.attoseconds) / 1e18
+        let startupFailed = startupScreenshotPolicy != nil
+            && StartupFailureClassifier.commandOutcome(result: result, output: shortOutput(result)) != .ready
+        if result.exitCode != 0 || result.timedOut || result.cancelled || result.stopReason != nil
+            || startupFailed || preparationFailure != nil {
+            let summary: String
+            let output: String
+            if let preparationFailure {
+                summary = preparationFailure
+                output = ""
+            } else {
+                let secrets = currentSensitiveValues
+                let evidence = await Task.detached(priority: .utility) {
+                    MAACommandDiagnostics.read(from: root, sensitiveValues: secrets)
+                }.value
+                summary = evidence.summary
+                output = evidence.output
+            }
+            let reason = if result.cancelled { "已取消" }
+                else if result.stopReason == .startupScreenshotFailure { "连续截图失败，提前停止" }
+                else if result.timedOut { "执行超时" }
+                else if result.exitCode != 0 { "命令退出码：\(result.exitCode)" }
+                else if startupFailed { "账号准备未就绪" }
+                else { "诊断采集不可用" }
+            let metadata = "\(reason) · 耗时 \(String(format: "%.1f", elapsed)) 秒 · 上限 \(Int(timeout)) 秒"
+            result.diagnosticDetails = metadata + "\n" + summary
+            if let currentRunID {
+                diagnosticLogStore.append(
+                    CommandResult(exitCode: result.exitCode,
+                        standardOutput: metadata + "\n" + summary + (output.isEmpty ? "" : "\n\n" + output),
+                        standardError: "", timedOut: result.timedOut, cancelled: result.cancelled, stopReason: result.stopReason),
+                    command: context + " · 核心诊断", runID: currentRunID, sensitiveValues: currentSensitiveValues)
+            }
+        }
+        if preparationFailure == nil {
+            do { try FileManager.default.removeItem(at: root) }
+            catch {
+                let message = "本次命令的临时核心诊断目录未能清理：\(root.path)"
+                result.diagnosticDetails = [result.diagnosticDetails, message].compactMap { $0 }.joined(separator: "\n")
+                if let currentRunID {
+                    diagnosticLogStore.append(.init(exitCode: result.exitCode, standardOutput: message,
+                        standardError: "", timedOut: result.timedOut, cancelled: result.cancelled),
+                        command: context + " · 诊断清理", runID: currentRunID, sensitiveValues: currentSensitiveValues)
+                }
+            }
+        }
+        return result
+    }
+
+    private func commandFailureDetails(_ result: CommandResult) -> String {
+        [shortOutput(result), result.diagnosticDetails].compactMap { $0 }.joined(separator: "\n")
+    }
+
     private func runCommand(
         executable: String,
         arguments: [String],
@@ -2450,7 +2530,8 @@ public final class WorkflowRunner {
         environment: [String: String] = [:],
         configurationDirectory: URL? = nil,
         ignoreCancellation: Bool = false,
-        startupScreenshotPolicy: StartupScreenshotPolicy? = nil
+        startupScreenshotPolicy: StartupScreenshotPolicy? = nil,
+        logContext: String? = nil
     ) async -> CommandResult {
         let command = arguments.first(where: { !$0.hasPrefix("-") }) ?? URL(filePath: executable).lastPathComponent
         let result: CommandResult
@@ -2477,7 +2558,7 @@ public final class WorkflowRunner {
         if let currentRunID {
             diagnosticLogStore.append(
                 result,
-                command: command,
+                command: logContext ?? command,
                 runID: currentRunID,
                 sensitiveValues: currentSensitiveValues
             )

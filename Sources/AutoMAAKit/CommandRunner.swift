@@ -12,6 +12,7 @@ public struct CommandResult: Sendable {
     public let timedOut: Bool
     public let cancelled: Bool
     public let stopReason: CommandStopReason?
+    var diagnosticDetails: String?
 
     public init(
         exitCode: Int32,
