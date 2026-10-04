@@ -4,11 +4,12 @@
 
 | 资源 | 用途 |
 | --- | --- |
-| `AutoMAA-logo.png` | 透明背景的倾斜相框 Logo，用于 README、文档站、应用侧栏与关于页 |
+| `AutoMAA-logo.png` | 透明背景的倾斜相框 Logo，用于 README、文档站、应用侧栏、关于页和移动端应用图标 |
 | `AutoMAA-icon.png`、`AutoMAA.icns` | 渐变背景的圆框图标，圆角矩形外侧透明，仅用于 macOS 应用 |
 | `AutoMAA-slogan.png` | 项目宣传字图 |
 | `docs/public/automaa-logo.webp`、`favicon.png`、`og.png` | 透明 Logo 的网页、网站图标与分享预览版本 |
 | `docs/public/automaa-slogan.webp` | 宣传字图的网页版本 |
+| `Mobile/ios/Runner/Assets.xcassets/AppIcon.appiconset/`、`Mobile/android/app/src/main/res/mipmap-*/ic_launcher.png` | 由透明 Logo 生成的移动端应用图标，同样不属于 MIT License 的授权范围 |
 
 Logo 与图标是面向《明日方舟》角色艾雅法拉的非官方二次创作，设计上向 MAA 社区熟悉的视觉语言致意，但并非 MAA 官方 Logo。角色名称、形象及相关知识产权归其权利人所有；这些文件仅用于识别 AutoMAA 项目，不得据此主张任何官方关系或授权。
 

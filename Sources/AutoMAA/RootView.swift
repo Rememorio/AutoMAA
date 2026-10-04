@@ -64,6 +64,9 @@ struct RootView: View {
         .task {
             model.prepareApplication()
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            model.mobileAccess.stop()
+        }
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
             await model.monitorExternalActivity()

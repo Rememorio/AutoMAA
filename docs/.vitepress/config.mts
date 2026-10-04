@@ -71,6 +71,7 @@ export default defineConfig({
           { text: "理解执行流程", link: "/guide/workflow" },
           { text: "每周定时运行", link: "/guide/scheduling" },
           { text: "更新应用与 MAA", link: "/guide/updates" },
+          { text: "手机查看与控制", link: "/guide/mobile" },
         ],
       },
       {
@@ -100,6 +101,7 @@ export default defineConfig({
         items: [
           { text: "参与开发", link: "/development/" },
           { text: "文档站维护", link: "/development/docs" },
+          { text: "移动端开发", link: "/development/mobile" },
           { text: "项目关系与致谢", link: "/about/credits" },
         ],
       },

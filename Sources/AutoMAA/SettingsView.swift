@@ -12,6 +12,7 @@ struct SettingsView: View {
             applicationUpdatePanel
             maaPanel
             notificationPanel
+            MobileAccessView(controller: model.mobileAccess)
             storagePanel
         }
         .navigationTitle("全局设置")

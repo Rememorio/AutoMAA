@@ -137,6 +137,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var isTestingImportantNotification = false
 
     let directories: AppDirectories
+    lazy var mobileAccess = MobileAccessController(model: self)
     let currentApplicationVersion: String
     let currentApplicationBuild: String
     let applicationUpdateRepository: String
@@ -674,6 +675,7 @@ final class AppModel: ObservableObject {
     func prepareApplication() {
         guard !didPrepareApplication else { return }
         didPrepareApplication = true
+        mobileAccess.restore()
         reloadActivityHistory()
         synchronizeSchedules()
         refreshNotificationAuthorization()

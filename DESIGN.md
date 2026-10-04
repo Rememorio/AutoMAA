@@ -126,6 +126,12 @@ Task cards follow the plan’s step order. A configured schedule starts as a ful
 
 Release information remains visible independently of operation state. Settings shows the installed and target versions with a short list of changes; `UpdateDetailsView` is the shared native sheet for full release notes and MAA installation comparisons. Settings uses one release-notes entry with an unread marker; when an update exists, its menu distinguishes the target and installed versions. About retains a permanent current-version entry. Headings, lists and source links preserve the upstream document structure; technical validation output stays in disclosure details. Offline or missing notes never replace known version information or change update eligibility. MAA history distinguishes the installed snapshot from a successfully activated snapshot and labels upstream GUI-specific content.
 
+### Mobile companion
+
+The Flutter companion remains a work-focused control surface: three persistent destinations (总览 / 活动 / 设备), compact plan rows, native-sized controls, and explicit connection freshness. `Mobile/lib/main.dart::mobileTheme` owns the mobile adapter: system font fallback, zero letter spacing, 20-point titles, 8-point repeated-item corners, and 20-point content insets. It maps the existing teal accent (#007D78 light / #4FCCC2 dark) to semantic Material controls, with neutral gray/white or charcoal surfaces and separate warning/error tones. This is an intentional platform adaptation, not a desktop redesign. Controls retain 48-point minimum height; text wraps at large accessibility sizes. Status uses icon and text, never color alone. No decorative hero, nested panels, or gameplay artwork is introduced.
+
+Mobile modal confirmations own consequential commands. The connection strip and unresolved-operation notice remain visible independently of toast messages; details show stale state explicitly and never offer controls while disconnected. Flutter's maintained Material controls own focus, dialogs, scrolling and platform accessibility; native camera and Keychain/Keystore own hardware and credential interaction.
+
 ### Iconography
 
 Use SF Symbols. Filled task symbols are acceptable inside the 2rem task container; ordinary action symbols follow the native rendering mode. Symbols support text rather than replace it for consequential actions.

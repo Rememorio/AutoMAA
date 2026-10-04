@@ -4,6 +4,7 @@ import SwiftUI
 
 @main
 struct AutoMAAApp: App {
+    @NSApplicationDelegateAdaptor(MobileTerminationDelegate.self) private var appDelegate
     @StateObject private var model: AppModel
 
     init() {
@@ -23,6 +24,7 @@ struct AutoMAAApp: App {
     var body: some Scene {
         Window("AutoMAA", id: "main") {
             RootView()
+                .onAppear { appDelegate.mobileAccess = model.mobileAccess }
                 .environmentObject(model)
                 .frame(minWidth: 1_020, minHeight: 680)
         }
@@ -45,6 +47,19 @@ struct AutoMAAApp: App {
               arguments.indices.contains(index + 1)
         else { return nil }
         return URL(filePath: arguments[index + 1], directoryHint: .isDirectory).standardizedFileURL
+    }
+}
+
+@MainActor
+final class MobileTerminationDelegate: NSObject, NSApplicationDelegate {
+    weak var mobileAccess: MobileAccessController?
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let mobileAccess else { return .terminateNow }
+        Task {
+            await mobileAccess.shutdown()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 }
 
