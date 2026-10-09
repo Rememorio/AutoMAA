@@ -2,6 +2,7 @@ import Foundation
 
 /// Observations for diagnostics only; never used to decide task success or recovery.
 struct MAACommandDiagnostics: Sendable {
+    private(set) var firstIssue: String?
     private(set) var lastStarted: String?
     private(set) var lastCompleted: String?
     private(set) var lastError: String?
@@ -16,6 +17,7 @@ struct MAACommandDiagnostics: Sendable {
 
     var summary: String {
         var parts: [String] = []
+        if let firstIssue { parts.append("首次观察到异常：\(firstIssue)") }
         if let lastStarted { parts.append("最后观察到开始：\(lastStarted)") }
         if let lastCompleted { parts.append("最后观察到完成：\(lastCompleted)") }
         if let lastError { parts.append("最后核心错误：\(lastError)") }
@@ -72,7 +74,7 @@ struct MAACommandDiagnostics: Sendable {
         guard let range = line.range(of: marker) else {
             if isError {
                 let value = SensitiveDataRedactor.redact(line, sensitiveValues: sensitiveValues)
-                lastError = String(value.prefix(240))
+                observeIssue(value, isError: true)
                 append(value)
             }
             return
@@ -94,13 +96,22 @@ struct MAACommandDiagnostics: Sendable {
             if event == "SubTaskStart" || event == "TaskChainStart" { lastStarted = label }
             if event == "SubTaskCompleted" || event == "TaskChainCompleted" { lastCompleted = label }
         }
+        if event == "SubTaskStart", step == "OfflineConfirm" || step == "OfflineConfirmImpl" {
+            observeIssue(label, isError: false)
+        }
         if event.hasSuffix("Error") || event == "InitFailed"
             || (event == "ConnectionInfo" && (object["what"] as? String).map({ $0.hasSuffix("Failed") || $0 == "Disconnect" }) == true) {
             let fields = [event, description, object["what"] as? String, object["why"] as? String]
                 .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
-            lastError = String(SensitiveDataRedactor.redact(fields, sensitiveValues: sensitiveValues).prefix(240))
+            observeIssue(SensitiveDataRedactor.redact(fields, sensitiveValues: sensitiveValues), isError: true)
         }
         append(SensitiveDataRedactor.redact(line, sensitiveValues: sensitiveValues))
+    }
+
+    private mutating func observeIssue(_ redactedValue: String, isError: Bool) {
+        let value = String(redactedValue.prefix(240))
+        if firstIssue == nil { firstIssue = value }
+        if isError { lastError = value }
     }
 
     private mutating func append(_ line: String) {

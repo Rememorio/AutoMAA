@@ -152,13 +152,46 @@ struct CommandDiagnosticsTests {
         #expect(evidence.summary.contains("不是普通文件"))
     }
 
+    @Test("the first offline observation survives subsequent transport and task-chain errors")
+    func firstIssuePreservesFailureOrder() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "automaa-diagnostic-order-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let log = callback("SubTaskCompleted", task: "StartUpBegin", chain: "StartUp")
+            + callback("SubTaskStart", task: "OfflineConfirm", chain: "StartUp")
+            + "[ERR] Cannot get screencap: Broken pipe\n"
+            + "Assistant::append_callback | TaskChainError {\"taskchain\":\"StartUp\"}\n"
+        try writeLog(log, root: root)
+        let evidence = MAACommandDiagnostics.read(from: root, sensitiveValues: [])
+        #expect(evidence.summary.contains("首次观察到异常：StartUp / OfflineConfirm"))
+        #expect(evidence.lastError == "TaskChainError · StartUp")
+        #expect(evidence.output.contains("Broken pipe"))
+    }
+
+    @Test("the first observed error stays bounded and redacted when recent output evicts it")
+    func firstIssueSurvivesOutputEviction() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "automaa-diagnostic-first-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = "[ERR] initial fixture-private-selector diagnostic@example.invalid " + String(repeating: "错", count: 300)
+        try writeLog(first + "\n", root: root, name: "asst.bak.log")
+        try writeLog(String(repeating: callback("SubTaskCompleted", task: "LaterStep"), count: 1_000)
+            + "[ERR] final failure\n", root: root)
+        let evidence = MAACommandDiagnostics.read(from: root, sensitiveValues: ["fixture-private-selector"])
+        #expect(evidence.summary.contains("首次观察到异常：[ERR] initial [已隐藏] [已隐藏邮箱]"))
+        #expect(evidence.lastError == "[ERR] final failure")
+        #expect(!evidence.summary.contains("fixture-private-selector"))
+        #expect(!evidence.summary.contains("diagnostic@example.invalid"))
+        #expect(!evidence.output.contains("initial"))
+        #expect(evidence.output.utf8.count <= MAACommandDiagnostics.outputLimit)
+        #expect(evidence.summary.count < 500)
+    }
+
     private func writeLog(_ contents: String, root: URL, name: String = "asst.log") throws {
         try FileManager.default.createDirectory(at: root.appending(path: "debug"), withIntermediateDirectories: true)
         try Data(contents.utf8).write(to: root.appending(path: "debug/\(name)"))
     }
 
-    private func callback(_ event: String, task: String) -> String {
-        "Assistant::append_callback | \(event) {\"taskchain\":\"Mall\",\"taskid\":1,\"subtask\":\"ProcessTask\",\"details\":{\"task\":\"\(task)\"}}\n"
+    private func callback(_ event: String, task: String, chain: String = "Mall") -> String {
+        "Assistant::append_callback | \(event) {\"taskchain\":\"\(chain)\",\"taskid\":1,\"subtask\":\"ProcessTask\",\"details\":{\"task\":\"\(task)\"}}\n"
     }
 }
 
