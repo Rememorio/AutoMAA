@@ -69,6 +69,7 @@ private final class StubClientRuntime: PortProbing, GameProcessControlling {
 private actor StubCommandRunner: CommandRunning {
     struct Call: Sendable {
         let arguments: [String]
+        let isStartup: Bool
         let timeout: TimeInterval
         let startupScreenshotPolicy: StartupScreenshotPolicy?
     }
@@ -94,7 +95,14 @@ private actor StubCommandRunner: CommandRunning {
             try writeInspectionFixture(.unknown, environment: environment)
             return Self.success
         }
-        recordedCalls.append(Call(arguments: arguments, timeout: timeout, startupScreenshotPolicy: startupScreenshotPolicy))
+        let isStartup = try isStartupTask(arguments: arguments, environment: environment)
+        recordedCalls.append(Call(arguments: arguments, isStartup: isStartup, timeout: timeout,
+                                  startupScreenshotPolicy: startupScreenshotPolicy))
+        if isStartup {
+            XCTAssertTrue(arguments.contains("--no-auto-reconnect"))
+            return startupResults.isEmpty ? Self.success : startupResults.removeFirst()
+        }
+        XCTAssertFalse(arguments.contains("--no-auto-reconnect"))
         switch arguments.first {
         case "dir":
             return CommandResult(
@@ -103,8 +111,6 @@ private actor StubCommandRunner: CommandRunning {
                 standardError: "fixture has no MAA installation",
                 timedOut: false
             )
-        case "startup":
-            return startupResults.isEmpty ? Self.success : startupResults.removeFirst()
         case "run":
             let result = taskResults.isEmpty ? Self.success : taskResults.removeFirst()
             try writeFightSettlementFixture(result, environment: environment)
@@ -115,7 +121,7 @@ private actor StubCommandRunner: CommandRunning {
     }
 
     func calls(for command: String) -> [Call] {
-        recordedCalls.filter { $0.arguments.first == command }
+        recordedCalls.filter { command == "startup" ? $0.isStartup : (!$0.isStartup && $0.arguments.first == command) }
     }
 
     private static let success = CommandResult(
@@ -2574,7 +2580,7 @@ final class AutoMAAKitTests: XCTestCase {
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         let script = """
         #!/bin/zsh
-        if [[ "$1" == "run" ]]; then
+        if [[ "$1" == "run" && "${2##*-}" != "startup" ]]; then
           printf '%s\\n' \
             'Detected tags:' \
             '1. ★★★★★★ 高级资深干员, 远程位, 输出, 生存, 狙击干员'
@@ -2997,7 +3003,7 @@ final class AutoMAAKitTests: XCTestCase {
         let cli = root.appending(path: "maa-cli")
         let script = """
         #!/bin/sh
-        if [ "$1" = "run" ]; then
+        if [ "$1" = "run" ] && [ "${2##*-}" != "startup" ]; then
           mkdir -p "$MAA_STATE_DIR/debug"
           printf '%s\\n' \
             'Assistant::append_callback | SubTaskStart {"taskchain":"Fight","subtask":"ProcessTask","details":{"task":"EndOfAction"}}' \
@@ -3536,6 +3542,22 @@ final class AutoMAAKitTests: XCTestCase {
     }
 
     @MainActor
+    func testStartupAccountMismatchSkipsOnlyThatAccountWithoutRestartingClient() async throws {
+        let failure = CommandResult(exitCode: 1, standardOutput: "", standardError: "account not found", timedOut: false)
+        let commands = StubCommandRunner(startupResults: [failure, failure])
+        let (report, runtime) = try await runTaskTimeoutScenario(tasks: [.award], commandRunner: commands, accountCount: 2)
+        let startups = await commands.calls(for: "startup")
+        let tasks = await commands.calls(for: "run")
+        XCTAssertEqual(report.unexecutedSteps, 1)
+        XCTAssertEqual(report.runSummary?.completedSteps, 1)
+        XCTAssertEqual(startups.count, 3)
+        XCTAssertEqual(tasks.count, 1)
+        XCTAssertFalse(runtime.events.contains { $0.message.contains("正在重启客户端") })
+        XCTAssertTrue(runtime.events.contains { $0.message.contains("测试账号 2") && $0.message.contains("已就绪") })
+        XCTAssertTrue(startups.allSatisfy { $0.arguments.first == "run" && !$0.arguments.contains("--account-name") })
+    }
+
+    @MainActor
     func testRepeatedGameOfflineDoesNotRestartTheSameAccountTwice() async throws {
         let (report, runtime) = try await runRetryScenario(
             startupFailures: 2,
@@ -3571,7 +3593,7 @@ final class AutoMAAKitTests: XCTestCase {
         let taskCounter = root.appending(path: "task-count").path
         let script = """
         #!/bin/sh
-        if [ "$1" = "startup" ]; then
+        if [ "$1" = "run" ] && [ "${2##*-}" = "startup" ]; then
           count=0
           [ ! -f "\(startupCounter)" ] || count=$(sed -n '1p' "\(startupCounter)")
           count=$((count + 1))
@@ -3580,7 +3602,7 @@ final class AutoMAAKitTests: XCTestCase {
             printf '%s\n' '\(startupFailureOutput)' >&2
             exit 1
           fi
-        elif [ "$1" = "run" ]; then
+        elif [ "$1" = "run" ] && [ "${2##*-}" != "startup" ]; then
           count=0
           [ ! -f "\(taskCounter)" ] || count=$(sed -n '1p' "\(taskCounter)")
           count=$((count + 1))

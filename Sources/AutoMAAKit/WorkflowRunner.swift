@@ -1526,11 +1526,9 @@ public final class WorkflowRunner {
         }
 
         emit(.switchingAccount, "正在准备\(accountText(account))", 0, .info, client: client, account: account)
-        var arguments = ["startup", client.kind.maaClientType]
-        if let selector {
-            arguments += ["--account-name", selector]
-        }
-        arguments += commonArguments(client)
+        // Core cannot relaunch a native client; all lifecycle recovery belongs to this runner.
+        let name = MAAConfigurationWriter(directories: directories).startupTaskName(clientID: client.id, accountID: account.id)
+        let arguments = ["run", name, "--no-auto-reconnect"] + commonArguments(client)
         var remainingRetries = max(0, policy.maxRetries)
         var didRestartClient = false
         var didRetry = false

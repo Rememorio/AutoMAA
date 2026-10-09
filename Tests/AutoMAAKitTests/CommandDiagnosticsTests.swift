@@ -78,14 +78,14 @@ struct CommandDiagnosticsTests {
         #expect(await commands.roots.count == 2)
     }
 
-    @Test("unreadable core logs do not obstruct cancellation, checkpoint safety or client cleanup")
+    @Test("unreadable core logs do not obstruct cancellation, checkpoint safety or client cleanup",
+          arguments: [false, true])
     @MainActor
-    func captureFailureStillCleansUp() async throws {
+    func captureFailureStillCleansUp(duringStartup: Bool) async throws {
         let fixture = try DiagnosticFixture()
         defer { fixture.remove() }
-        let commands = DiagnosticCommands(tasks: [
-            .init(unreadableLog: true, waitsForCancellation: true),
-        ])
+        let reply = DiagnosticCommands.Reply(unreadableLog: true, waitsForCancellation: true)
+        let commands = DiagnosticCommands(startups: duringStartup ? [reply] : [], tasks: duringStartup ? [] : [reply])
         let task = Task { await fixture.run(commands) }
         defer { task.cancel() }
         for _ in 0..<500 {
@@ -186,10 +186,12 @@ private actor DiagnosticCommands: CommandRunning {
             return .init(exitCode: 1, standardOutput: "", standardError: "no test installation", timedOut: false)
         }
         let reply: Reply
-        switch arguments.first {
-        case "startup": reply = startups.isEmpty ? Reply() : startups.removeFirst()
-        case "run": reply = tasks.isEmpty ? Reply() : tasks.removeFirst()
-        default: return Reply().result
+        if try isStartupTask(arguments: arguments, environment: environment) {
+            reply = startups.isEmpty ? Reply() : startups.removeFirst()
+        } else if arguments.first == "run" {
+            reply = tasks.isEmpty ? Reply() : tasks.removeFirst()
+        } else {
+            return Reply().result
         }
         if let path = environment["MAA_STATE_DIR"] {
             roots.append(path)

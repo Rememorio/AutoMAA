@@ -27,6 +27,18 @@ public struct MAAConfigurationWriter: Sendable {
         for client in configuration.clients {
             generated.insert("profiles/\(safeName(client.profileName)).toml")
             try writeProfile(for: client)
+            for account in client.accounts {
+                let name = startupTaskName(clientID: client.id, accountID: account.id)
+                generated.insert("tasks/\(name).json")
+                var parameters: [String: Any] = [
+                    "client_type": client.kind.maaTaskClientType,
+                    "start_game_enabled": false,
+                ]
+                if let selector = client.kind.maaAccountSelector(from: account.accountSelector) {
+                    parameters["account_name"] = selector
+                }
+                try writeTaskFile(name: name, title: "账号准备", type: "StartUp", parameters: parameters, client: client)
+            }
             for plan in configuration.plans {
                 for account in client.accounts {
                     for task in TaskKind.allCases {
@@ -59,6 +71,10 @@ public struct MAAConfigurationWriter: Sendable {
 
     public func taskName(planID: UUID, clientID: UUID, accountID: UUID, task: TaskKind) -> String {
         "\(planID.uuidString.lowercased())-\(clientID.uuidString.lowercased())-\(accountID.uuidString.lowercased())-\(task.rawValue)"
+    }
+
+    func startupTaskName(clientID: UUID, accountID: UUID) -> String {
+        "\(clientID.uuidString.lowercased())-\(accountID.uuidString.lowercased())-startup"
     }
 
     private func validate(_ configuration: AppConfiguration) throws {
@@ -242,18 +258,24 @@ public struct MAAConfigurationWriter: Sendable {
             }
         }
 
+        try writeTaskFile(name: taskName(planID: plan.id, clientID: client.id, accountID: account.id, task: task),
+                          title: task.title, type: maaTaskType(task), parameters: parameters, client: client)
+    }
+
+    private func writeTaskFile(name: String, title: String, type: String,
+                               parameters: [String: Any], client: ClientConfiguration) throws {
         let payload: [String: Any] = [
             "client_type": client.kind.maaClientType,
             "tasks": [[
-                "name": task.title,
-                "type": maaTaskType(task),
+                "name": title,
+                "type": type,
                 "params": parameters,
             ]],
         ]
         let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
         let url = directories.maaConfig
             .appending(path: "tasks")
-            .appending(path: "\(taskName(planID: plan.id, clientID: client.id, accountID: account.id, task: task)).json")
+            .appending(path: "\(name).json")
         try data.write(to: url, options: .atomic)
     }
 
@@ -305,7 +327,8 @@ public struct MAAConfigurationWriter: Sendable {
     private func removeOrphanedTaskFiles(keeping generated: Set<String>) throws {
         let tasksDirectory = directories.maaConfig.appending(path: "tasks")
         let uuid = #"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"#
-        let pattern = "^(?:\(uuid)-){2,3}(fight|recruit|infrast|mall|award)\\.json$"
+        let workflow = "(?:\(uuid)-){2,3}(?:fight|recruit|infrast|mall|award)"
+        let pattern = "^(?:\(workflow)|\(uuid)-\(uuid)-startup)\\.json$"
         let expression = try NSRegularExpression(pattern: pattern)
         let files = try FileManager.default.contentsOfDirectory(at: tasksDirectory, includingPropertiesForKeys: nil)
         for url in files {

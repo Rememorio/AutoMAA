@@ -35,6 +35,8 @@ AutoMAA 仅提供已建模的日常任务参数，不等同于上游 GUI 的完�
 
 修改配置通常从 `Models.swift` 与 `ConfigurationValidation.swift` 开始，任务参数转换位于 `MAAConfigurationWriter.swift`，运行顺序、重试和断点位于 `WorkflowRunner.swift`。可测试逻辑应留在 `AutoMAAKit`，避免在界面层重复实现。
 
+账号准备使用按客户端与账号生成的 `StartUp` 任务，显式设置 `start_game_enabled=false`，通过 `maa run --no-auto-reconnect` 执行；服务器映射、账号片段和独立 Profile 保持一致。客户端生命周期和有界恢复由 `WorkflowRunner` 管理。不能用带服务器参数的 `maa startup` 替代：该预设会开启 Core 内部重启，而 PlayTools 支持停止游戏但不能重新启动游戏。依据见 [maa-cli 启动预设](https://github.com/MaaAssistantArknights/maa-cli/blob/v0.7.5/crates/maa-cli/src/run/preset/mod.rs)、[MaaCore 启动任务](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/v6.18.0/src/MaaCore/Task/Interface/StartUpTask.cpp)和 [PlayTools 控制器](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/v6.18.0/src/MaaCore/Controller/PlayToolsController.cpp)。
+
 作战结果判定与续跑状态位于 `FightExecution.swift`，关卡记忆位于 `FightStageMemory.swift`。当前实现对照 MaaCore v6.18.0 和 maa-cli v0.7.5：每次作战命令通过 `MAA_STATE_DIR` 使用独立 Core 日志，结算依据 `StageDrops` 回调，`cur_times` 按每次结算累加；缺少该值时使用由 `FightTimes.series` 绑定到对应开战与结算的批次倍率，两者均未知时显示次数下限。`SanityBeforeStage` 与紧随其后的消耗、倍率共同判断单局理智不足，不以整批连战消耗代替单局消耗。maa-cli 摘要的次数在开打时增加，不能单独证明完成；剿灭导航失败也不能证明周奖励已满。
 
 账号准备与非作战任务同样使用命令独立的临时 `MAA_STATE_DIR`，保持配置、Core、资源和热更新缓存的路径不变，目录行为依据 [maa-cli 目录定义](https://github.com/MaaAssistantArknights/maa-cli/blob/v0.7.5/crates/maa-dirs/src/lib.rs)与 [Core 初始化](https://github.com/MaaAssistantArknights/maa-cli/blob/v0.7.5/crates/maa-cli/src/run/mod.rs)。失败或取消后，`MAACommandDiagnostics.swift` 从当前日志及轮转备份各读取最多 256 KiB 的末尾，保留最多 64 KiB 的近期回调和错误，并在清理前写入诊断日志；截断、不完整行和读取失败均有说明。摘要只描述最后观察到的步骤，脱敏后进入活动详情，不参与成功、账号匹配、重试或断点判定；原始临时日志及 Core 生成的其他诊断文件随后删除。

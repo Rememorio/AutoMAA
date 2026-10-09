@@ -456,14 +456,15 @@ private actor FightTestCommands: CommandRunning {
 
     func run(executable: String, arguments: [String], environment: [String: String], timeout: TimeInterval,
              observeCancellation: Bool, startupScreenshotPolicy: StartupScreenshotPolicy?) async throws -> CommandResult {
-        if arguments.first == "startup", blockStateSave {
+        let isStartup = try isStartupTask(arguments: arguments, environment: environment)
+        if isStartup, blockStateSave {
             try FileManager.default.removeItem(at: directories.executionState)
             try FileManager.default.createDirectory(at: directories.executionState, withIntermediateDirectories: true)
         }
-        if arguments.first == "startup", blockWeeklySave {
+        if isStartup, blockWeeklySave {
             try FileManager.default.createDirectory(at: directories.weeklyAnnihilation, withIntermediateDirectories: true)
         }
-        guard arguments.first == "run" else { return command(exit: arguments.first == "dir" ? 1 : 0) }
+        guard arguments.first == "run", !isStartup else { return command(exit: arguments.first == "dir" ? 1 : 0) }
         let name = arguments[1]
         if name == FightStageInspection.taskName {
             XCTAssertNotEqual(environment["MAA_CONFIG_DIR"], directories.maaConfig.path)
