@@ -36,7 +36,7 @@ AutoMAA 是原生 macOS 的 [MAA](https://github.com/MaaAssistantArknights/MaaAs
 ## 使用前确认
 
 - **Apple Silicon Mac，macOS 14 或更高版本。**
-- **已安装 `maa-cli`、MaaCore 和识别资源。** AutoMAA 不内置这些组件。
+- **已安装 `maa-cli` 0.7.3 或更高版本、MaaCore 和识别资源。** AutoMAA 不内置这些组件；建议使用各组件的最新稳定版。
 - **已配置 PlayCover + MaaTools 的游戏客户端。** 这是 AutoMAA 当前支持的连接与客户端管理环境，其他 MAA 连接方式尚未接入。
 
 官服、Bilibili、繁中服和韩服支持多账号切换；韩服需要 MaaCore v6.16.8 或更高版本。国际服、日服使用游戏当前已登录的单个账号。具体配置见[首次配置](https://rememorio.github.io/AutoMAA/guide/getting-started#添加账号)。

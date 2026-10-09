@@ -7,7 +7,7 @@
 | 项目 | 要求 |
 | --- | --- |
 | Mac | Apple Silicon，macOS 14 或更高版本 |
-| MAA | 单独安装 `maa-cli`、MaaCore 和识别资源 |
+| MAA | 单独安装 `maa-cli` 0.7.3 或更高版本、MaaCore 和识别资源，建议使用最新稳定版 |
 | 游戏连接 | PlayCover + MaaTools，客户端可手动启动并进入游戏 |
 
 AutoMAA 负责客户端管理与任务编排，不包含 MAA 或游戏包体。MAA 支持的其他模拟器与连接方式，目前尚未接入 AutoMAA。
@@ -22,7 +22,7 @@ maa install
 maa version
 ```
 
-`maa install` 安装 MaaCore 和资源；`maa version` 应能显示 maa-cli 与 MaaCore 版本。已有安装时直接检测即可，其他方式见 [maa-cli 安装文档](https://docs.maa.plus/zh-cn/manual/cli/install.html)。
+`maa install` 安装 MaaCore 和资源；`maa version` 应能显示 maa-cli 与 MaaCore 版本。账号准备使用 maa-cli 0.7.3 起提供的 `--no-auto-reconnect`，将离线恢复交回 AutoMAA。已有安装时先检查版本；低于 0.7.3 时运行 `brew upgrade MaaAssistantArknights/tap/maa-cli`。其他方式见 [maa-cli 安装文档](https://docs.maa.plus/zh-cn/manual/cli/install.html)。
 
 ### 准备游戏客户端
 
