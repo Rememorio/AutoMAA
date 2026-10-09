@@ -82,6 +82,16 @@ struct ClientShutdownPolicy: Sendable, Equatable {
     )
 }
 
+private struct ClientShutdownState {
+    let processRunning: Bool
+    let portOpen: Bool
+
+    var isClosed: Bool { !processRunning && !portOpen }
+    var description: String {
+        "进程：\(processRunning ? "仍在运行" : "已退出") · MaaTools 端口：\(portOpen ? "仍开放" : "已释放")"
+    }
+}
+
 struct MAACommandTimeoutPolicy: Sendable, Equatable {
     let startup: TimeInterval
     let shutdown: TimeInterval
@@ -2232,35 +2242,52 @@ public final class WorkflowRunner {
         emit(.closing, "正在关闭\(clientText(client))", 0, .info, client: client)
         let portIsOpen = await portProbe.isOpen(client.address, observeCancellation: false)
         if portIsOpen, !Task.isCancelled {
-            _ = await runCommand(
+            let startedAt = ContinuousClock.now
+            let result = await runCommand(
                 executable: configuration.cliPath,
                 arguments: ["closedown", client.kind.maaClientType] + commonArguments(client),
                 timeout: timeoutPolicy.shutdown,
-                ignoreCancellation: true
+                ignoreCancellation: true,
+                logContext: "\(clientText(client)) · MAA 退出请求"
             )
-            if await waitUntilClosed(client, timeout: shutdownPolicy.maaGracePeriod) {
-                emitClientClosed(client)
+            let state = await waitUntilClosed(client, timeout: shutdownPolicy.maaGracePeriod)
+            let request = "退出码 \(result.exitCode)\(result.timedOut ? " · 命令超时" : "")\(result.cancelled ? " · 命令已取消" : "")"
+            let details = recordShutdown(client, method: "MAA 退出请求", request: request, startedAt: startedAt, state: state)
+            if state.isClosed {
+                emitClientClosed(client, details: details)
                 return
             }
         } else if !portIsOpen, !gameController.isRunning(client) {
-            emitClientClosed(client)
+            emitClientClosed(client, details: "检查时进程已退出，MaaTools 端口已释放；未发送退出请求。")
             return
         }
 
-        _ = gameController.terminate(client, force: false)
-        if await waitUntilClosed(client, timeout: shutdownPolicy.systemGracePeriod) {
-            emitClientClosed(client)
-            return
+        for (force, method, timeout) in [
+            (false, "macOS 常规退出", shutdownPolicy.systemGracePeriod),
+            (true, "macOS 强制清理", shutdownPolicy.forcedGracePeriod),
+        ] {
+            let startedAt = ContinuousClock.now
+            let accepted = gameController.terminate(client, force: force)
+            let state = await waitUntilClosed(client, timeout: timeout)
+            let details = recordShutdown(client, method: method, request: accepted ? "已被系统接受" : "未被系统接受",
+                                         startedAt: startedAt, state: state)
+            if state.isClosed {
+                emitClientClosed(client, details: force
+                    ? "客户端未响应常规退出请求，已由 macOS 完成进程清理。\n\(details)"
+                    : details)
+                return
+            }
         }
+        throw RuntimeError.portReleaseTimeout(client.address)
+    }
 
-        _ = gameController.terminate(client, force: true)
-        guard await waitUntilClosed(client, timeout: shutdownPolicy.forcedGracePeriod) else {
-            throw RuntimeError.portReleaseTimeout(client.address)
-        }
-        emitClientClosed(
-            client,
-            details: "客户端未响应常规退出请求，已由 macOS 完成进程清理。"
-        )
+    private func recordShutdown(_ client: ClientConfiguration, method: String, request: String,
+                                startedAt: ContinuousClock.Instant, state: ClientShutdownState) -> String {
+        let elapsed = startedAt.duration(to: .now).components
+        let seconds = Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
+        let details = "退出方式：\(method)\n请求结果：\(request)\n耗时：\(String(format: "%.1f", seconds)) 秒（含退出等待）\n\(state.description)"
+        emit(.closing, "\(clientText(client))：\(method)检查完成", 0, .info, client: client, details: details)
+        return details
     }
 
     private func emitClientClosed(_ client: ClientConfiguration, details: String? = nil) {
@@ -2274,15 +2301,19 @@ public final class WorkflowRunner {
         )
     }
 
-    private func waitUntilClosed(_ client: ClientConfiguration, timeout: TimeInterval) async -> Bool {
+    private func waitUntilClosed(_ client: ClientConfiguration, timeout: TimeInterval) async -> ClientShutdownState {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            let portIsOpen = await portProbe.isOpen(client.address, observeCancellation: false)
-            if !gameController.isRunning(client), !portIsOpen { return true }
+            let state = await shutdownState(client)
+            if state.isClosed { return state }
             await cleanupPause(.milliseconds(500))
         }
+        return await shutdownState(client)
+    }
+
+    private func shutdownState(_ client: ClientConfiguration) async -> ClientShutdownState {
         let portIsOpen = await portProbe.isOpen(client.address, observeCancellation: false)
-        return !gameController.isRunning(client) && !portIsOpen
+        return .init(processRunning: gameController.isRunning(client), portOpen: portIsOpen)
     }
 
     private func appendIntervention(

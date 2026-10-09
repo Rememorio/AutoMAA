@@ -425,7 +425,8 @@ final class AutoMAAKitTests: XCTestCase {
         let completion = try XCTUnwrap(closingEvents.last)
         XCTAssertEqual(completion.log.level, .success)
         XCTAssertEqual(completion.message, "客户端「测试客户端」已关闭，MaaTools 连接已释放")
-        XCTAssertEqual(completion.log.details, "客户端未响应常规退出请求，已由 macOS 完成进程清理。")
+        XCTAssertTrue(completion.log.details?.hasPrefix("客户端未响应常规退出请求，已由 macOS 完成进程清理。") == true)
+        XCTAssertTrue(completion.log.details?.contains("退出方式：macOS 强制清理") == true)
         XCTAssertFalse(closingEvents.contains { $0.log.level == .warning })
     }
 
