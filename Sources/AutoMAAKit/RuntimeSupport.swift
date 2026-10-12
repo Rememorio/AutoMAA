@@ -52,6 +52,7 @@ enum StartupCommandOutcome: Equatable {
     case ready
     case coreInitializationFailed
     case connectionLost
+    case accountNavigationFailed
     case failed
 }
 
@@ -84,10 +85,41 @@ enum StartupFailureClassifier {
         if result.exitCode == 0 {
             return .ready
         }
+        if !result.cancelled, result.startupNavigationFailed,
+           explicitIntervention(output: output, hasAccountSelector: true) == nil {
+            return .accountNavigationFailed
+        }
         return .failed
     }
 
     static func diagnose(output: String, hasAccountSelector: Bool) -> StartupFailureDiagnosis {
+        if let diagnosis = explicitIntervention(output: output, hasAccountSelector: hasAccountSelector) {
+            return diagnosis
+        }
+        let value = output.lowercased()
+        if isGameOffline(value) {
+            return .init(
+                scope: .client,
+                guidance: "游戏连接已离线，重启客户端后仍未恢复；请先检查网络和代理是否可用，再手动进入游戏主界面；若仍无法登录，请检查维护、登录、更新或异常弹窗"
+            )
+        }
+        if containsAny(value, [
+            "network", "timeout", "timed out", "connection", "lookup address", "dns",
+            "screencapfailed", "screencap failed",
+            "网络", "执行超时", "连接超时", "无法连接",
+        ]) {
+            return .init(
+                scope: .client,
+                guidance: "网络或 MaaTools 连接异常，自动重试仍未恢复；请手动检查游戏和网络"
+            )
+        }
+        return .init(
+            scope: .client,
+            guidance: "游戏可能停在强制更新、登录、公告或异常弹窗页面，请手动进入一次主界面"
+        )
+    }
+
+    private static func explicitIntervention(output: String, hasAccountSelector: Bool) -> StartupFailureDiagnosis? {
         let value = output.lowercased()
         if hasAccountSelector, containsAny(value, [
             "account not found", "account name", "no matching account", "match account",
@@ -128,32 +160,14 @@ enum StartupFailureClassifier {
                 guidance: "游戏可能正在维护，请稍后手动确认"
             )
         }
-        if containsAny(value, ["login", "sign in", "authentication", "登录", "重新认证", "用户协议"]) {
+        if containsAny(value, ["login", "sign in", "authentication", "captcha", "verification",
+                              "登录", "重新认证", "用户协议", "验证码", "身份验证"]) {
             return .init(
                 scope: .client,
                 guidance: "游戏可能停在登录、协议确认或身份验证页面，请手动处理后再运行"
             )
         }
-        if isGameOffline(value) {
-            return .init(
-                scope: .client,
-                guidance: "游戏连接已离线，重启客户端后仍未恢复；请先检查网络和代理是否可用，再手动进入游戏主界面；若仍无法登录，请检查维护、登录、更新或异常弹窗"
-            )
-        }
-        if containsAny(value, [
-            "network", "timeout", "timed out", "connection", "lookup address", "dns",
-            "screencapfailed", "screencap failed",
-            "网络", "执行超时", "连接超时", "无法连接",
-        ]) {
-            return .init(
-                scope: .client,
-                guidance: "网络或 MaaTools 连接异常，自动重试仍未恢复；请手动检查游戏和网络"
-            )
-        }
-        return .init(
-            scope: .client,
-            guidance: "游戏可能停在强制更新、登录、公告或异常弹窗页面，请手动进入一次主界面"
-        )
+        return nil
     }
 
     private static func containsAny(_ value: String, _ patterns: [String]) -> Bool {

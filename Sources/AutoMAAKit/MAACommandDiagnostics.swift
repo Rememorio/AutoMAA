@@ -10,7 +10,7 @@ struct MAACommandDiagnostics: Sendable {
     private var lines: [String] = []
     private var byteCount = 0
 
-    static let readLimit = 262_144
+    static let readLimit = MAACoreLog.readLimit
     static let outputLimit = 65_536
 
     var output: String { lines.joined(separator: "\n") }
@@ -27,45 +27,12 @@ struct MAACommandDiagnostics: Sendable {
     }
 
     static func read(from root: URL, sensitiveValues: [String]) -> Self {
-        var result = Self()
-        var foundLog = false
-        for name in ["asst.bak.log", "asst.log"] {
-            let url = root.appending(path: "debug/\(name)")
-            do {
-                let attributes = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-                guard attributes.isRegularFile == true, attributes.isSymbolicLink != true else {
-                    result.note("核心日志读取失败：\(name) 不是普通文件")
-                    continue
-                }
-                let handle = try FileHandle(forReadingFrom: url)
-                defer { try? handle.close() }
-                foundLog = true
-                let size = try handle.seekToEnd()
-                let offset = size > UInt64(readLimit) ? size - UInt64(readLimit) : 0
-                try handle.seek(toOffset: offset)
-                let data = try handle.read(upToCount: readLimit) ?? Data()
-                // Discard partial boundary lines before decoding or redacting them.
-                var lines = data.split(separator: 10, omittingEmptySubsequences: false).dropLast()
-                if offset > 0 {
-                    lines = lines.dropFirst()
-                    result.note("核心日志较长，仅分析末尾片段，较早步骤可能缺失")
-                }
-                if data.last != 10, !data.isEmpty { result.note("核心日志末尾不完整，已忽略未写完的行") }
-                for line in lines {
-                    guard line.count <= outputLimit / 2 else {
-                        result.note("已忽略过长的核心日志行")
-                        continue
-                    }
-                    result.consume(String(decoding: line, as: UTF8.self), sensitiveValues: sensitiveValues)
-                }
-            } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
-                continue
-            } catch {
-                result.note("核心日志读取失败：\(name)")
-            }
-        }
-        if !foundLog { result.note("本次命令没有可读取的核心日志") }
-        return result
+        Self(log: MAACoreLog.read(from: root), sensitiveValues: sensitiveValues)
+    }
+
+    init(log: MAACoreLog, sensitiveValues: [String]) {
+        notes = log.notes
+        for line in log.lines { consume(line, sensitiveValues: sensitiveValues) }
     }
 
     private mutating func consume(_ line: String, sensitiveValues: [String]) {

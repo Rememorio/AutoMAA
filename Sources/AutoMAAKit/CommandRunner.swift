@@ -13,6 +13,7 @@ public struct CommandResult: Sendable {
     public let cancelled: Bool
     public let stopReason: CommandStopReason?
     var diagnosticDetails: String?
+    var startupNavigationFailed = false
 
     public init(
         exitCode: Int32,

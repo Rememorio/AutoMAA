@@ -1574,8 +1574,10 @@ public final class WorkflowRunner {
             if outcome == .coreInitializationFailed {
                 break
             }
-            if outcome == .connectionLost {
-                let message = if lastResult.stopReason == .startupScreenshotFailure {
+            if outcome == .connectionLost || outcome == .accountNavigationFailed {
+                let message = if outcome == .accountNavigationFailed {
+                    "从设置页返回账号选择页失败，正在重启\(clientText(client))后恢复\(accountText(account))"
+                } else if lastResult.stopReason == .startupScreenshotFailure {
                     "连续截图失败，已提前结束账号准备，正在重启\(clientText(client))后恢复\(accountText(account))"
                 } else if lastResult.timedOut {
                     "\(accountText(account))准备超时，正在重启\(clientText(client))后恢复"
@@ -1614,10 +1616,10 @@ public final class WorkflowRunner {
             try? await Task.sleep(for: .seconds(2))
         }
         let detail = shortOutput(lastResult, sensitiveValues: [selector].compactMap { $0 })
-        let diagnosis = StartupFailureClassifier.diagnose(
-            output: detail,
-            hasAccountSelector: selector != nil
-        )
+        let diagnosis = StartupFailureClassifier.commandOutcome(result: lastResult, output: detail) == .accountNavigationFailed
+            ? StartupFailureDiagnosis(scope: .client,
+                guidance: "从设置页返回账号选择页失败，自动恢复仍未完成；请手动返回登录页后继续未完成任务")
+            : StartupFailureClassifier.diagnose(output: detail, hasAccountSelector: selector != nil)
         throw ManualInterventionError(
             scope: diagnosis.scope,
             reason: "\(accountText(account))准备失败",
@@ -2511,9 +2513,12 @@ public final class WorkflowRunner {
                 output = ""
             } else {
                 let secrets = currentSensitiveValues
-                let evidence = await Task.detached(priority: .utility) {
-                    MAACommandDiagnostics.read(from: root, sensitiveValues: secrets)
+                let (evidence, navigationFailed) = await Task.detached(priority: .utility) {
+                    let log = MAACoreLog.read(from: root)
+                    return (MAACommandDiagnostics(log: log, sensitiveValues: secrets),
+                            startupScreenshotPolicy != nil && StartupNavigationObservation.failedInSettings(log))
                 }.value
+                result.startupNavigationFailed = navigationFailed
                 summary = evidence.summary
                 output = evidence.output
             }

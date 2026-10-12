@@ -4,6 +4,107 @@ import Testing
 
 @Suite("Command failure diagnostics")
 struct CommandDiagnosticsTests {
+    @Test("navigation evidence does not override explicit manual intervention",
+          arguments: ["account not found", "maintenance", "captcha", "update required", "load resource failed", "resource download"])
+    @MainActor
+    func navigationDoesNotBypassIntervention(output: String) async throws {
+        let fixture = try DiagnosticFixture()
+        defer { fixture.remove() }
+        let failure = DiagnosticCommands.Reply(
+            result: .init(exitCode: 1, standardOutput: "", standardError: output, timedOut: false),
+            log: settingsNavigationFailureLog())
+        let commands = DiagnosticCommands(startups: [failure, failure])
+        let report = await fixture.run(commands)
+        #expect(!report.isSuccess)
+        #expect(report.unexecutedSteps == 1)
+        #expect(!fixture.runtime.entries.contains { $0.message.contains("正在重启") })
+        #expect(await commands.taskCount == 0)
+        #expect(ExecutionStateStore(directories: fixture.directories).loadForToday().completedSteps.isEmpty)
+    }
+
+    @Test("navigation recovery shares the account restart budget with later task timeouts")
+    @MainActor
+    func navigationSharesRestartBudget() async throws {
+        let fixture = try DiagnosticFixture()
+        defer { fixture.remove() }
+        let failure = DiagnosticCommands.Reply(
+            result: .init(exitCode: 1, standardOutput: "", standardError: "StartUp Error", timedOut: false),
+            log: settingsNavigationFailureLog())
+        let timeout = DiagnosticCommands.Reply(result: .init(exitCode: 15, standardOutput: "", standardError: "", timedOut: true))
+        let commands = DiagnosticCommands(startups: [failure, .init()], tasks: [timeout, timeout])
+        let report = await fixture.run(commands)
+        #expect(!report.isSuccess)
+        #expect(await commands.startupCount == 2)
+        #expect(fixture.runtime.entries.count { $0.message.contains("正在重启") } == 1)
+        #expect(ExecutionStateStore(directories: fixture.directories).loadForToday().completedSteps.isEmpty)
+    }
+
+    @Test("navigation failure cannot restart a cancelled workflow")
+    @MainActor
+    func cancelledNavigationDoesNotRestart() async throws {
+        let fixture = try DiagnosticFixture()
+        defer { fixture.remove() }
+        let failure = DiagnosticCommands.Reply(
+            result: .init(exitCode: 15, standardOutput: "", standardError: "", timedOut: false, cancelled: true),
+            log: settingsNavigationFailureLog())
+        let commands = DiagnosticCommands(startups: [failure])
+        let report = await fixture.run(commands)
+        #expect(report.cancelled)
+        #expect(await commands.startupCount == 1)
+        #expect(await commands.taskCount == 0)
+        #expect(!fixture.runtime.entries.contains { $0.message.contains("正在重启") })
+        #expect(!fixture.runtime.running)
+        #expect(!ProcessLock.isHeld(at: fixture.directories.lock))
+    }
+
+    @Test("navigation recovery stops when the client cannot release its connection")
+    @MainActor
+    func navigationRequiresClosedClient() async throws {
+        let fixture = try DiagnosticFixture(accountCount: 2)
+        defer { fixture.remove() }
+        fixture.runtime.closes = false
+        let failure = DiagnosticCommands.Reply(
+            result: .init(exitCode: 1, standardOutput: "", standardError: "StartUp Error", timedOut: false),
+            log: settingsNavigationFailureLog())
+        let commands = DiagnosticCommands(startups: [failure])
+        let report = await fixture.run(commands)
+        #expect(!report.isSuccess)
+        #expect(await commands.startupCount == 1)
+        #expect(await commands.taskCount == 0)
+        #expect(ExecutionStateStore(directories: fixture.directories).loadForToday().completedSteps.isEmpty)
+        #expect(!ProcessLock.isHeld(at: fixture.directories.lock))
+    }
+
+    @Test("settings navigation failure restarts once and preserves completed account checkpoints",
+          arguments: [false, true])
+    @MainActor
+    func settingsNavigationRecovery(failsAgain: Bool) async throws {
+        let fixture = try DiagnosticFixture(accountCount: 2)
+        defer { fixture.remove() }
+        let failure = DiagnosticCommands.Reply(
+            result: .init(exitCode: 1, standardOutput: "", standardError: "StartUp Error", timedOut: false),
+            log: settingsNavigationFailureLog())
+        let commands = DiagnosticCommands(startups: [.init(), failure, failsAgain ? failure : .init()])
+        let report = await fixture.run(commands)
+        #expect(report.isSuccess == !failsAgain)
+        #expect(report.unexecutedSteps == (failsAgain ? 1 : 0))
+        #expect(await commands.startupCount == 3)
+        #expect(await commands.taskCount == (failsAgain ? 1 : 2))
+        #expect(fixture.runtime.entries.count { $0.message.contains("设置页返回账号选择页失败，正在重启") } == 1)
+        #expect(ExecutionStateStore(directories: fixture.directories).loadForToday().completedSteps.count == (failsAgain ? 1 : 2))
+        #expect(!fixture.runtime.running)
+        #expect(!ProcessLock.isHeld(at: fixture.directories.lock))
+        #expect(await commands.roots.allSatisfy { !FileManager.default.fileExists(atPath: $0) })
+        if failsAgain {
+            #expect(report.attentionMessages.contains { $0.contains("设置页返回账号选择页失败") })
+            let continuation = DiagnosticCommands()
+            let resumed = await fixture.run(continuation)
+            #expect(resumed.isSuccess)
+            #expect(await continuation.startupCount == 1)
+            #expect(await continuation.taskCount == 1)
+        }
+    }
+
     @Test("a silent task timeout retains core evidence before retry and cleanup")
     @MainActor
     func silentTimeoutKeepsEvidence() async throws {
@@ -207,6 +308,8 @@ private actor DiagnosticCommands: CommandRunning {
     var tasks: [Reply]
     private(set) var roots: [String] = []
     private(set) var waiting = false
+    private(set) var startupCount = 0
+    private(set) var taskCount = 0
 
     init(startups: [Reply] = [], tasks: [Reply] = []) {
         self.startups = startups
@@ -220,8 +323,10 @@ private actor DiagnosticCommands: CommandRunning {
         }
         let reply: Reply
         if try isStartupTask(arguments: arguments, environment: environment) {
+            startupCount += 1
             reply = startups.isEmpty ? Reply() : startups.removeFirst()
         } else if arguments.first == "run" {
+            taskCount += 1
             reply = tasks.isEmpty ? Reply() : tasks.removeFirst()
         } else {
             return Reply().result
@@ -251,14 +356,16 @@ private final class DiagnosticFixture {
     let configuration: AppConfiguration
     let runtime = DiagnosticRuntime()
 
-    init(task: TaskKind = .mall) throws {
+    init(task: TaskKind = .mall, accountCount: Int = 1) throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "automaa-diagnostic-tests-\(UUID())")
         directories = AppDirectories(root: root)
         let app = root.appending(path: "Test.app")
         try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
         let client = ClientConfiguration(name: "测试客户端", kind: .official, appPath: app.path,
             address: "127.0.0.1:61387", profileName: "diagnostic-test", bundleIdentifier: "dev.automaa.tests.diagnostics",
-            accounts: [AccountConfiguration(name: "测试账号", accountSelector: "fixture-private-selector")])
+            accounts: (0..<accountCount).map {
+                AccountConfiguration(name: "测试账号 \($0 + 1)", accountSelector: $0 == 0 ? "fixture-private-selector" : "fixture-selector-\($0)")
+            })
         var plan = AutomationPlan.completeRoutine
         plan.policy.hotUpdateBeforeRun = false
         plan.policy.maxRetries = 1
@@ -288,6 +395,7 @@ private final class DiagnosticFixture {
 @MainActor
 private final class DiagnosticRuntime: PortProbing, GameProcessControlling {
     var running = true
+    var closes = true
     var entries: [LogEntry] = []
 
     func isOpen(_ value: String, observeCancellation: Bool) async -> Bool { running }
@@ -296,6 +404,6 @@ private final class DiagnosticRuntime: PortProbing, GameProcessControlling {
         return running == forOpen
     }
     func isRunning(_ client: ClientConfiguration) -> Bool { running }
-    func terminate(_ client: ClientConfiguration, force: Bool) -> Bool { running = false; return true }
+    func terminate(_ client: ClientConfiguration, force: Bool) -> Bool { running = !closes; return closes }
     func record(_ event: RunnerEvent) { entries.append(event.log) }
 }
