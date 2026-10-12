@@ -6,6 +6,7 @@ public enum UpdatePolicy {
     public static let packageTimeout: TimeInterval = 15 * 60
     public static let retryDelay: Duration = .seconds(5)
     public static let maximumAttempts = 2
+    public static let downloadStallTimeout: TimeInterval = 5 * 60
 
     public static func durationDescription(_ seconds: TimeInterval) -> String {
         seconds >= 60 && seconds.truncatingRemainder(dividingBy: 60) == 0

@@ -154,6 +154,7 @@ public final class WorkflowRunner {
     private let shutdownPolicy: ClientShutdownPolicy
     private let timeoutPolicy: MAACommandTimeoutPolicy
     private let maintenanceRetryDelay: Duration
+    private let maintenanceDownloadStallTimeout: TimeInterval
     private let historyStore: HistoryStore
     private let diagnosticLogStore: DiagnosticLogStore
     private let stateStore: ExecutionStateStore
@@ -213,6 +214,7 @@ public final class WorkflowRunner {
         commandRunner: any CommandRunning = CommandRunner(),
         timeoutPolicy: MAACommandTimeoutPolicy = .standard,
         maintenanceRetryDelay: Duration = UpdatePolicy.retryDelay,
+        maintenanceDownloadStallTimeout: TimeInterval = UpdatePolicy.downloadStallTimeout,
         resourceProbeExecutable: URL? = nil,
         coreReleaseManifestFetcher: any MAACoreReleaseManifestFetching = MAACoreReleaseManifestClient(),
         now: @escaping @MainActor @Sendable () -> Date = { Date() },
@@ -227,6 +229,7 @@ public final class WorkflowRunner {
         self.commandRunner = commandRunner
         self.timeoutPolicy = timeoutPolicy
         self.maintenanceRetryDelay = maintenanceRetryDelay
+        self.maintenanceDownloadStallTimeout = maintenanceDownloadStallTimeout
         self.resourceProbeExecutable = resourceProbeExecutable ?? Self.defaultResourceProbeExecutable()
         self.coreReleaseManifestFetcher = coreReleaseManifestFetcher
         historyStore = HistoryStore(directories: directories)
@@ -965,23 +968,24 @@ public final class WorkflowRunner {
             operation: operation,
             deadline: deadline
         )
+        let recovery = maaDownloadRecoveryMessage.map { "；" + $0 } ?? ""
         switch outcome {
         case .cancelled:
-            emit(.cancelled, "MAA 更新已取消，当前安装未更改", 1, .info, details: maaDownloadRecoveryMessage)
+            emit(.cancelled, "MAA 更新已取消，当前安装未更改" + recovery, 1, .info, details: maaDownloadRecoveryMessage)
             return false
         case let .incompatible(issue):
             emit(
                 .failed,
-                channel == .stable
+                (channel == .stable
                     ? "稳定通道候选组件未通过资源验证，未启用"
-                    : "Beta 候选组件未通过资源验证，未启用",
+                    : "Beta 候选组件未通过资源验证，未启用") + recovery,
                 1,
                 .error,
                 details: [issue.guidance, issue.details, maaDownloadRecoveryMessage].compactMap { $0 }.joined(separator: "\n")
             )
             return false
         case let .failed(details):
-            emit(.failed, "MAA 更新失败", 1, .error,
+            emit(.failed, "MAA 更新失败" + recovery, 1, .error,
                  details: [details, maaDownloadRecoveryMessage].compactMap { $0 }.joined(separator: "\n"))
             return false
         case let .success(changed, recoveredAfterRetry):
@@ -1124,6 +1128,7 @@ public final class WorkflowRunner {
                 do {
                     try downloadCache.finish()
                     maaDownloadRecoveryMessage = downloadCache.retainedMessage()
+                        ?? "未保留可复用的引擎包，下次更新将重新下载"
                 } catch {
                     maaDownloadRecoveryMessage = "无法整理下载缓存，下次更新将重新检查：\(error.localizedDescription)"
                 }
@@ -1495,28 +1500,51 @@ public final class WorkflowRunner {
         executable: String, arguments: [String], timeout: TimeInterval,
         environment: [String: String], progressReader: MAAUpdateProgressReader?
     ) async -> CommandResult {
-        let observer: Task<Void, Never>?
-        if let progressReader, let updateProgressSink {
+        let initial = progressReader?.read()
+        let command = Task {
+            await runCommand(executable: executable, arguments: arguments, timeout: timeout, environment: environment)
+        }
+        let observer: Task<Bool, Never>?
+        if let progressReader {
+            let updateProgressSink = updateProgressSink
+            let stallTimeout = maintenanceDownloadStallTimeout
             observer = Task.detached(priority: .utility) {
+                var tracker = MAADownloadTracker(initial: initial)
                 var previous: UpdateProgress?
                 while !Task.isCancelled {
-                    let update = progressReader.read()
+                    let update = tracker.observe(progressReader.read())
                     guard !Task.isCancelled else { break }
                     if update != previous {
-                        await updateProgressSink(update)
+                        await updateProgressSink?(update)
                         previous = update
+                    }
+                    if tracker.isStalled(timeout: stallTimeout) {
+                        command.cancel()
+                        return true
                     }
                     do { try await Task.sleep(for: .milliseconds(250)) }
                     catch { break }
                 }
+                return false
             }
         } else {
             observer = nil
         }
-        let result = await runCommand(executable: executable, arguments: arguments, timeout: timeout, environment: environment)
+        let result = await withTaskCancellationHandler {
+            await command.value
+        } onCancel: {
+            command.cancel()
+        }
         observer?.cancel()
-        await observer?.value
+        let stalled = await observer?.value ?? false
         updateProgressSink?(nil)
+        if stalled, !Task.isCancelled {
+            var failure = CommandResult(exitCode: result.exitCode, standardOutput: result.standardOutput,
+                standardError: result.standardError + "\n引擎包下载连续 \(UpdatePolicy.durationDescription(maintenanceDownloadStallTimeout))没有新增数据，已停止本次传输",
+                timedOut: false)
+            failure.downloadStalled = true
+            return failure
+        }
         return result
     }
 

@@ -1753,6 +1753,42 @@ final class AutoMAAKitTests: XCTestCase {
     }
 
     @MainActor
+    func testStalledCoreDownloadRetriesOnceWithoutAProgressConsumer() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        try directories.prepare()
+        let installation = try makeFakeMAAInstallation(at: root)
+        let cli = root.appending(path: "maa-cli")
+        try writeFakeMAACLI(at: cli, installation: installation, body: """
+        if [ "$1" = "update" ]; then
+          printf '%s' '{"version":"v1.2.3","details":{"assets":[{"name":"MAA-v1.2.3-macos-runtime-universal.zip","size":100,"browser_download_url":"https://download.invalid/core.zip"}]}}' > "$MAA_CACHE_DIR/core-manifest-stable.json"
+          /bin/dd if=/dev/zero bs=25 count=1 2>/dev/null >> "$MAA_CACHE_DIR/MAA-v1.2.3-macos-runtime-universal.zip.partial"
+          printf '%s\\n' 'attempt' >> "$MAA_CONFIG_DIR/download-attempts"
+          /bin/sleep 30
+        fi
+        """)
+        let runtime = StubClientRuntime(closesOnForce: true)
+        let succeeded = await WorkflowRunner(
+            directories: directories, portProbe: runtime, gameController: runtime,
+            shutdownPolicy: .immediate, maintenanceRetryDelay: .zero,
+            maintenanceDownloadStallTimeout: 0.05,
+            resourceProbeExecutable: installation.probe
+        ).updateCore(cliPath: cli.path)
+        XCTAssertFalse(succeeded)
+        let attempts = try String(contentsOf: directories.maaConfig.appending(path: "download-attempts"), encoding: .utf8)
+        XCTAssertEqual(attempts, "attempt\nattempt\n")
+        let entries = HistoryStore(directories: directories).load()
+        XCTAssertEqual(entries.filter { $0.message.contains("自动重试") }.count, 1)
+        XCTAssertEqual(entries.last?.phase, .failed)
+        XCTAssertTrue(entries.last?.details?.contains("没有新增数据") == true)
+        XCTAssertTrue(entries.last?.message.contains("已保留") == true)
+        XCTAssertEqual(try String(contentsOf: installation.library.appending(path: "libMaaCore.dylib"), encoding: .utf8), "fake MaaCore")
+        XCTAssertFalse(ProcessLock.isHeld(at: directories.lock))
+        XCTAssertFalse(ProcessLock.isHeld(at: installation.cache.appending(path: ".automaa-downloads/.lock")))
+    }
+
+    @MainActor
     func testStableCoreUpdateDefersWhenInstalledPrereleaseIsNewer() async throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }

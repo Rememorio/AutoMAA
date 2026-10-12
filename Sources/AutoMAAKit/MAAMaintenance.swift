@@ -399,6 +399,7 @@ enum MAAMaintenanceFailureClassifier {
 
     static func isTransientNetworkFailure(_ result: CommandResult) -> Bool {
         guard !result.cancelled, !result.timedOut else { return false }
+        if result.downloadStalled { return true }
         let output = result.combinedOutput.lowercased()
         guard result.exitCode != 0 || output.contains("failed to update resource repository") else { return false }
         let failedHTTP2Stream = output.split(separator: "\n").contains { line in

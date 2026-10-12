@@ -14,6 +14,7 @@ public struct CommandResult: Sendable {
     public let stopReason: CommandStopReason?
     var diagnosticDetails: String?
     var startupNavigationFailed = false
+    var downloadStalled = false
 
     public init(
         exitCode: Int32,

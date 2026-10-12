@@ -406,6 +406,7 @@ struct SettingsView: View {
                             startedAt: activity.startedAt,
                             limit: "上限 \(UpdatePolicy.durationDescription(activity.timeout))，含重试与校验",
                             isCancelling: activity.isCancelling,
+                            showsTransferRate: true,
                             cancel: { model.cancelRun() }
                         )
                     }
