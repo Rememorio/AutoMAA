@@ -13,6 +13,10 @@ struct MAAUpdateActivity {
     var information: MAAUpdateInformation?
     var isCancelling = false
 
+    var timeout: TimeInterval {
+        (automatic ? MAAUpdateContext.automatic : .manual).timeout(for: component)
+    }
+
     var isFinished: Bool {
         switch phase {
         case .completed, .failed, .cancelled: true

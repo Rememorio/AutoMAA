@@ -354,7 +354,7 @@ struct ActivityView: View {
                         if model.activePlanID != nil {
                             WorkflowProgressView(progress: model.activeProgress)
                         } else if let activity = model.maaUpdateActivity {
-                            Text("已用时 \(activity.startedAt, style: .timer) · 上限 \(UpdatePolicy.durationDescription(activity.component.timeout))")
+                            Text("已用时 \(activity.startedAt, style: .timer) · 上限 \(UpdatePolicy.durationDescription(activity.timeout))")
                                 .font(.caption.monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }

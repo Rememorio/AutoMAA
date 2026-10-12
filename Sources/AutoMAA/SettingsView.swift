@@ -404,7 +404,7 @@ struct SettingsView: View {
                             message: (activity.automatic ? "自动更新 · " : "") + (activity.progress?.message ?? activity.message),
                             progress: activity.progress?.download,
                             startedAt: activity.startedAt,
-                            limit: "上限 \(UpdatePolicy.durationDescription(activity.component.timeout))，含重试与校验",
+                            limit: "上限 \(UpdatePolicy.durationDescription(activity.timeout))，含重试与校验",
                             isCancelling: activity.isCancelling,
                             cancel: { model.cancelRun() }
                         )
@@ -419,7 +419,7 @@ struct SettingsView: View {
                         if let summary = information.recognitionSummary { Text(summary) }
                     }.font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                 }
-                Text("“更新 MAA”包含引擎及配套识别数据，上限 \(UpdatePolicy.durationDescription(UpdatePolicy.packageTimeout))；仅更新识别数据获取增量，不更换引擎，上限 \(UpdatePolicy.durationDescription(UpdatePolicy.resourceTimeout))。最多重试一次，计入总时限；校验通过后才启用，失败或取消保留当前安装。")
+                Text("手动更新 MAA 包含引擎及配套识别数据，上限 \(UpdatePolicy.durationDescription(MAAUpdateContext.manual.timeout(for: .core(.stable))))；仅更新识别数据获取增量，不更换引擎，上限 \(UpdatePolicy.durationDescription(MAAUpdateContext.manual.timeout(for: .resources)))。后台自动更新 MAA 上限 \(UpdatePolicy.durationDescription(MAAUpdateContext.automatic.timeout(for: .core(.stable))))。最多重试一次，计入总时限；校验通过后才启用，失败或取消保留当前安装。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 

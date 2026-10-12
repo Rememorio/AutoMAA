@@ -226,10 +226,6 @@ public enum MAAComponentUpdate: Equatable, Sendable {
         }
     }
 
-    public var timeout: TimeInterval {
-        includesCore ? UpdatePolicy.packageTimeout : UpdatePolicy.resourceTimeout
-    }
-
     public var title: String {
         switch self {
         case .resources: "识别数据"

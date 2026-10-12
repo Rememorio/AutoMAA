@@ -2162,7 +2162,8 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertFalse(succeeded)
         let limits = await commands.timeLimits
         XCTAssertEqual(limits.count, 2)
-        XCTAssertLessThan(limits[0], UpdatePolicy.resourceTimeout)
+        XCTAssertLessThan(limits[0], MAAUpdateContext.manual.timeout(for: .resources))
+        XCTAssertGreaterThan(limits[0], 19 * 60)
         XCTAssertLessThan(limits[1], limits[0] - 0.04)
         let entries = HistoryStore(directories: directories).load()
         XCTAssertEqual(entries.filter { $0.message.contains("自动重试") }.count, 1)

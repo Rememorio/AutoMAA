@@ -1010,7 +1010,8 @@ final class AppModel: ObservableObject {
             case .resources:
                 succeeded = await runner.hotUpdate(cliPath: cliPath)
             case let .core(channel):
-                succeeded = await runner.updateCore(cliPath: cliPath, channel: channel)
+                succeeded = await runner.updateCore(cliPath: cliPath, channel: channel,
+                                                    context: automatic ? .automatic : .manual)
             }
             guard let self else { return }
             self.isRunning = false

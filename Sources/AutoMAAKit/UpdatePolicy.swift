@@ -3,7 +3,6 @@ import Foundation
 /// Shared limits for automatic and manual updates. Retries consume the same deadline.
 public enum UpdatePolicy {
     public static let checkTimeout: TimeInterval = 30
-    public static let resourceTimeout: TimeInterval = 3 * 60
     public static let packageTimeout: TimeInterval = 15 * 60
     public static let retryDelay: Duration = .seconds(5)
     public static let maximumAttempts = 2
@@ -12,6 +11,21 @@ public enum UpdatePolicy {
         seconds >= 60 && seconds.truncatingRemainder(dividingBy: 60) == 0
             ? "\(Int(seconds / 60)) 分钟"
             : "\(Int(seconds)) 秒"
+    }
+}
+
+public enum MAAUpdateContext: Sendable {
+    case manual
+    case automatic
+    case beforeRun
+
+    public func timeout(for component: MAAComponentUpdate) -> TimeInterval {
+        switch (self, component) {
+        case (.manual, .core): 120 * 60
+        case (.manual, .resources): 20 * 60
+        case (.automatic, .core): 30 * 60
+        case (.automatic, .resources), (.beforeRun, _): 3 * 60
+        }
     }
 }
 

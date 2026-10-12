@@ -410,7 +410,8 @@ public final class WorkflowRunner {
             let update = await performStagedMAAUpdate(
                 cliPath: configuration.cliPath,
                 component: .resources,
-                operation: "更新识别数据"
+                operation: "更新识别数据",
+                deadline: UpdateDeadline(timeout: MAAUpdateContext.beforeRun.timeout(for: .resources))
             )
             switch update {
             case .cancelled:
@@ -915,7 +916,8 @@ public final class WorkflowRunner {
 
     public func updateCore(
         cliPath: String,
-        channel: MAAUpdateChannel = .stable
+        channel: MAAUpdateChannel = .stable,
+        context: MAAUpdateContext = .manual
     ) async -> Bool {
         beginActivity()
         defer { endActivity() }
@@ -932,7 +934,7 @@ public final class WorkflowRunner {
         _ = lock
         _ = lease
         let component = MAAComponentUpdate.core(channel)
-        let deadline = UpdateDeadline(timeout: component.timeout)
+        let deadline = UpdateDeadline(timeout: context.timeout(for: component))
         let operation = "更新 \(component.title)"
         emit(.updating, "正在\(operation)", 0, .info)
         var preflightRecoveredAfterRetry = false
@@ -1092,12 +1094,12 @@ public final class WorkflowRunner {
         operation: String,
         deadline: UpdateDeadline? = nil
     ) async -> StagedMAAUpdateResult {
-        let deadline = deadline ?? UpdateDeadline(timeout: component.timeout)
+        let deadline = deadline ?? UpdateDeadline(timeout: MAAUpdateContext.manual.timeout(for: component))
         let timeoutMessage = UpdateTimeoutError(operation: operation, timeout: deadline.timeout).localizedDescription
             + "；当前安装未更改"
         guard !Task.isCancelled else { return .cancelled }
         emit(.updating, "正在准备\(component.title)更新", 0, .info,
-             details: "本次更新上限：\(UpdatePolicy.durationDescription(component.timeout))，包括重试与校验")
+             details: "本次更新上限：\(UpdatePolicy.durationDescription(deadline.timeout))，包括重试与校验")
         guard let paths = await maaInstallationPaths(cliPath: cliPath) else {
             if Task.isCancelled { return .cancelled }
             return .failed("无法定位 MaaCore、基础资源或热更新目录；当前安装没有更改")
