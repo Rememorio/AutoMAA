@@ -66,6 +66,7 @@ struct MAADownloadCache: Sendable {
     let manifestURL: URL
     let channel: MAAUpdateChannel
     private let root: URL
+    private let scope: String
     private let lock: ProcessLock
 
     private struct Integrity: Codable {
@@ -78,20 +79,39 @@ struct MAADownloadCache: Sendable {
         root = paths.cache.appending(path: ".automaa-downloads", directoryHint: .isDirectory)
         try Self.ensureDirectory(root)
         lock = try ProcessLock(url: root.appending(path: ".lock"))
-        let scope = [paths.data.standardizedFileURL.path, manifestURL.absoluteString, channel.rawValue]
-        let digest = SHA256.hash(data: try JSONEncoder().encode(scope))
-        directory = root.appending(path: digest.map { String(format: "%02x", $0) }.joined(), directoryHint: .isDirectory)
+        let identity = [paths.data.standardizedFileURL.path, manifestURL.absoluteString, channel.rawValue]
+        let digest = SHA256.hash(data: try JSONEncoder().encode(identity))
+        scope = digest.map { String(format: "%02x", $0) }.joined()
+        directory = root.appending(path: "\(scope)-\(UUID())", directoryHint: .isDirectory)
         self.manifestURL = manifestURL
         self.channel = channel
         try prune()
         try Self.ensureDirectory(directory)
+        // A child left behind by an interrupted app must never write into a later attempt.
+        for previous in try ownedDirectories().filter({ $0.lastPathComponent.hasPrefix(scope + "-") && $0.lastPathComponent != directory.lastPathComponent })
+            .sorted(by: { Self.modificationDate($0) > Self.modificationDate($1) }) {
+            guard let cached = Self.cachedDownload(in: previous, channel: channel) else { continue }
+            let manager = FileManager.default
+            try manager.copyItem(at: previous.appending(path: manifestFile.lastPathComponent), to: manifestFile)
+            try manager.copyItem(at: cached.file, to: directory.appending(path: cached.file.lastPathComponent))
+            let integrity = previous.appending(path: "integrity.json")
+            if let size = Self.regularFileSize(integrity), size <= 4_096 {
+                try manager.copyItem(at: integrity, to: integrityFile)
+            }
+            break
+        }
     }
 
     var manifestFile: URL { directory.appending(path: "core-manifest-\(channel.rawValue).json") }
     private var integrityFile: URL { directory.appending(path: "integrity.json") }
 
     func cachedDownload() -> (identity: MAACoreDownloadIdentity, file: URL, size: Int64)? {
-        guard let identity = MAACoreReleaseManifest.read(at: manifestFile)?.downloadIdentity,
+        Self.cachedDownload(in: directory, channel: channel)
+    }
+
+    private static func cachedDownload(in directory: URL, channel: MAAUpdateChannel)
+        -> (identity: MAACoreDownloadIdentity, file: URL, size: Int64)? {
+        guard let identity = MAACoreReleaseManifest.read(at: directory.appending(path: "core-manifest-\(channel.rawValue).json"))?.downloadIdentity,
               identity.size <= Self.maximumBytes else { return nil }
         let archive = directory.appending(path: identity.name)
         if Self.regularFileSize(archive) == identity.size { return (identity, archive, identity.size) }
@@ -106,7 +126,8 @@ struct MAADownloadCache: Sendable {
             try clear(except: [])
             return nil
         }
-        if let data = try? Data(contentsOf: integrityFile),
+        if let size = Self.regularFileSize(integrityFile), size <= 4_096,
+           let data = try? Data(contentsOf: integrityFile),
            let integrity = try? JSONDecoder().decode(Integrity.self, from: data),
            integrity.name == cached.file.lastPathComponent {
             let checksum = try SoftwareUpdateVerifier.sha256(of: cached.file)
@@ -120,7 +141,15 @@ struct MAADownloadCache: Sendable {
             try clear(except: [])
             return nil
         }
-        try clear(except: [manifestFile.lastPathComponent, cached.file.lastPathComponent])
+        var file = cached.file
+        if file.pathExtension == "partial", cached.size == cached.identity.size {
+            // maa-cli would otherwise request bytes=<size>- and receive HTTP 416.
+            let archive = directory.appending(path: cached.identity.name)
+            if FileManager.default.fileExists(atPath: archive.path) { try FileManager.default.removeItem(at: archive) }
+            try FileManager.default.moveItem(at: file, to: archive)
+            file = archive
+        }
+        try clear(except: [manifestFile.lastPathComponent, file.lastPathComponent])
         return cached.identity
     }
 
@@ -141,6 +170,10 @@ struct MAADownloadCache: Sendable {
             try clear(except: [])
         }
         try FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: directory.path)
+        for previous in try ownedDirectories()
+        where previous.lastPathComponent != directory.lastPathComponent && previous.lastPathComponent.hasPrefix(scope + "-") {
+            try FileManager.default.removeItem(at: previous)
+        }
         try prune()
     }
 
@@ -157,12 +190,8 @@ struct MAADownloadCache: Sendable {
         let manager = FileManager.default
         let cutoff = Date().addingTimeInterval(-Self.retention)
         var entries: [(url: URL, date: Date, size: Int64)] = []
-        for url in try manager.contentsOfDirectory(at: root, includingPropertiesForKeys: [.contentModificationDateKey]) {
-            let name = url.lastPathComponent
-            guard name.count == 64, name.allSatisfy({ $0.isHexDigit }),
-                  let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .contentModificationDateKey]),
-                  values.isDirectory == true, values.isSymbolicLink != true else { continue }
-            let date = values.contentModificationDate ?? .distantPast
+        for url in try ownedDirectories() {
+            let date = Self.modificationDate(url)
             if date < cutoff {
                 try manager.removeItem(at: url)
             } else {
@@ -175,6 +204,21 @@ struct MAADownloadCache: Sendable {
             try manager.removeItem(at: entry.url)
             total -= entry.size
         }
+    }
+
+    private func ownedDirectories() throws -> [URL] {
+        try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            .filter { url in
+                let name = url.lastPathComponent
+                guard name.count == 101, name.prefix(64).allSatisfy({ $0.isHexDigit }),
+                      name.dropFirst(64).first == "-", UUID(uuidString: String(name.suffix(36))) != nil,
+                      let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else { return false }
+                return values.isDirectory == true && values.isSymbolicLink != true
+            }
+    }
+
+    private static func modificationDate(_ url: URL) -> Date {
+        (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
     }
 
     static func regularFileSize(_ url: URL) -> Int64? {

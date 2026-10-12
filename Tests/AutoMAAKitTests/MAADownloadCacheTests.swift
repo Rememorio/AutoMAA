@@ -26,7 +26,9 @@ struct MAADownloadCacheTests {
         let next = try fixture.cache()
         let identity = try await next.prepare(fetcher: CacheManifestFetcher(value: fixture.manifest()))
         #expect(identity?.name == Fixture.archive)
-        #expect(try Data(contentsOf: file).count == (complete ? 100 : 25))
+        let reused = try #require(next.cachedDownload())
+        #expect(reused.file != file)
+        #expect(try Data(contentsOf: reused.file).count == (complete ? 100 : 25))
         #expect(!FileManager.default.fileExists(atPath: next.directory.appending(path: "StageActivityV2.json").path))
         #expect(next.retainedMessage()?.contains(complete ? "完整引擎包" : "续传") == true)
     }
@@ -40,7 +42,26 @@ struct MAADownloadCacheTests {
         cache = nil
         let next = try fixture.cache()
         #expect(try await next.prepare(fetcher: CacheManifestFetcher(value: fixture.manifest())) != nil)
-        #expect(try Data(contentsOf: file).count == 25)
+        let reused = try #require(next.cachedDownload())
+        #expect(reused.file != file)
+        // Simulate a surviving writer from the old process; it cannot change the next attempt.
+        try Data(repeating: 42, count: 50).write(to: file)
+        #expect(try Data(contentsOf: reused.file).count == 25)
+    }
+
+    @Test("a complete partial archive is reused without an unsatisfiable Range request")
+    func completePartial() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let cache = try fixture.cache()
+        let partial = try fixture.writeDownload(in: cache, complete: false)
+        try Data(repeating: 1, count: 100).write(to: partial)
+        try cache.finish()
+        #expect(try await cache.prepare(fetcher: CacheManifestFetcher(value: fixture.manifest())) != nil)
+        let reused = try #require(cache.cachedDownload())
+        #expect(reused.file.pathExtension == "zip")
+        #expect(reused.size == 100)
+        #expect(!FileManager.default.fileExists(atPath: partial.path))
     }
 
     @Test("changed version, size, URL or mirrors invalidate the cached archive", arguments: ["version", "size", "source", "mirrors"])
@@ -105,7 +126,7 @@ struct MAADownloadCacheTests {
             let cache = try MAADownloadCache(paths: paths,
                 manifestURL: URL(string: index == 1 ? "https://other.invalid/stable.json" : Fixture.manifestURL)!,
                 channel: index == 2 ? .beta : .stable)
-            locations.insert(cache.directory)
+            locations.insert(URL(filePath: String(cache.directory.lastPathComponent.prefix(64))))
         }
         #expect(locations.count == 4)
     }
