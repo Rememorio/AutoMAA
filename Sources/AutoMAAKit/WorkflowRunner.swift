@@ -168,6 +168,7 @@ public final class WorkflowRunner {
     private var currentSensitiveValues: [String] = []
     private var runProgress = MonotonicProgress()
     private var restartedAccountsByClient: [UUID: Set<UUID>] = [:]
+    private var maaDownloadRecoveryMessage: String?
 
     public convenience init(
         directories: AppDirectories = .init(),
@@ -966,7 +967,7 @@ public final class WorkflowRunner {
         )
         switch outcome {
         case .cancelled:
-            emit(.cancelled, "MAA 更新已取消，当前安装未更改", 1, .info)
+            emit(.cancelled, "MAA 更新已取消，当前安装未更改", 1, .info, details: maaDownloadRecoveryMessage)
             return false
         case let .incompatible(issue):
             emit(
@@ -976,11 +977,12 @@ public final class WorkflowRunner {
                     : "Beta 候选组件未通过资源验证，未启用",
                 1,
                 .error,
-                details: issue.guidance + "\n" + issue.details
+                details: [issue.guidance, issue.details, maaDownloadRecoveryMessage].compactMap { $0 }.joined(separator: "\n")
             )
             return false
         case let .failed(details):
-            emit(.failed, "MAA 更新失败", 1, .error, details: details)
+            emit(.failed, "MAA 更新失败", 1, .error,
+                 details: [details, maaDownloadRecoveryMessage].compactMap { $0 }.joined(separator: "\n"))
             return false
         case let .success(changed, recoveredAfterRetry):
             emit(
@@ -1115,11 +1117,41 @@ public final class WorkflowRunner {
         }
         _ = installationLock
 
+        var downloadCache: MAADownloadCache?
+        var reusedDownload: MAACoreDownloadIdentity?
+        defer {
+            if let downloadCache {
+                do {
+                    try downloadCache.finish()
+                    maaDownloadRecoveryMessage = downloadCache.retainedMessage()
+                } catch {
+                    maaDownloadRecoveryMessage = "无法整理下载缓存，下次更新将重新检查：\(error.localizedDescription)"
+                }
+            }
+        }
+        if case let .core(channel) = component {
+            do {
+                let url = try await coreManifestURL(cliPath: cliPath, channel: channel,
+                                                    timeout: min(UpdatePolicy.checkTimeout, deadline.remaining))
+                let cache = try MAADownloadCache(paths: paths, manifestURL: url, channel: channel)
+                downloadCache = cache
+                let fetcher = coreReleaseManifestFetcher
+                reusedDownload = try await UpdateDeadline(timeout: min(UpdatePolicy.checkTimeout, deadline.remaining))
+                    .perform(operation: "检查 MAA 下载缓存") { try await cache.prepare(fetcher: fetcher) }
+                if let message = cache.retainedMessage() { emit(.updating, message, 0, .info) }
+            } catch {
+                if Task.isCancelled { return .cancelled }
+                return .failed("无法准备 MAA 下载缓存；当前安装未更改：\(error.localizedDescription)")
+            }
+        }
+
         let staging: MAAUpdateStaging
         let installedCoreChecksum: String?
         do {
+            let cacheDirectory = downloadCache?.directory
             let preparation = Task.detached(priority: .utility) {
-                let staging = try self.prepareMAAUpdateStaging(paths: paths, includesCore: component.includesCore)
+                let staging = try self.prepareMAAUpdateStaging(paths: paths, includesCore: component.includesCore,
+                                                              downloadCache: cacheDirectory)
                 let checksum = component.includesCore
                     ? try? SoftwareUpdateVerifier.sha256(of: paths.library.appending(path: "libMaaCore.dylib"))
                     : nil
@@ -1142,12 +1174,7 @@ public final class WorkflowRunner {
             deadline: deadline
         )
         var information = MAAUpdateInformation(title: component.title, before: before)
-        if case let .core(channel) = component, deadline.remaining > 0 {
-            let url = try? await coreManifestURL(
-                cliPath: cliPath, channel: channel, timeout: min(3, deadline.remaining)
-            )
-            information.manifestURL = url.flatMap(ReleaseNotes.safeSourceURL)
-        }
+        information.manifestURL = downloadCache.flatMap { ReleaseNotes.safeSourceURL($0.manifestURL) }
         guard !Task.isCancelled else { return .cancelled }
         guard deadline.remaining > 0 else { return .failed(timeoutMessage) }
         emit(.updating, component.includesCore ? "正在获取 MAA 下载信息与同步识别数据…" : "正在同步识别数据（此阶段不提供下载量）…", 0, .info, updateInformation: information)
@@ -1174,7 +1201,17 @@ public final class WorkflowRunner {
             return .failed(timeoutMessage + "\n" + shortOutput(result))
         }
         guard result.exitCode == 0, !result.timedOut else {
+            if !MAAMaintenanceFailureClassifier.isTransientNetworkFailure(result),
+               !result.combinedOutput.localizedCaseInsensitiveContains("failed to update resource repository"),
+               downloadCache?.cachedDownload()?.file.pathExtension == "zip" {
+                try? downloadCache?.discard()
+            }
             return .failed(shortOutput(result) + "；当前安装未更改")
+        }
+        if let reusedDownload, let downloadCache,
+           MAACoreReleaseManifest.read(at: downloadCache.manifestFile)?.downloadIdentity != reusedDownload {
+            try? downloadCache.discard()
+            return .failed("下载期间 MAA 包信息发生变化，已丢弃缓存；请重新更新，当前安装未更改")
         }
         if result.combinedOutput.localizedCaseInsensitiveContains("failed to update resource repository") {
             return .failed("识别数据下载失败，请检查网络后重试；当前安装未更改\n" + shortOutput(result))
@@ -1199,6 +1236,7 @@ public final class WorkflowRunner {
         guard !Task.isCancelled else { return .cancelled }
         guard deadline.remaining > 0 else { return .failed(timeoutMessage) }
         if let issue {
+            try? downloadCache?.discard()
             return .incompatible(issue)
         }
         let componentChanged = component.includesCore && installedCoreChecksum != (try? SoftwareUpdateVerifier.sha256(
@@ -1294,7 +1332,8 @@ public final class WorkflowRunner {
 
     nonisolated private func prepareMAAUpdateStaging(
         paths: MAAInstallationPaths,
-        includesCore: Bool
+        includesCore: Bool,
+        downloadCache: URL? = nil
     ) throws -> MAAUpdateStaging {
         try Task.checkCancellation()
         try removeOwnedStagingItems(in: paths.data, prefix: ".automaa-update-")
@@ -1306,14 +1345,15 @@ public final class WorkflowRunner {
                 path: ".automaa-update-\(identifier)",
                 directoryHint: .isDirectory
             ),
-            cache: paths.cache.appending(
+            cache: downloadCache ?? paths.cache.appending(
                 path: ".automaa-update-\(identifier)",
                 directoryHint: .isDirectory
             ),
             state: directories.root.appending(
                 path: ".maa-update-state-\(identifier)",
                 directoryHint: .isDirectory
-            )
+            ),
+            keepsDownloadCache: downloadCache != nil
         )
         do {
             try FileManager.default.createDirectory(at: staging.data, withIntermediateDirectories: true)
@@ -2609,6 +2649,7 @@ public final class WorkflowRunner {
     }
 
     private func beginActivity(runID: UUID = UUID(), sensitiveValues: [String] = []) {
+        maaDownloadRecoveryMessage = nil
         currentRunID = runID
         currentSensitiveValues = sensitiveValues
         runProgress.reset()

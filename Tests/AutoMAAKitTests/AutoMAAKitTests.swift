@@ -1688,6 +1688,71 @@ final class AutoMAAKitTests: XCTestCase {
     }
 
     @MainActor
+    func testInterruptedCoreUpdateReusesDownloadsWithoutActivatingFailedCandidates() async throws {
+        for cancelled in [true, false] {
+            let root = temporaryRoot()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let directories = AppDirectories(root: root)
+            try directories.prepare()
+            let installation = try makeFakeMAAInstallation(at: root)
+            let cli = root.appending(path: "maa-cli")
+            let ready = directories.maaConfig.appending(path: "download-ready")
+            try writeFakeMAACLI(at: cli, installation: installation, body: """
+            if [ "$1" = "update" ]; then
+              archive="$MAA_CACHE_DIR/MAA-v1.2.3-macos-runtime-universal.zip"
+              printf '%s' '{"version":"v1.2.3","details":{"assets":[{"name":"MAA-v1.2.3-macos-runtime-universal.zip","size":100,"browser_download_url":"https://download.invalid/core.zip"}]}}' > "$MAA_CACHE_DIR/core-manifest-stable.json"
+              if [ ! -f "$MAA_CONFIG_DIR/download-ready" ]; then
+                /bin/dd if=/dev/zero of="$archive\(cancelled ? ".partial" : "")" bs=\(cancelled ? 25 : 100) count=1 2>/dev/null
+                printf '%s' 'unverified core' > "$MAA_DATA_DIR/lib/libMaaCore.dylib"
+                /usr/bin/touch "$MAA_CONFIG_DIR/download-ready"
+                \(cancelled ? "/bin/sleep 30" : "printf '%s' 'failed to update resource repository'; exit 0")
+              else
+                /usr/bin/wc -c < "$archive\(cancelled ? ".partial" : "")" > "$MAA_CONFIG_DIR/reused-bytes"
+                printf '%s' 'updated core' > "$MAA_DATA_DIR/lib/libMaaCore.dylib"
+              fi
+            fi
+            """)
+            let runtime = StubClientRuntime(closesOnForce: true)
+            func runner() -> WorkflowRunner {
+                WorkflowRunner(directories: directories, portProbe: runtime, gameController: runtime,
+                               shutdownPolicy: .immediate, resourceProbeExecutable: installation.probe,
+                               coreReleaseManifestFetcher: DownloadManifestFetcher())
+            }
+            let first = Task { await runner().updateCore(cliPath: cli.path) }
+            if cancelled {
+                let limit = ContinuousClock.now.advanced(by: .seconds(5))
+                while !FileManager.default.fileExists(atPath: ready.path), ContinuousClock.now < limit {
+                    try await Task.sleep(for: .milliseconds(10))
+                }
+                XCTAssertTrue(FileManager.default.fileExists(atPath: ready.path))
+                first.cancel()
+            }
+            let firstSucceeded = await first.value
+            XCTAssertFalse(firstSucceeded)
+            XCTAssertEqual(try String(contentsOf: installation.library.appending(path: "libMaaCore.dylib"), encoding: .utf8), "fake MaaCore")
+            XCTAssertTrue(HistoryStore(directories: directories).load().last?.details?.contains("已保留") == true)
+            XCTAssertFalse(ProcessLock.isHeld(at: directories.lock))
+            let secondSucceeded = await runner().updateCore(cliPath: cli.path)
+            XCTAssertTrue(secondSucceeded)
+            let reused = try String(contentsOf: directories.maaConfig.appending(path: "reused-bytes"), encoding: .utf8)
+            XCTAssertEqual(Int(reused.trimmingCharacters(in: .whitespacesAndNewlines)), cancelled ? 25 : 100)
+            XCTAssertEqual(try String(contentsOf: installation.library.appending(path: "libMaaCore.dylib"), encoding: .utf8), "updated core")
+            XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: installation.data.path).contains {
+                $0.hasPrefix(".automaa-update-")
+            })
+        }
+    }
+
+    private struct DownloadManifestFetcher: MAACoreReleaseManifestFetching {
+        func manifest(at url: URL) async throws -> MAACoreReleaseManifest {
+            .init(version: "v1.2.3", details: .init(assets: [
+                .init(name: "MAA-v1.2.3-macos-runtime-universal.zip", size: 100,
+                      browserDownloadURL: "https://download.invalid/core.zip", mirrors: [])
+            ]))
+        }
+    }
+
+    @MainActor
     func testStableCoreUpdateDefersWhenInstalledPrereleaseIsNewer() async throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -3898,13 +3963,13 @@ final class AutoMAAKitTests: XCTestCase {
             self.transientFailures = transientFailures
         }
 
-        func version(at url: URL) async throws -> MAASemanticVersion {
+        func manifest(at url: URL) async throws -> MAACoreReleaseManifest {
             urls.append(url)
             if transientFailures > 0 {
                 transientFailures -= 1
                 throw URLError(.timedOut)
             }
-            return resolvedVersion
+            return .init(version: resolvedVersion.description)
         }
 
         func requestedURLs() -> [URL] {

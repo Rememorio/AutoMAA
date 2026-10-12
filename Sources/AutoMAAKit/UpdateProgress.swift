@@ -57,45 +57,20 @@ struct MAAUpdateProgressReader: Sendable {
     let cache: URL
     let channel: MAAUpdateChannel
 
-    private struct Manifest: Decodable {
-        struct Details: Decodable {
-            struct Asset: Decodable {
-                let name: String
-                let size: Int64
-            }
-            let assets: [Asset]
-        }
-        let version: String
-        let details: Details
-    }
-
     func read() -> UpdateProgress? {
         // maa-cli writes the manifest and growing .partial archive to this isolated cache.
         // Inspect only download files; extracted resources are not transferred bytes.
         let manifestURL = cache.appending(path: "core-manifest-\(channel.rawValue).json")
-        guard let size = regularFileSize(manifestURL), size <= 2 * 1_024 * 1_024,
-              let data = try? Data(contentsOf: manifestURL),
-              let manifest = try? JSONDecoder().decode(Manifest.self, from: data),
-              !manifest.version.contains("/"), !manifest.version.contains("\\"),
-              let version = MAASemanticVersion(manifest.version),
-              let asset = manifest.details.assets.first(where: {
-                  $0.name == "MAA-v\(version)-macos-runtime-universal.zip" && $0.size > 0
-              }) else { return nil }
+        guard let asset = MAACoreReleaseManifest.read(at: manifestURL)?.macOSAsset else { return nil }
         let archive = cache.appending(path: asset.name)
-        if let received = regularFileSize(archive.appendingPathExtension("partial")) {
+        if let received = MAADownloadCache.regularFileSize(archive.appendingPathExtension("partial")) {
             return .init(message: "正在下载 MAA 引擎与基础识别数据…",
                          download: .init(receivedBytes: received, totalBytes: asset.size))
         }
-        if regularFileSize(archive) == asset.size {
+        if MAADownloadCache.regularFileSize(archive) == asset.size {
             return .init(message: "下载完成，正在解压与同步识别数据…")
         }
         return nil
     }
 
-    private func regularFileSize(_ url: URL) -> Int64? {
-        guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]),
-              values.isRegularFile == true, values.isSymbolicLink != true,
-              let size = values.fileSize else { return nil }
-        return Int64(size)
-    }
 }

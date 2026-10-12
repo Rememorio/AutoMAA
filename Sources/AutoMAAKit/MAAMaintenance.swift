@@ -96,21 +96,23 @@ enum MAACoreReleaseManifestError: LocalizedError {
 }
 
 protocol MAACoreReleaseManifestFetching: Sendable {
-    func version(at url: URL) async throws -> MAASemanticVersion
+    func manifest(at url: URL) async throws -> MAACoreReleaseManifest
+}
+
+extension MAACoreReleaseManifestFetching {
+    func version(at url: URL) async throws -> MAASemanticVersion {
+        try await manifest(at: url).coreVersion()
+    }
 }
 
 struct MAACoreReleaseManifestClient: MAACoreReleaseManifestFetching {
-    private struct Manifest: Decodable {
-        let version: String
-    }
-
     private let session: URLSession
 
     init(session: URLSession = .shared) {
         self.session = session
     }
 
-    func version(at url: URL) async throws -> MAASemanticVersion {
+    func manifest(at url: URL) async throws -> MAACoreReleaseManifest {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: UpdatePolicy.checkTimeout)
         request.setValue("AutoMAA", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await session.data(for: request)
@@ -123,11 +125,9 @@ struct MAACoreReleaseManifestClient: MAACoreReleaseManifestFetching {
         guard data.count <= 2 * 1_024 * 1_024 else {
             throw MAACoreReleaseManifestError.oversized
         }
-        let value = try JSONDecoder().decode(Manifest.self, from: data).version
-        guard let version = MAASemanticVersion(value) else {
-            throw MAACoreReleaseManifestError.invalidVersion(value)
-        }
-        return version
+        let manifest = try JSONDecoder().decode(MAACoreReleaseManifest.self, from: data)
+        _ = try manifest.coreVersion()
+        return manifest
     }
 }
 
@@ -247,6 +247,7 @@ struct MAAUpdateStaging: Sendable {
     let data: URL
     let cache: URL
     let state: URL
+    var keepsDownloadCache = false
 
     var library: URL { data.appending(path: "lib", directoryHint: .isDirectory) }
     var resource: URL { data.appending(path: "resource", directoryHint: .isDirectory) }
@@ -254,7 +255,7 @@ struct MAAUpdateStaging: Sendable {
 
     func remove() {
         try? FileManager.default.removeItem(at: data)
-        try? FileManager.default.removeItem(at: cache)
+        if !keepsDownloadCache { try? FileManager.default.removeItem(at: cache) }
         try? FileManager.default.removeItem(at: state)
     }
 }
