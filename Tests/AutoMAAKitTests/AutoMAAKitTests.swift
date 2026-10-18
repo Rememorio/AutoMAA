@@ -12,8 +12,9 @@ private extension ClientShutdownPolicy {
 
 @MainActor
 private final class StubClientRuntime: PortProbing, GameProcessControlling {
-    var isClientRunning = true
-    var isPortOpen = true
+    var isClientRunning = false
+    var isPortOpen = false
+    var launches = 0
     let closesOnForce: Bool
     let opensOnWait: Bool
     var runningClientIDs: Set<UUID>?
@@ -28,6 +29,23 @@ private final class StubClientRuntime: PortProbing, GameProcessControlling {
         self.closesOnForce = closesOnForce
         self.opensOnWait = opensOnWait
         self.runningClientIDs = runningClientIDs
+        isPortOpen = runningClientIDs?.isEmpty == false
+    }
+
+    func inspect(_ value: String, observeCancellation: Bool) async throws -> PortState {
+        isPortOpen ? .listening([testGameInstance.pid]) : .closed
+    }
+
+    func instances(for client: ClientConfiguration) -> [GameProcessIdentity] {
+        isRunning(client) ? [testGameInstance] : []
+    }
+
+    func launch(_ client: ClientConfiguration) async throws -> GameProcessIdentity {
+        launches += 1
+        isClientRunning = true
+        runningClientIDs?.insert(client.id)
+        isPortOpen = launches == 1 || opensOnWait
+        return testGameInstance
     }
 
     func isOpen(_ value: String, observeCancellation: Bool) async -> Bool {
@@ -51,7 +69,7 @@ private final class StubClientRuntime: PortProbing, GameProcessControlling {
         runningClientIDs?.contains(client.id) ?? isClientRunning
     }
 
-    func terminate(_ client: ClientConfiguration, force: Bool) -> Bool {
+    func terminate(_ client: ClientConfiguration, instance: GameProcessIdentity, force: Bool) -> Bool {
         terminationRequests.append(force)
         if force, closesOnForce {
             isClientRunning = false
@@ -466,7 +484,7 @@ final class AutoMAAKitTests: XCTestCase {
         )
         let runtime = StubClientRuntime(
             closesOnForce: true,
-            runningClientIDs: [official.id, japanese.id]
+            runningClientIDs: [japanese.id]
         )
         let runner = WorkflowRunner(
             directories: AppDirectories(root: root),
@@ -483,7 +501,7 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertEqual(report.succeededSteps, 0)
         XCTAssertTrue(runtime.terminationRequests.isEmpty)
         XCTAssertTrue(runtime.events.contains {
-            $0.phase == .failed && $0.message == message && $0.log.level == .error
+            $0.phase == .failed && $0.message.contains(message) && $0.log.level == .error
         })
     }
 
@@ -3238,8 +3256,9 @@ final class AutoMAAKitTests: XCTestCase {
 
         plan.fight.stageStrategy = .rememberedRegular
         configuration.plans = [plan]
-        runtime.isClientRunning = true
-        runtime.isPortOpen = true
+        runtime.isClientRunning = false
+        runtime.isPortOpen = false
+        runtime.launches = 0
         let regularRunner = WorkflowRunner(
             directories: directories,
             portProbe: runtime,

@@ -8,6 +8,10 @@ public enum RuntimeError: LocalizedError {
     case invalidAddress(String)
     case portOccupied(String)
     case portOccupiedByClient(address: String, client: String)
+    case clientAlreadyRunning(String)
+    case clientOwnershipLost(String)
+    case portProbeFailed(String)
+    case launchUnconfirmed(String)
     case appNotFound(String)
     case bundleIdentifierMissing(String)
     case launchFailed(String)
@@ -26,6 +30,14 @@ public enum RuntimeError: LocalizedError {
             "MaaTools 端口 \(value) 已被未知程序占用。为避免连接错误客户端，请关闭相关游戏和 MAA 后重新运行"
         case let .portOccupiedByClient(address, client):
             "客户端「\(client)」仍在运行并占用 MaaTools 端口 \(address)。为避免连接错误客户端，请关闭该客户端及其他 MAA 后重新运行"
+        case let .clientAlreadyRunning(client):
+            "客户端「\(client)」已在本轮运行前打开，AutoMAA 不会接管或关闭它。请先结束其他 MAA 任务并手动关闭该客户端，再运行方案"
+        case let .clientOwnershipLost(client):
+            "无法确认客户端「\(client)」及其 MaaTools 端口仍属于本轮启动的实例，流程已停止；请手动检查客户端和其他 MAA"
+        case let .portProbeFailed(address):
+            "无法确认 MaaTools 端口 \(address) 的状态，流程已停止；请检查连接地址和本机检测权限后重试"
+        case let .launchUnconfirmed(client):
+            "未能确认客户端「\(client)」的启动实例，流程已停止；若客户端稍后打开，请手动关闭后重试"
         case let .appNotFound(path): "找不到游戏：\(path)"
         case let .bundleIdentifierMissing(client): "客户端「\(client)」缺少 Bundle Identifier"
         case let .launchFailed(message): "游戏启动失败：\(message)"
@@ -317,120 +329,3 @@ public enum SensitiveDataRedactor {
         return expression.stringByReplacingMatches(in: value, range: range, withTemplate: replacement)
     }
 }
-
-public struct PortProbe: Sendable {
-    private let commandRunner = CommandRunner()
-
-    public init() {}
-
-    public func isOpen(_ value: String, observeCancellation: Bool = true) async -> Bool {
-        guard let address = try? PortAddress(value),
-              let result = try? await commandRunner.run(
-                executable: "/usr/bin/nc",
-                arguments: ["-z", "-G", "1", address.host, address.port],
-                timeout: 2,
-                observeCancellation: observeCancellation
-              )
-        else { return false }
-        return result.exitCode == 0
-    }
-
-    public func wait(
-        forOpen shouldBeOpen: Bool,
-        address: String,
-        timeout: TimeInterval,
-        observeCancellation: Bool = true
-    ) async -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if observeCancellation, Task.isCancelled { return false }
-            if await isOpen(address, observeCancellation: observeCancellation) == shouldBeOpen { return true }
-            if observeCancellation {
-                try? await Task.sleep(for: .milliseconds(500))
-            } else {
-                await Task.detached(priority: .utility) {
-                    try? await Task.sleep(for: .milliseconds(500))
-                }.value
-            }
-        }
-        return await isOpen(address, observeCancellation: observeCancellation) == shouldBeOpen
-    }
-}
-
-@MainActor
-protocol PortProbing {
-    func isOpen(_ value: String, observeCancellation: Bool) async -> Bool
-    func wait(
-        forOpen shouldBeOpen: Bool,
-        address: String,
-        timeout: TimeInterval,
-        observeCancellation: Bool
-    ) async -> Bool
-}
-
-extension PortProbing {
-    func isOpen(_ value: String) async -> Bool {
-        await isOpen(value, observeCancellation: true)
-    }
-
-    func wait(forOpen shouldBeOpen: Bool, address: String, timeout: TimeInterval) async -> Bool {
-        await wait(
-            forOpen: shouldBeOpen,
-            address: address,
-            timeout: timeout,
-            observeCancellation: true
-        )
-    }
-}
-
-extension PortProbe: PortProbing {}
-
-@MainActor
-protocol GameProcessControlling {
-    func isRunning(_ client: ClientConfiguration) -> Bool
-
-    @discardableResult
-    func terminate(_ client: ClientConfiguration, force: Bool) -> Bool
-}
-
-@MainActor
-public struct GameProcessController {
-    public init() {}
-
-    public func isRunning(_ client: ClientConfiguration) -> Bool {
-        !applications(for: client).isEmpty
-    }
-
-    @discardableResult
-    public func terminate(_ client: ClientConfiguration, force: Bool) -> Bool {
-        let applications = applications(for: client)
-        guard !applications.isEmpty else { return true }
-        return applications.allSatisfy { force ? $0.forceTerminate() : $0.terminate() }
-    }
-
-    private func applications(for client: ClientConfiguration) -> [NSRunningApplication] {
-        return NSRunningApplication.runningApplications(withBundleIdentifier: client.bundleIdentifier).filter { application in
-            guard let bundleURL = application.bundleURL else { return false }
-            return Self.matchesApplication(client, bundleURL: bundleURL, executableURL: application.executableURL)
-        }
-    }
-
-    static func matchesApplication(
-        _ client: ClientConfiguration,
-        bundleURL: URL,
-        executableURL: URL?
-    ) -> Bool {
-        let configuredBundleURL = URL(filePath: client.appPath, directoryHint: .isDirectory)
-        if canonicalPath(configuredBundleURL) == canonicalPath(bundleURL) { return true }
-        guard let configuredExecutableURL = Bundle(url: configuredBundleURL)?.executableURL,
-              let executableURL
-        else { return false }
-        return canonicalPath(configuredExecutableURL) == canonicalPath(executableURL)
-    }
-
-    private static func canonicalPath(_ url: URL) -> String {
-        url.standardizedFileURL.resolvingSymlinksInPath().path
-    }
-}
-
-extension GameProcessController: GameProcessControlling {}

@@ -60,17 +60,27 @@ enum ShutdownTestMode: CaseIterable, Sendable { case maa, normal, forced, proces
 @MainActor
 private final class ShutdownTestRuntime: PortProbing, GameProcessControlling {
     let mode: ShutdownTestMode
-    var running = true
-    var portOpen = true
+    var running = false
+    var portOpen = false
     var entries: [LogEntry] = []
 
     init(mode: ShutdownTestMode) { self.mode = mode }
+    func inspect(_ value: String, observeCancellation: Bool) async throws -> PortState {
+        portOpen ? .listening([testGameInstance.pid]) : .closed
+    }
+    func instances(for client: ClientConfiguration) -> [GameProcessIdentity] { running ? [testGameInstance] : [] }
+    func launch(_ client: ClientConfiguration) async throws -> GameProcessIdentity {
+        running = true
+        portOpen = true
+        return testGameInstance
+    }
+
     func isOpen(_ value: String, observeCancellation: Bool) async -> Bool { portOpen }
     func wait(forOpen: Bool, address: String, timeout: TimeInterval, observeCancellation: Bool) async -> Bool {
         portOpen == forOpen
     }
     func isRunning(_ client: ClientConfiguration) -> Bool { running }
-    func terminate(_ client: ClientConfiguration, force: Bool) -> Bool {
+    func terminate(_ client: ClientConfiguration, instance: GameProcessIdentity, force: Bool) -> Bool {
         if force || mode == .normal {
             running = mode == .processStuck
             portOpen = mode == .portStuck

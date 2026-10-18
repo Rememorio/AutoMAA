@@ -80,6 +80,11 @@ struct WorkflowRunControlTests {
         let control = WorkflowRunControl(directories: directories)
         let identity = try #require(control.activeRun())
         #expect(identity.planID == plan.id)
+        let overlapping = await runner.run(configuration, planID: plan.id)
+        #expect(overlapping.fatalError == RuntimeError.alreadyRunning.localizedDescription)
+        #expect(!(await runner.hotUpdate(cliPath: "/usr/bin/true")))
+        #expect(!(await runner.updateCore(cliPath: "/usr/bin/true")))
+        #expect(control.activeRun() == identity)
         try control.requestStop(for: identity)
         let report = await task.value
         #expect(report.cancelled)
@@ -119,6 +124,16 @@ private final class StopTestRuntime: PortProbing, GameProcessControlling {
     var closedWhileLocked = false
     var lastPhase: RunnerPhase?
 
+    func inspect(_ value: String, observeCancellation: Bool) async throws -> PortState {
+        portOpen ? .listening([testGameInstance.pid]) : .closed
+    }
+    func instances(for client: ClientConfiguration) -> [GameProcessIdentity] { running ? [testGameInstance] : [] }
+    func launch(_ client: ClientConfiguration) async throws -> GameProcessIdentity {
+        running = true
+        portOpen = true
+        return testGameInstance
+    }
+
     func isOpen(_ value: String, observeCancellation: Bool) async -> Bool { portOpen }
 
     func wait(forOpen shouldBeOpen: Bool, address: String, timeout: TimeInterval, observeCancellation: Bool) async -> Bool {
@@ -128,7 +143,7 @@ private final class StopTestRuntime: PortProbing, GameProcessControlling {
 
     func isRunning(_ client: ClientConfiguration) -> Bool { running }
 
-    func terminate(_ client: ClientConfiguration, force: Bool) -> Bool {
+    func terminate(_ client: ClientConfiguration, instance: GameProcessIdentity, force: Bool) -> Bool {
         terminationRequests += 1
         running = false
         portOpen = false

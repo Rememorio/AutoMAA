@@ -494,13 +494,23 @@ private final class FightTestRuntime: PortProbing, GameProcessControlling {
     var running = false
     var launches = 0
     var events: [RunnerEvent] = []
+    func inspect(_ value: String, observeCancellation: Bool) async throws -> PortState {
+        running ? .listening([testGameInstance.pid]) : .closed
+    }
+    func instances(for client: ClientConfiguration) -> [GameProcessIdentity] { running ? [testGameInstance] : [] }
+    func launch(_ client: ClientConfiguration) async throws -> GameProcessIdentity {
+        running = true
+        launches += 1
+        return testGameInstance
+    }
+
     func isOpen(_ value: String, observeCancellation: Bool) async -> Bool { running }
     func wait(forOpen: Bool, address: String, timeout: TimeInterval, observeCancellation: Bool) async -> Bool {
-        if forOpen { running = true; launches += 1 }
+        if forOpen { running = true }
         return running == forOpen
     }
     func isRunning(_ client: ClientConfiguration) -> Bool { running }
-    func terminate(_ client: ClientConfiguration, force: Bool) -> Bool { running = false; return true }
+    func terminate(_ client: ClientConfiguration, instance: GameProcessIdentity, force: Bool) -> Bool { running = false; return true }
     func record(_ event: RunnerEvent) { events.append(event) }
 }
 

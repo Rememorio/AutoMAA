@@ -170,6 +170,7 @@ public final class WorkflowRunner {
     private var runProgress = MonotonicProgress()
     private var restartedAccountsByClient: [UUID: Set<UUID>] = [:]
     private var maaDownloadRecoveryMessage: String?
+    private var ownedClients: [UUID: GameProcessIdentity] = [:]
 
     public convenience init(
         directories: AppDirectories = .init(),
@@ -284,6 +285,10 @@ public final class WorkflowRunner {
         runID: UUID
     ) async -> WorkflowReport {
         var report = WorkflowReport()
+        guard currentRunID == nil else {
+            report.fatalError = RuntimeError.alreadyRunning.localizedDescription
+            return report
+        }
         var lock: ProcessLock?
         var lease: CaffeinateLease?
         defer { withExtendedLifetime((lock, lease)) {} }
@@ -354,10 +359,6 @@ public final class WorkflowRunner {
                 identity = current
             }
             lease = CaffeinateLease()
-            try MAAConfigurationWriter(directories: directories).prepare(
-                configuration,
-                fightStageMemory: fightStageMemory
-            )
         } catch {
             report.fatalError = error.localizedDescription
             emit(.failed, error.localizedDescription, 0, .error)
@@ -392,13 +393,6 @@ public final class WorkflowRunner {
             }
 
         }
-        do { try stateStore.save(state) }
-        catch {
-            report.fatalError = "无法保存当日记录：\(error.localizedDescription)"
-            emit(.failed, report.fatalError!, 0, .error)
-            return report
-        }
-
         let activeClients = configuration.clients.filter { client in
             client.enabled && client.accounts.contains(where: plan.includes)
         }
@@ -409,7 +403,35 @@ public final class WorkflowRunner {
         var visitedSteps = 0
 
         emit(.preparing, "正在准备「\(plan.displayName)」", 0, .info)
-        if plan.policy.hotUpdateBeforeRun {
+        let pendingClients = activeClients.filter { client in
+            client.accounts.filter(plan.includes).contains { account in
+                plan.enabledTasks.contains { task in
+                    let key = checkpointKey(plan: plan, client: client, account: account, task: task)
+                    return !state.isResolved(key) && (retryStep != nil || !state.needsFightConfirmation(key))
+                }
+            }
+        }
+        do {
+            for client in pendingClients {
+                try await requireAvailable(client, configuredClients: configuration.clients)
+            }
+            guard !Task.isCancelled else { throw RuntimeError.cancelled }
+            if !pendingClients.isEmpty {
+                try MAAConfigurationWriter(directories: directories).prepare(configuration, fightStageMemory: fightStageMemory)
+            }
+            try stateStore.save(state)
+        } catch {
+            report.unexecutedSteps = totalSteps
+            if isCancellation(error) {
+                report.cancelled = true
+                emit(.cancelled, "流程已取消，未启动游戏", 1, .warning, runSummary: report.runSummary)
+            } else {
+                report.fatalError = error.localizedDescription
+                emit(.failed, "运行前检查未通过，未接管或关闭游戏：\(error.localizedDescription)", 0, .error)
+            }
+            return report
+        }
+        if !pendingClients.isEmpty, plan.policy.hotUpdateBeforeRun {
             emit(.updating, "正在更新识别数据", 0, .info)
             let update = await performStagedMAAUpdate(
                 cliPath: configuration.cliPath,
@@ -447,7 +469,7 @@ public final class WorkflowRunner {
             emit(.cancelled, "流程已取消，未启动游戏", 1, .warning, runSummary: report.runSummary)
             return report
         }
-        let compatibilityIssue = await maaResourceCompatibilityIssue(cliPath: configuration.cliPath)
+        let compatibilityIssue = pendingClients.isEmpty ? nil : await maaResourceCompatibilityIssue(cliPath: configuration.cliPath)
         if Task.isCancelled {
             report.cancelled = true
             report.unexecutedSteps = totalSteps
@@ -504,8 +526,7 @@ public final class WorkflowRunner {
                 if isCancellation(error) {
                     report.cancelled = true
                     do {
-                        let portIsOpen = await portProbe.isOpen(client.address, observeCancellation: false)
-                        if gameController.isRunning(client) || portIsOpen {
+                        if ownedClients[client.id] != nil {
                             try await close(client, configuration: configuration)
                         }
                     } catch {
@@ -537,8 +558,7 @@ public final class WorkflowRunner {
                     client: client
                 )
                 do {
-                    let portIsOpen = await portProbe.isOpen(client.address, observeCancellation: false)
-                    if gameController.isRunning(client) || portIsOpen {
+                    if ownedClients[client.id] != nil {
                         try await close(client, configuration: configuration)
                     }
                 } catch {
@@ -871,6 +891,7 @@ public final class WorkflowRunner {
     }
 
     public func hotUpdate(cliPath: String) async -> Bool {
+        guard currentRunID == nil else { return false }
         beginActivity()
         defer { endActivity() }
         var lock: ProcessLock?
@@ -923,6 +944,7 @@ public final class WorkflowRunner {
         channel: MAAUpdateChannel = .stable,
         context: MAAUpdateContext = .manual
     ) async -> Bool {
+        guard currentRunID == nil else { return false }
         beginActivity()
         defer { endActivity() }
         var lock: ProcessLock?
@@ -1548,47 +1570,53 @@ public final class WorkflowRunner {
         return result
     }
 
-    private func launch(
-        _ client: ClientConfiguration,
-        configuredClients: [ClientConfiguration]
-    ) async throws {
+    private func requireAvailable(_ client: ClientConfiguration, configuredClients: [ClientConfiguration]) async throws {
+        guard !Task.isCancelled else { throw RuntimeError.cancelled }
+        let address = try PortAddress(client.address)
+        let port = try await portProbe.inspect(client.address)
+        guard !Task.isCancelled else { throw RuntimeError.cancelled }
+        let related = configuredClients.filter { $0.id == client.id || (try? PortAddress($0.address)) == address }
+        if case let .listening(pids) = port,
+           let owner = related.first(where: { gameController.instances(for: $0).contains { pids.contains($0.pid) } }) {
+            throw RuntimeError.portOccupiedByClient(address: client.address, client: owner.displayName)
+        }
+        if port.isOpen { throw RuntimeError.portOccupied(client.address) }
+        if let occupied = related.first(where: { !gameController.instances(for: $0).isEmpty }) {
+            throw RuntimeError.clientAlreadyRunning(occupied.displayName)
+        }
+    }
+
+    private func launch(_ client: ClientConfiguration, configuredClients: [ClientConfiguration]) async throws {
         guard !Task.isCancelled else { throw RuntimeError.cancelled }
         emit(.launching, "正在启动\(clientText(client))", 0, .info, client: client)
-        let address = try PortAddress(client.address)
         guard !client.bundleIdentifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw RuntimeError.bundleIdentifierMissing(client.displayName)
         }
         guard FileManager.default.fileExists(atPath: client.appPath) else {
             throw RuntimeError.appNotFound(client.appPath)
         }
-        if await portProbe.isOpen(client.address) {
-            if let conflict = configuredClients.first(where: {
-                $0.id != client.id
-                    && (try? PortAddress($0.address)) == address
-                    && gameController.isRunning($0)
-            }) {
-                throw RuntimeError.portOccupiedByClient(
-                    address: client.address,
-                    client: conflict.displayName
-                )
-            }
-            guard gameController.isRunning(client) else {
-                throw RuntimeError.portOccupied(client.address)
-            }
-            emit(.launching, "\(clientText(client))已在运行", 0, .info, client: client)
-            return
+        if ownedClients[client.id] != nil {
+            let state = try await shutdownState(client)
+            if state.isClosed { ownedClients[client.id] = nil }
         }
-        let result = await runCommand(executable: "/usr/bin/open", arguments: [client.appPath], timeout: 20)
-        guard !result.cancelled, !Task.isCancelled else { throw RuntimeError.cancelled }
-        guard result.exitCode == 0 else {
-            throw RuntimeError.launchFailed(shortOutput(result))
+        if ownedClients[client.id] == nil {
+            try await requireAvailable(client, configuredClients: configuredClients)
+            let instance = try await gameController.launch(client)
+            ownedClients[client.id] = instance
         }
-        let connected = await portProbe.wait(forOpen: true, address: client.address, timeout: 90)
         guard !Task.isCancelled else { throw RuntimeError.cancelled }
-        guard connected else {
-            throw RuntimeError.connectionTimeout(client.address)
-        }
+        let connected = try await portProbe.wait(forOpen: true, address: client.address, timeout: 90)
+        guard !Task.isCancelled else { throw RuntimeError.cancelled }
+        guard connected else { throw RuntimeError.connectionTimeout(client.address) }
+        try await requireConnection(client)
         emit(.launching, "\(clientText(client))已连接 MaaTools", 0, .success, client: client)
+    }
+
+    private func requireConnection(_ client: ClientConfiguration) async throws {
+        guard !Task.isCancelled else { throw RuntimeError.cancelled }
+        let state = try await shutdownState(client)
+        guard !Task.isCancelled else { throw RuntimeError.cancelled }
+        guard state.processRunning, state.portOpen else { throw RuntimeError.clientOwnershipLost(client.displayName) }
     }
 
     private func switchAccount(
@@ -1617,6 +1645,7 @@ public final class WorkflowRunner {
         while true {
             guard !Task.isCancelled else { throw RuntimeError.cancelled }
             attempt += 1
+            try await requireConnection(client)
             lastResult = await runDiagnosticCommand(
                 executable: configuration.cliPath,
                 arguments: arguments,
@@ -1849,6 +1878,7 @@ public final class WorkflowRunner {
         try FightStageInspection.prepare(at: root, client: client)
         emit(.runningTask, "\(accountText(account))：正在识别当前/上次关卡（不开始作战）", 0, .info,
              client: client, account: account, task: .fight)
+        try await requireConnection(client)
         let result = await runCommand(executable: configuration.cliPath,
                                       arguments: ["run", FightStageInspection.taskName, "-p", FightStageInspection.taskName, "--batch"],
                                       timeout: 60, environment: ["MAA_STATE_DIR": root.path], configurationDirectory: root)
@@ -2125,6 +2155,7 @@ public final class WorkflowRunner {
                 : nil
             if let observationRoot { try FileManager.default.createDirectory(at: observationRoot, withIntermediateDirectories: true) }
             defer { if let observationRoot { try? FileManager.default.removeItem(at: observationRoot) } }
+            try await requireConnection(client)
             let result: CommandResult
             if let observationRoot {
                 result = await runCommand(executable: configuration.cliPath,
@@ -2220,7 +2251,7 @@ public final class WorkflowRunner {
                     task: task,
                     details: failureDetails
                 )
-                if !(await portProbe.isOpen(client.address)) {
+                if try await !portProbe.inspect(client.address).isOpen {
                     try await launch(client, configuredClients: configuration.clients)
                 }
                 try await switchAccount(
@@ -2311,9 +2342,10 @@ public final class WorkflowRunner {
     }
 
     private func close(_ client: ClientConfiguration, configuration: AppConfiguration) async throws {
+        guard let instance = ownedClients[client.id] else { return }
         emit(.closing, "正在关闭\(clientText(client))", 0, .info, client: client)
-        let portIsOpen = await portProbe.isOpen(client.address, observeCancellation: false)
-        if portIsOpen, !Task.isCancelled {
+        let initial = try await shutdownState(client)
+        if initial.portOpen, initial.processRunning, !Task.isCancelled {
             let startedAt = ContinuousClock.now
             let result = await runCommand(
                 executable: configuration.cliPath,
@@ -2322,14 +2354,14 @@ public final class WorkflowRunner {
                 ignoreCancellation: true,
                 logContext: "\(clientText(client)) · MAA 退出请求"
             )
-            let state = await waitUntilClosed(client, timeout: shutdownPolicy.maaGracePeriod)
+            let state = try await waitUntilClosed(client, timeout: shutdownPolicy.maaGracePeriod)
             let request = "退出码 \(result.exitCode)\(result.timedOut ? " · 命令超时" : "")\(result.cancelled ? " · 命令已取消" : "")"
             let details = recordShutdown(client, method: "MAA 退出请求", request: request, startedAt: startedAt, state: state)
             if state.isClosed {
                 emitClientClosed(client, details: details)
                 return
             }
-        } else if !portIsOpen, !gameController.isRunning(client) {
+        } else if initial.isClosed {
             emitClientClosed(client, details: "检查时进程已退出，MaaTools 端口已释放；未发送退出请求。")
             return
         }
@@ -2339,8 +2371,9 @@ public final class WorkflowRunner {
             (true, "macOS 强制清理", shutdownPolicy.forcedGracePeriod),
         ] {
             let startedAt = ContinuousClock.now
-            let accepted = gameController.terminate(client, force: force)
-            let state = await waitUntilClosed(client, timeout: timeout)
+            _ = try await shutdownState(client)
+            let accepted = gameController.terminate(client, instance: instance, force: force)
+            let state = try await waitUntilClosed(client, timeout: timeout)
             let details = recordShutdown(client, method: method, request: accepted ? "已被系统接受" : "未被系统接受",
                                          startedAt: startedAt, state: state)
             if state.isClosed {
@@ -2363,6 +2396,7 @@ public final class WorkflowRunner {
     }
 
     private func emitClientClosed(_ client: ClientConfiguration, details: String? = nil) {
+        ownedClients[client.id] = nil
         emit(
             .closing,
             "\(clientText(client))已关闭，MaaTools 连接已释放",
@@ -2373,19 +2407,27 @@ public final class WorkflowRunner {
         )
     }
 
-    private func waitUntilClosed(_ client: ClientConfiguration, timeout: TimeInterval) async -> ClientShutdownState {
+    private func waitUntilClosed(_ client: ClientConfiguration, timeout: TimeInterval) async throws -> ClientShutdownState {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            let state = await shutdownState(client)
+            let state = try await shutdownState(client)
             if state.isClosed { return state }
             await cleanupPause(.milliseconds(500))
         }
-        return await shutdownState(client)
+        return try await shutdownState(client)
     }
 
-    private func shutdownState(_ client: ClientConfiguration) async -> ClientShutdownState {
-        let portIsOpen = await portProbe.isOpen(client.address, observeCancellation: false)
-        return .init(processRunning: gameController.isRunning(client), portOpen: portIsOpen)
+    private func shutdownState(_ client: ClientConfiguration) async throws -> ClientShutdownState {
+        guard let instance = ownedClients[client.id] else { throw RuntimeError.clientOwnershipLost(client.displayName) }
+        let port = try await portProbe.inspect(client.address, observeCancellation: false)
+        let processes = gameController.instances(for: client)
+        guard processes.allSatisfy({ $0 == instance }) else { throw RuntimeError.clientOwnershipLost(client.displayName) }
+        if case let .listening(pids) = port {
+            guard pids == [instance.pid] else {
+                throw RuntimeError.clientOwnershipLost(client.displayName)
+            }
+        }
+        return .init(processRunning: processes.contains(instance), portOpen: port.isOpen)
     }
 
     private func appendIntervention(
@@ -2482,7 +2524,8 @@ public final class WorkflowRunner {
     private func isSafetyCritical(_ error: Error) -> Bool {
         guard let runtimeError = error as? RuntimeError else { return false }
         switch runtimeError {
-        case .alreadyRunning, .portOccupied, .portOccupiedByClient, .portReleaseTimeout:
+        case .alreadyRunning, .portOccupied, .portOccupiedByClient, .portReleaseTimeout,
+             .clientAlreadyRunning, .clientOwnershipLost, .portProbeFailed, .launchUnconfirmed:
             return true
         default:
             return false
@@ -2682,10 +2725,12 @@ public final class WorkflowRunner {
         currentSensitiveValues = sensitiveValues
         runProgress.reset()
         restartedAccountsByClient = [:]
+        ownedClients = [:]
         diagnosticLogStore.begin(runID: runID)
     }
 
     private func endActivity() {
+        ownedClients = [:]
         currentRunID = nil
         currentSensitiveValues = []
     }

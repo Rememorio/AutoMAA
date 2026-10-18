@@ -394,9 +394,18 @@ private final class DiagnosticFixture {
 
 @MainActor
 private final class DiagnosticRuntime: PortProbing, GameProcessControlling {
-    var running = true
+    var running = false
     var closes = true
     var entries: [LogEntry] = []
+
+    func inspect(_ value: String, observeCancellation: Bool) async throws -> PortState {
+        running ? .listening([testGameInstance.pid]) : .closed
+    }
+    func instances(for client: ClientConfiguration) -> [GameProcessIdentity] { running ? [testGameInstance] : [] }
+    func launch(_ client: ClientConfiguration) async throws -> GameProcessIdentity {
+        running = true
+        return testGameInstance
+    }
 
     func isOpen(_ value: String, observeCancellation: Bool) async -> Bool { running }
     func wait(forOpen: Bool, address: String, timeout: TimeInterval, observeCancellation: Bool) async -> Bool {
@@ -404,6 +413,6 @@ private final class DiagnosticRuntime: PortProbing, GameProcessControlling {
         return running == forOpen
     }
     func isRunning(_ client: ClientConfiguration) -> Bool { running }
-    func terminate(_ client: ClientConfiguration, force: Bool) -> Bool { running = !closes; return closes }
+    func terminate(_ client: ClientConfiguration, instance: GameProcessIdentity, force: Bool) -> Bool { running = !closes; return closes }
     func record(_ event: RunnerEvent) { entries.append(event.log) }
 }
