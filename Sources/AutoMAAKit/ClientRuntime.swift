@@ -19,19 +19,7 @@ public struct PortProbe: Sendable {
         let address = try PortAddress(value)
         guard Self.isLocalHost(address.host) else { throw RuntimeError.portProbeFailed(value) }
         do {
-            let result = try await commandRunner.run(executable: "/usr/bin/nc",
-                arguments: ["-zv", "-G", "1", "-w", "1", address.host, address.port],
-                environment: ["LC_ALL": "C"], timeout: 3, observeCancellation: observeCancellation, startupScreenshotPolicy: nil)
-            if result.cancelled { throw RuntimeError.cancelled }
-            guard !result.timedOut else { throw RuntimeError.portProbeFailed(value) }
-            if result.exitCode != 0 {
-                let failures = result.standardError.split(whereSeparator: \.isNewline)
-                guard result.exitCode == 1, !failures.isEmpty,
-                      failures.allSatisfy({ $0.contains("Connection refused") }) else {
-                    throw RuntimeError.portProbeFailed(value)
-                }
-                return .closed
-            }
+            guard try await connectionIsOpen(address, value: value, observeCancellation: observeCancellation) else { return .closed }
             let owners = try await commandRunner.run(executable: "/usr/sbin/lsof",
                 arguments: ["-nP", "-a", "-iTCP:\(address.port)", "-sTCP:LISTEN", "-Fp"],
                 environment: ["LC_ALL": "C"], timeout: 3, observeCancellation: observeCancellation, startupScreenshotPolicy: nil)
@@ -49,12 +37,31 @@ public struct PortProbe: Sendable {
                 }
                 pids.insert(pid)
             }
+            // The listener may exit between nc and lsof. Only a fresh refusal confirms release.
+            if pids.isEmpty, try await connectionIsOpen(address, value: value, observeCancellation: observeCancellation) == false {
+                return .closed
+            }
             return .listening(pids)
         } catch let error as RuntimeError {
             throw error
         } catch {
             throw RuntimeError.portProbeFailed(value)
         }
+    }
+
+    private func connectionIsOpen(_ address: PortAddress, value: String, observeCancellation: Bool) async throws -> Bool {
+        let result = try await commandRunner.run(executable: "/usr/bin/nc",
+            arguments: ["-zv", "-G", "1", "-w", "1", address.host, address.port],
+            environment: ["LC_ALL": "C"], timeout: 3, observeCancellation: observeCancellation, startupScreenshotPolicy: nil)
+        if result.cancelled { throw RuntimeError.cancelled }
+        guard !result.timedOut else { throw RuntimeError.portProbeFailed(value) }
+        if result.exitCode == 0 { return true }
+        let failures = result.standardError.split(whereSeparator: \.isNewline)
+        guard result.exitCode == 1, !failures.isEmpty,
+              failures.allSatisfy({ $0.contains("Connection refused") }) else {
+            throw RuntimeError.portProbeFailed(value)
+        }
+        return false
     }
 
     private static func isLocalHost(_ host: String) -> Bool {

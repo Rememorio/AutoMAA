@@ -154,6 +154,49 @@ struct ClientOwnershipTests {
         #expect(await fixture.commands.gameCommands.filter { $0 == "closedown" }.count == 1)
     }
 
+    @Test("confirmed listener disappearance allows the next client in either server order", arguments: [false, true])
+    @MainActor
+    func listenerDisappearsDuringShutdown(reverse: Bool) async throws {
+        let fixture = try OwnershipFixture()
+        defer { fixture.remove() }
+        if reverse { fixture.configuration.clients.reverse() }
+        fixture.runtime.shutdownProbe = PortProbe(commandRunner: ShutdownRaceCommands(outcome: .closed))
+        #expect(await fixture.run().isSuccess)
+        #expect(fixture.runtime.launches == 2)
+        #expect(fixture.runtime.terminations == 0)
+        #expect(fixture.runtime.running.isEmpty)
+        #expect(await fixture.commands.gameCommands.filter { $0 == "closedown" }.count == 2)
+    }
+
+    @Test("shutdown confirmation never releases an unknown, replaced or uninspectable listener",
+          arguments: [ShutdownRaceOutcome.unknown, .foreign, .probeFailure], [false, true])
+    @MainActor
+    func listenerCannotBeConfirmed(outcome: ShutdownRaceOutcome, reverse: Bool) async throws {
+        let fixture = try OwnershipFixture()
+        defer { fixture.remove() }
+        if reverse { fixture.configuration.clients.reverse() }
+        fixture.runtime.shutdownProbe = PortProbe(commandRunner: ShutdownRaceCommands(outcome: outcome))
+        let report = await fixture.run()
+        #expect(report.fatalError != nil)
+        #expect(report.succeededSteps == 1)
+        #expect(fixture.runtime.launches == 1)
+        #expect(fixture.runtime.terminations == 0)
+        #expect(await fixture.commands.gameCommands.filter { $0 == "closedown" }.count == 1)
+        #expect(try ExecutionStateStore(directories: fixture.directories).loadForExecution().completedSteps.count == 1)
+    }
+
+    @Test("a released port never authorizes cleanup of a replaced process")
+    @MainActor
+    func replacedProcessAfterShutdown() async throws {
+        let fixture = try OwnershipFixture()
+        defer { fixture.remove() }
+        fixture.runtime.replaceProcessAfterShutdown = true
+        #expect(await fixture.run().fatalError != nil)
+        #expect(fixture.runtime.launches == 1)
+        #expect(fixture.runtime.terminations == 0)
+        #expect(await fixture.commands.gameCommands.filter { $0 == "closedown" }.count == 1)
+    }
+
     @Test("cancellation before acquiring a client leaves external clients untouched")
     @MainActor
     func cancelledBeforeLaunch() async throws {
@@ -253,12 +296,18 @@ private final class OwnershipRuntime: PortProbing, GameProcessControlling {
     var cancelInspection = false
     var cancelLaunch = false
     var replaceAfterShutdown = false
+    var replaceProcessAfterShutdown = false
+    var shutdownProbe: PortProbe?
     var onEvent: ((RunnerEvent) -> Void)?
     var events: [RunnerEvent] = []
     func inspect(_ value: String, observeCancellation: Bool) async throws -> PortState {
         inspections += 1
         if cancelInspection { throw RuntimeError.cancelled }
         if inspectionFails { throw RuntimeError.portProbeFailed(value) }
+        if !portOpen, launches > 0, let probe = shutdownProbe {
+            shutdownProbe = nil
+            return try await probe.inspect(value, observeCancellation: observeCancellation)
+        }
         return portOpen ? .listening([portOwner]) : .closed
     }
     func instances(for client: ClientConfiguration) -> [GameProcessIdentity] { running.contains(client.id) ? [instance] : [] }
@@ -294,12 +343,35 @@ private actor OwnershipCommands: CommandRunning {
             gameCommands.append(command)
             if command == "closedown" {
                 await MainActor.run {
-                    runtime.running.removeAll()
+                    if runtime.replaceProcessAfterShutdown {
+                        runtime.instance = .init(pid: testGameInstance.pid, launchedAt: Date(timeIntervalSince1970: 2))
+                    } else { runtime.running.removeAll() }
                     runtime.portOpen = runtime.replaceAfterShutdown
                     if runtime.replaceAfterShutdown { runtime.portOwner = 61_499 }
                 }
             }
         }
         return .init(exitCode: command == "dir" ? 1 : 0, standardOutput: "", standardError: "", timedOut: false)
+    }
+}
+
+enum ShutdownRaceOutcome: Sendable { case closed, unknown, foreign, probeFailure }
+
+private actor ShutdownRaceCommands: CommandRunning {
+    let outcome: ShutdownRaceOutcome
+    var connections = 0
+    init(outcome: ShutdownRaceOutcome) { self.outcome = outcome }
+
+    func run(executable: String, arguments: [String], environment: [String: String], timeout: TimeInterval,
+             observeCancellation: Bool, startupScreenshotPolicy: StartupScreenshotPolicy?) async throws -> CommandResult {
+        if executable == "/usr/sbin/lsof" {
+            return .init(exitCode: outcome == .foreign ? 0 : 1,
+                standardOutput: outcome == .foreign ? "p61499\n" : "", standardError: "", timedOut: false)
+        }
+        connections += 1
+        if connections > 1, outcome == .probeFailure { throw RuntimeError.portProbeFailed("test") }
+        let closed = connections > 1 && outcome == .closed
+        return .init(exitCode: closed ? 1 : 0, standardOutput: "",
+            standardError: closed ? "nc: Connection refused" : "", timedOut: false)
     }
 }
