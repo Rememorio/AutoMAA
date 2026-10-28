@@ -3862,10 +3862,13 @@ final class AutoMAAKitTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let directories = AppDirectories(root: root)
         let account = AccountConfiguration(name: "账号")
+        let app = root.appending(path: "Plan Isolation.app")
+        try createTestApplication(at: app)
         let client = ClientConfiguration(
-            name: "缺失客户端",
+            name: "隔离测试客户端",
             kind: .official,
-            appPath: "/Applications/Definitely-Missing-Plan-Isolation.app",
+            appPath: app.path,
+            address: "127.0.0.1:61487",
             profileName: "plan-isolation",
             bundleIdentifier: "dev.automaa.tests.plan-isolation",
             accounts: [account]
@@ -3874,6 +3877,8 @@ final class AutoMAAKitTests: XCTestCase {
         var complete = AutomationPlan.completeRoutine
         light.policy.hotUpdateBeforeRun = false
         complete.policy.hotUpdateBeforeRun = false
+        light.fight.enabled = false
+        complete.fight.enabled = false
         let config = AppConfiguration(cliPath: "/usr/bin/true", clients: [client], plans: [light, complete])
         let completedSteps = Set(light.enabledTasks.map {
             "\(light.id.uuidString)/\(client.id.uuidString)/\(account.id.uuidString)/\($0.rawValue)"
@@ -3882,10 +3887,21 @@ final class AutoMAAKitTests: XCTestCase {
             ExecutionState(dateKey: ExecutionStateStore.todayKey, completedSteps: completedSteps)
         )
 
-        let report = await WorkflowRunner(directories: directories).run(config, planID: complete.id)
-
-        XCTAssertEqual(report.attentionMessages.count, 1)
-        XCTAssertEqual(report.skippedSteps, complete.enabledTasks.count)
+        let runtime = StubClientRuntime(closesOnForce: true)
+        let runner = WorkflowRunner(directories: directories, portProbe: runtime, gameController: runtime,
+            shutdownPolicy: .immediate, commandRunner: StubCommandRunner())
+        let report = await runner.run(config, planID: complete.id)
+        XCTAssertTrue(report.isSuccess, report.fatalError ?? report.attentionMessages.joined(separator: " | "))
+        XCTAssertEqual(report.succeededSteps, complete.enabledTasks.count)
+        XCTAssertEqual(report.skippedSteps, 0)
+        let expected = completedSteps.union(complete.enabledTasks.map {
+            "\(complete.id.uuidString)/\(client.id.uuidString)/\(account.id.uuidString)/\($0.rawValue)"
+        })
+        XCTAssertEqual(ExecutionStateStore(directories: directories).loadForToday().completedSteps, expected)
+        let resumed = await runner.run(config, planID: light.id)
+        XCTAssertTrue(resumed.isSuccess)
+        XCTAssertEqual(resumed.skippedSteps, light.enabledTasks.count)
+        XCTAssertEqual(runtime.launches, 1)
     }
 
     @MainActor
