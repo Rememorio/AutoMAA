@@ -4,6 +4,71 @@ import Testing
 
 @Suite("Command failure diagnostics")
 struct CommandDiagnosticsTests {
+    @Test("a game resource update timeout skips the client without restarting or writing checkpoints")
+    @MainActor
+    func updateTimeoutSkipsClient() async throws {
+        let fixture = try DiagnosticFixture(accountCount: 2)
+        defer { fixture.remove() }
+        let timeout = CommandResult(exitCode: 9, standardOutput: "", standardError: "", timedOut: true)
+        let log = callback("SubTaskStart", task: "GameStartUpdateOCR", chain: "StartUp")
+            + callback("SubTaskCompleted", task: "GameStartUpdateOCR", chain: "StartUp")
+            + callback("SubTaskStart", task: "GameStartUpdateOCR", chain: "StartUp")
+        let commands = DiagnosticCommands(startups: [.init(result: timeout, log: log), .init(result: timeout, log: log)])
+        let report = await fixture.run(commands)
+        #expect(!report.isSuccess)
+        #expect(report.unexecutedSteps == 2)
+        #expect(await commands.startupCount == 1)
+        #expect(await commands.taskCount == 0)
+        #expect(!fixture.runtime.entries.contains { $0.message.contains("正在重启") })
+        #expect(report.attentionMessages.contains { $0.contains("下载或解压更新数据") })
+        #expect(!fixture.runtime.running)
+        #expect(!ProcessLock.isHeld(at: fixture.directories.lock))
+        #expect(ExecutionStateStore(directories: fixture.directories).loadForToday().completedSteps.isEmpty)
+        #expect(await commands.roots.allSatisfy { !FileManager.default.fileExists(atPath: $0) })
+    }
+
+    @Test("a downloading client leaves other servers runnable in either order", arguments: [false, true])
+    @MainActor
+    func updateDoesNotBlockOtherClients(reverse: Bool) async throws {
+        let fixture = try DiagnosticFixture(kinds: reverse ? [.official, .yoStarJP] : [.yoStarJP, .official])
+        defer { fixture.remove() }
+        let update = DiagnosticCommands.Reply(
+            result: .init(exitCode: 9, standardOutput: "", standardError: "", timedOut: true),
+            log: callback("SubTaskStart", task: "GameStartUpdateOCR", chain: "StartUp"))
+        let commands = DiagnosticCommands(startups: reverse ? [.init(), update] : [update, .init()])
+        let report = await fixture.run(commands)
+        #expect(report.succeededSteps == 1)
+        #expect(report.unexecutedSteps == 1)
+        #expect(report.fatalError == nil)
+        #expect(await commands.startupCount == 2)
+        #expect(await commands.taskCount == 1)
+        #expect(!fixture.runtime.entries.contains { $0.message.contains("正在重启") })
+        #expect(!fixture.runtime.running)
+        let state = ExecutionStateStore(directories: fixture.directories).loadForToday()
+        let client = try #require(fixture.configuration.clients.first { $0.kind == .official })
+        let key = "\(fixture.configuration.plans[0].id)/\(client.id)/\(client.accounts[0].id)/mall"
+        #expect(state.completedSteps == [key])
+    }
+
+    @Test("an update never bypasses cancellation or failed client cleanup", arguments: [false, true])
+    @MainActor
+    func updateCleanupAndCancellation(cancelled: Bool) async throws {
+        let fixture = try DiagnosticFixture(kinds: [.yoStarJP, .official])
+        defer { fixture.remove() }
+        fixture.runtime.closes = cancelled
+        let result = CommandResult(exitCode: 9, standardOutput: "", standardError: "", timedOut: !cancelled, cancelled: cancelled)
+        let commands = DiagnosticCommands(startups: [.init(result: result,
+            log: callback("SubTaskStart", task: "GameStartUpdateOCR", chain: "StartUp"))])
+        let report = await fixture.run(commands)
+        #expect(report.cancelled == cancelled)
+        #expect((report.fatalError != nil) == !cancelled)
+        #expect(await commands.startupCount == 1)
+        #expect(await commands.taskCount == 0)
+        #expect(!fixture.runtime.entries.contains { $0.message.contains("正在重启") })
+        #expect(!ProcessLock.isHeld(at: fixture.directories.lock))
+        #expect(ExecutionStateStore(directories: fixture.directories).loadForToday().completedSteps.isEmpty)
+    }
+
     @Test("navigation evidence does not override explicit manual intervention",
           arguments: ["account not found", "maintenance", "captcha", "update required", "load resource failed", "resource download"])
     @MainActor
@@ -356,16 +421,20 @@ private final class DiagnosticFixture {
     let configuration: AppConfiguration
     let runtime = DiagnosticRuntime()
 
-    init(task: TaskKind = .mall, accountCount: Int = 1) throws {
+    init(task: TaskKind = .mall, accountCount: Int = 1, kinds: [ClientKind] = [.official]) throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "automaa-diagnostic-tests-\(UUID())")
         directories = AppDirectories(root: root)
-        let app = root.appending(path: "Test.app")
-        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
-        let client = ClientConfiguration(name: "测试客户端", kind: .official, appPath: app.path,
-            address: "127.0.0.1:61387", profileName: "diagnostic-test", bundleIdentifier: "dev.automaa.tests.diagnostics",
-            accounts: (0..<accountCount).map {
-                AccountConfiguration(name: "测试账号 \($0 + 1)", accountSelector: $0 == 0 ? "fixture-private-selector" : "fixture-selector-\($0)")
-            })
+        let clients = try kinds.enumerated().map { index, kind in
+            let app = root.appending(path: "Test-\(index).app")
+            try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+            return ClientConfiguration(name: "测试客户端 \(index + 1)", kind: kind, appPath: app.path,
+                address: "127.0.0.1:\(61387 + index)", profileName: "diagnostic-test-\(index)",
+                bundleIdentifier: "dev.automaa.tests.diagnostics-\(index)",
+                accounts: (0..<accountCount).map {
+                    AccountConfiguration(name: "测试账号 \($0 + 1)",
+                        accountSelector: kind.supportsAccountSwitching ? ($0 == 0 ? "fixture-private-selector" : "fixture-selector-\($0)") : "")
+                })
+        }
         var plan = AutomationPlan.completeRoutine
         plan.policy.hotUpdateBeforeRun = false
         plan.policy.maxRetries = 1
@@ -374,7 +443,7 @@ private final class DiagnosticFixture {
         plan.recruit.enabled = task == .recruit
         plan.award.enabled = task == .award
         plan.mall.enabled = task == .mall
-        configuration = AppConfiguration(cliPath: "/usr/bin/true", clients: [client], plans: [plan])
+        configuration = AppConfiguration(cliPath: "/usr/bin/true", clients: clients, plans: [plan])
     }
 
     func run(_ commands: DiagnosticCommands) async -> WorkflowReport {

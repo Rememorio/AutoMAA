@@ -65,6 +65,7 @@ enum StartupCommandOutcome: Equatable {
     case coreInitializationFailed
     case connectionLost
     case accountNavigationFailed
+    case needsIntervention(StartupFailureDiagnosis)
     case failed
 }
 
@@ -90,19 +91,34 @@ enum StartupFailureClassifier {
         if isMAACoreInitializationFailure(output) {
             return .coreInitializationFailed
         }
-        if result.stopReason == .startupScreenshotFailure || result.timedOut || isGameOffline(output)
+        if result.stopReason == .startupScreenshotFailure || isGameOffline(output)
             || (result.exitCode != 0 && isScreenshotConnectionFailure(output)) {
             return .connectionLost
         }
-        if result.exitCode == 0 {
+        guard !result.cancelled else { return .failed }
+        if result.exitCode == 0, !result.timedOut {
             return .ready
         }
-        if !result.cancelled, result.startupNavigationFailed,
-           explicitIntervention(output: output, hasAccountSelector: true) == nil {
+        if result.startupWaitingForUpdate {
+            return .needsIntervention(gameDataUpdateDiagnosis)
+        }
+        let intervention = explicitIntervention(output: output, hasAccountSelector: true)
+        if let diagnosis = intervention, diagnosis.scope == .client {
+            return .needsIntervention(diagnosis)
+        }
+        if result.timedOut {
+            return .connectionLost
+        }
+        if result.startupNavigationFailed, intervention == nil {
             return .accountNavigationFailed
         }
         return .failed
     }
+
+    static let gameDataUpdateDiagnosis = StartupFailureDiagnosis(
+        scope: .client,
+        guidance: "游戏可能仍在下载或解压更新数据，请手动等待更新完成并进入一次主界面，再继续未完成任务"
+    )
 
     static func diagnose(output: String, hasAccountSelector: Bool) -> StartupFailureDiagnosis {
         if let diagnosis = explicitIntervention(output: output, hasAccountSelector: hasAccountSelector) {
@@ -161,10 +177,7 @@ enum StartupFailureClassifier {
             "downloading resource", "resource download", "unpacking resource",
             "下载资源", "资源下载", "下载数据", "解压资源",
         ]) {
-            return .init(
-                scope: .client,
-                guidance: "游戏可能仍在下载或解压更新数据，请手动等待更新完成并进入一次主界面"
-            )
+            return gameDataUpdateDiagnosis
         }
         if containsAny(value, ["maintenance", "server is closed", "维护中", "服务器维护", "停服维护"]) {
             return .init(
