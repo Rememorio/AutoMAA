@@ -29,6 +29,7 @@ for path in "${PATHS[@]}"; do
     fi
     for pattern in "${PATTERNS[@]}"; do
         if /usr/bin/grep -ERnI \
+            --exclude-dir='dist' \
             --exclude='*.webp' \
             --exclude='*.png' \
             --exclude='*.icns' \
