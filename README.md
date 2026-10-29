@@ -16,17 +16,19 @@
 
 AutoMAA 是原生 macOS 的 [MAA](https://github.com/MaaAssistantArknights/MaaAssistantArknights) 工作流编排器。把客户端、账号和任务配置好后，它会依次启动游戏、执行日常、关闭客户端，再处理下一项；画面识别和游戏操作由 `maa-cli` 与 MaaCore 完成。
 
+> 本文档跟随 `main`，新版三栏界面尚未发布。当前正式版的使用说明见 [v0.15.10 文档](https://github.com/Rememorio/AutoMAA/tree/v0.15.10/docs)。
+
 ## 能做什么
 
 - **一份账号配置，多套日常方案。** 为同一批账号安排轻量收菜或完整换班，分别选择任务、参数和执行对象。方案可从指定游戏日起优先剿灭，跨方案共享本周完成状态。
 - **按结果续跑。** 一键补跑未完成任务，保留已完成步骤；理智不足的剿灭留待后续运行补打，作战中断或战果不明时等待确认。
 - **按顺序处理客户端与账号。** 当前客户端关闭、连接释放后，才启动下一个；支持自动切换账号的服务器可配置账号队列。
-- **失败后接着跑。** 成功步骤按方案和日期记录，再次运行会跳过已完成内容；活动记录可查看结果与失败原因。
+- **失败后接着跑。** 成功步骤按方案和日期记录，再次运行会跳过已完成内容；运行记录可查看结果与失败原因。
 - **手动运行，也能按周定时。** 每个方案独立设置星期和时间；主 App 退出后仍可由后台 Runner 执行，需要处理时可发送系统通知。
 
 支持[理智作战、公开招募、基建、信用购物和奖励领取](https://rememorio.github.io/AutoMAA/tasks/)。任务可使用 MAA 推荐参数，也可在界面中自定义；基建提供仅收菜、完整换班和自定义排班。
 
-当前配置协议为 schema v7；旧配置升级时先备份再恢复空配置，需要重新设置方案与定时，见[配置版本说明](https://rememorio.github.io/AutoMAA/reference/configuration#配置版本不兼容时)。
+当前配置协议为 schema v7，现有 v7 配置可继续使用；schema v6 及更早配置加载时先备份再恢复空配置，需要重新设置方案与定时，见[配置版本说明](https://rememorio.github.io/AutoMAA/reference/configuration#配置版本不兼容时)。
 
 ## 使用前确认
 
@@ -42,9 +44,9 @@ AutoMAA 仍处于 `0.x` 阶段，首次运行请有人值守。它不保存游�
 ## 开始使用
 
 1. 按[安装指南](https://rememorio.github.io/AutoMAA/guide/installation)准备 MAA 与游戏连接环境，从 [Releases](https://github.com/Rememorio/AutoMAA/releases/latest) 下载 DMG，将 AutoMAA 拖入“应用程序”。
-2. 在“全局设置”检测 MAA 环境，添加客户端与账号。
+2. 在“设置 → MAA 环境”检测环境，再到“客户端与账号”添加执行对象。
 3. 选择“轻量日常”或“完整日常”模板，确认执行对象、任务和参数。回到总览处理运行检查，再手动跑通一次。
-4. 在“活动记录”确认结果，稳定后按需启用方案定时。
+4. 在“运行记录”确认结果，稳定后按需启用方案定时。
 
 当前安装包使用临时代码签名，尚未经过 Apple 公证。如首次打开被拦截，确认下载来源和校验值后，在 Finder 中右键选择“打开”；仍被拦截时使用“系统设置 → 隐私与安全性 → 仍要打开”。[详细步骤与校验方法](https://rememorio.github.io/AutoMAA/guide/installation#处理-apple-无法验证-提示)。
 
@@ -59,7 +61,7 @@ AutoMAA 仍处于 `0.x` 阶段，首次运行请有人值守。它不保存游�
 
 ## 参与贡献
 
-欢迎报告问题、改进文档和提交代码。Bug 报告请附复现步骤、“关于 AutoMAA”中的诊断信息，以及已脱敏的相关日志；安全漏洞请使用[私密报告](./SECURITY.md)。
+欢迎报告问题、改进文档和提交代码。Bug 报告请附复现步骤、“设置 → 关于”中复制的诊断信息，以及已脱敏的相关日志；安全漏洞请使用[私密报告](./SECURITY.md)。
 
 从源码构建见[开发指南](https://rememorio.github.io/AutoMAA/development/)，提交 Pull Request 前请阅读 [CONTRIBUTING.md](./CONTRIBUTING.md)。版本变化记录在 [CHANGELOG.md](./CHANGELOG.md)。
 

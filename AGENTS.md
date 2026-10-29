@@ -44,6 +44,7 @@ npm run docs:build
 | 路径 | 职责 |
 | --- | --- |
 | `Sources/AutoMAA/` | SwiftUI 应用、界面状态和用户交互 |
+| `DESIGN.md`、`UX-CONTRACT.md` | 原生界面的视觉语言、共享组件与交互约定 |
 | `Sources/AutoMAAKit/Models.swift` | 配置协议、任务枚举和工作流数据模型 |
 | `Sources/AutoMAAKit/ConfigurationValidation.swift` | 结构校验、运行前检查和 Profile 名称规范化 |
 | `Sources/AutoMAAKit/MAAConfigurationWriter.swift` | 将 AutoMAA 配置转换为独立的 MAA Profile 与 Task 文件 |
@@ -103,6 +104,7 @@ npm run docs:build
 - 文件写入使用原子操作；外部进程必须有超时、取消和退出码处理。
 - 不吞掉会影响用户决策的错误。可以降级的错误要进入日志或人工处理提示。
 - SwiftUI 视图保持职责单一；重复且可复用的视觉语言放入 `Theme.swift` 或小型组件。
+- 修改界面前阅读 `DESIGN.md` 和 `UX-CONTRACT.md`，复用其中指定的组件与状态归属；交互约定发生变化时同步改写对应文档。窗口、侧栏、弹窗及后台状态的验收范围见 `RELEASE.md` 的“隔离界面验收”。
 - 用户界面以简体中文为主，文案应简短、具体，并说明用户下一步可以做什么。
 - 使用系统控件、动态颜色和 SF Symbols，支持深浅色、VoiceOver 和“减少动态效果”。避免无意义的持续动画或会导致布局跳动的状态控件。
 
@@ -135,7 +137,7 @@ swift test --parallel
 
 - 用户行为或配置语义变化时同步更新对应用户指南。`README.md` 聚焦项目用途、核心能力、使用条件和上手入口；只有这些内容变化时才调整，参数、更新机制和维护流程链接到专门文档。
 - 完整用户指南位于 `docs/`；新增页面时同步更新 VitePress 导航，并运行 `npm run docs:build` 检查站内链接。
-- 产品截图必须直接保留原生 Retina 背板像素，禁止把 1× 截图放大伪装成 2×；使用无损 WebP 和透明窗口圆角，提交前运行 `npm run docs:check-screenshots`，并在 100% 缩放下确认正文与控件文字清晰。
+- 产品截图必须直接保留原生 Retina 背板像素，禁止把 1× 截图放大伪装成 2×；使用无损 WebP 和透明窗口圆角，提交前运行 `npm run docs:check-screenshots`，并在 100% 缩放下确认正文与控件文字清晰。截图更新与未发布界面的标注规则见 `docs/development/docs.md`。
 - 面向贡献者的流程更新在 `CONTRIBUTING.md`，发版流程更新在 `RELEASE.md`。
 - 用户可见的重要变化记录在 `CHANGELOG.md`；README、文档、更新日志与 Release Notes 必须只表达产品事实、用户影响和已知限制，不能依赖维护协作背景才能成立。
 - 保留并准确表达 MAA、MaaCore、`maa-cli`、MaaMacGui 和当前连接环境的 credit。

@@ -6,7 +6,7 @@
 
 从 [Issue 入口](https://github.com/Rememorio/AutoMAA/issues/new/choose)选择合适的表单：
 
-- Bug：描述复现步骤、预期与实际行为，附上“关于 AutoMAA”的诊断信息和相关日志。
+- Bug：描述复现步骤、预期与实际行为，附上“设置 → 关于”中复制的诊断信息和相关日志。
 - 使用问题：说明卡在哪一步，以及已尝试的解决方法。
 - 功能建议：先说明使用场景和希望解决的问题。新任务类型、配置协议、客户端生命周期或较大的界面调整，建议先讨论方案。
 
@@ -33,6 +33,7 @@ git switch -c fix/short-description upstream/main
 ## 实现要求
 
 - 保持 macOS 14 与 Swift 6.2 兼容；UI 使用原生 SwiftUI 组件、动态颜色和 SF Symbols，支持深浅色、VoiceOver 与“减少动态效果”。
+- UI 的视觉与行为约定分别见 [DESIGN.md](./DESIGN.md) 和 [UX-CONTRACT.md](./UX-CONTRACT.md)。优先复用共享控件；改变保存、导航、反馈或窗口行为时同步对应约定。
 - 配置、MAA 参数生成和工作流逻辑放在 `AutoMAAKit`；外部进程必须处理超时、取消和非零退出码。
 - 保持客户端严格串行、端口释放确认、成功后才写断点和取消时完整清理等[安全边界](https://rememorio.github.io/AutoMAA/reference/safety)。
 - MAA 参数以当前上游集成文档和 MaaCore 接口为准，在 PR 中注明依据。MaaMacGui 只作为交互和推荐值参考，不照搬已弃用字段或用兼容层掩盖协议差异。
@@ -58,7 +59,7 @@ git switch -c fix/short-description upstream/main
 - LaunchAgent 测试必须注入临时 `launchAgentsDirectory` 并关闭系统集成。
 - SwiftUI 冒烟测试无论 Debug 还是 Release，都使用 `--data-directory <临时目录>`，或仅在独立 QA Bundle 中注入 `AUTOMAA_DEVELOPMENT_DATA_DIRECTORY`。
 - 错误修复提供能复现问题的回归测试，尤其是账号切换、端口、断点、取消、任务参数和人工处理分类。
-- UI 改动检查深浅色与无障碍；文档页面检查桌面、窄屏、导航和中文搜索。
+- UI 改动检查深浅色、无障碍、窗口缩放、侧栏收起展开、长内容滚动与弹窗取消/提交。涉及后台运行或更新时，还需验证只读、停止、清理和退出状态；完整范围见 [隔离界面验收](./RELEASE.md#4-隔离界面验收)。文档页面检查桌面、窄屏、导航和中文搜索。
 
 确需真实游戏验证时，只能使用你有权操作的账号，并在 PR 中说明范围与限制。所有公开记录都应脱敏。编码代理另需遵循 [AGENTS.md](./AGENTS.md)。
 

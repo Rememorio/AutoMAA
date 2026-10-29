@@ -48,6 +48,7 @@ features:
   <div>
     <h2>开始前准备</h2>
     <p>需要 Apple Silicon Mac、macOS 14，以及独立安装的 MAA 和 PlayCover + MaaTools 游戏环境。<a href="./guide/installation">安装指南</a>会带你完成准备，再从一个客户端、一套方案开始。</p>
+    <p>本文档跟随主分支，新版三栏界面尚未发布。当前正式版的使用说明见 <a href="https://github.com/Rememorio/AutoMAA/tree/v0.15.10/docs">v0.15.10 文档</a>。</p>
   </div>
   <div>
     <h2>遇到问题或想参与改进？</h2>
