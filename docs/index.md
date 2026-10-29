@@ -1,84 +1,58 @@
 ---
 layout: home
-
-hero:
-  name: AutoMAA
-  text: 把 MAA 日常，组织成可复用自动化方案
-  tagline: 配好客户端与账号，安排任务和时间。AutoMAA 依次完成每套日常，你可以随时查看结果、处理异常或安全停止。
-  image:
-    src: /automaa-logo.webp
-    alt: AutoMAA Logo
-  actions:
-    - theme: brand
-      text: 下载与安装
-      link: /guide/installation
-    - theme: alt
-      text: 首次配置
-      link: /guide/getting-started
-    - theme: alt
-      text: GitHub
-      link: https://github.com/Rememorio/AutoMAA
-
-features:
-  - icon: ⛓️
-    title: 可复用方案
-    details: 客户端和账号只配置一次，轻量收菜、完整日常和周末剿灭各用一套任务与参数。
-  - icon: 🛡️
-    title: 多客户端与账号
-    details: 按顺序处理每个客户端与账号队列，确认当前客户端关闭、连接释放后，再启动下一个。
-  - icon: ↩️
-    title: 当日断点
-    details: 成功步骤按方案与日期记录，失败后可以续跑，不同方案不会互相误跳过。
-  - icon: ⚙️
-    title: 熟悉的 MAA 任务
-    details: 作战、公招、基建、信用购物与奖励领取，既可使用推荐参数，也能按方案精细调整。
-  - icon: 📋
-    title: 结果与异常
-    details: 在运行记录中查看每次运行的结果、失败原因和日志，需要人工处理时接收系统通知。
-  - icon: 🕗
-    title: 每方案定时
-    details: 每个方案分别选择星期和时间。在用户登录、Mac 唤醒时，主 App 退出后仍能按时运行。
+markdownStyles: false
+title: AutoMAA
+description: macOS 上的 MAA 工作流编排器。配置客户端、账号与自动化方案，安排任务顺序和时间。
 ---
 
-<figure class="slogan-artwork">
-  <img src="/automaa-slogan.webp" width="1836" height="856" loading="lazy" decoding="async" alt="直到日常变成一次运行。Till the Dailies Become One Run." />
-</figure>
+<div class="home-shell">
+  <section class="home-intro" aria-labelledby="home-title">
+    <div class="home-intro-copy">
+      <h1 id="home-title">AutoMAA</h1>
+      <p class="home-purpose">macOS 上的 MAA 工作流编排器</p>
+      <p class="home-description">把客户端、账号与任务编成方案，<br class="home-desktop-break" />按顺序运行，随时回看结果。</p>
+      <div class="home-actions">
+        <a class="home-action home-action-primary" href="./guide/installation">下载与安装<span aria-hidden="true">→</span></a>
+        <a class="home-action home-action-secondary" href="./guide/getting-started">首次配置<span aria-hidden="true">→</span></a>
+      </div>
+      <p class="home-requirements">Apple Silicon · macOS 14+<br />需另装 MAA 与 PlayCover + MaaTools</p>
+    </div>
+    <img class="home-slogan" src="/automaa-slogan.webp" width="1836" height="856" fetchpriority="high" alt="直到日常变成一次运行。Till the Dailies Become One Run." />
+  </section>
 
-<section class="product-showcase" aria-labelledby="product-tour-title">
-  <div class="showcase-heading">
-    <span class="showcase-kicker">工作方式</span>
-    <h2 id="product-tour-title">一眼看清每套日常怎样执行</h2>
-    <p>从总览确认当前方案与任务，再按需调整客户端、账号和任务参数。</p>
-  </div>
-
-  <figure class="product-shot product-shot-wide">
-    <img class="theme-shot theme-shot-light" src="./assets/screenshots/overview-light.webp" width="2360" height="1560" alt="AutoMAA 今日总览：当前方案、任务顺序、待处理事项与最近运行" />
-    <img class="theme-shot theme-shot-dark" src="./assets/screenshots/overview-dark.webp" width="2360" height="1560" alt="AutoMAA 今日总览：当前方案、任务顺序、待处理事项与最近运行" />
-    <figcaption><strong>今日总览</strong><span>选好方案，确认账号与任务，从这里运行日常或处理待办。</span></figcaption>
+  <figure class="home-preview">
+    <img class="theme-shot theme-shot-light" src="./assets/screenshots/overview-light.webp" width="2360" height="1560" decoding="async" alt="AutoMAA 今日总览：当前方案、任务顺序、待处理事项与最近运行" />
+    <img class="theme-shot theme-shot-dark" src="./assets/screenshots/overview-dark.webp" width="2360" height="1560" decoding="async" alt="AutoMAA 今日总览：当前方案、任务顺序、待处理事项与最近运行" />
+    <figcaption>
+      <div class="home-preview-summary">
+        <span>今日总览<span class="home-caption-detail"> · 方案、进度与待办，一处查看</span></span>
+        <a href="./guide/getting-started#认识主窗口">认识主窗口<span aria-hidden="true"> →</span></a>
+      </div>
+      <p class="home-version-note">以上为主分支界面，尚未发布。使用正式安装包时，请参阅 <a href="https://github.com/Rememorio/AutoMAA/tree/v0.15.10/docs">v0.15.10 文档</a>。</p>
+    </figcaption>
   </figure>
 
-  <div class="product-shot-grid">
-    <figure class="product-shot">
-      <img class="theme-shot theme-shot-light" src="./assets/screenshots/client-settings-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="AutoMAA 客户端与账号：客户端分组、账号列表和添加、编辑入口" />
-      <img class="theme-shot theme-shot-dark" src="./assets/screenshots/client-settings-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="AutoMAA 客户端与账号：客户端分组、账号列表和添加、编辑入口" />
-      <figcaption><strong>客户端与账号</strong><span>按客户端管理账号，分别编辑连接信息与方案归属。</span></figcaption>
-    </figure>
-    <figure class="product-shot">
-      <img class="theme-shot theme-shot-light" src="./assets/screenshots/task-settings-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="AutoMAA 自动化方案：任务执行顺序与理智作战参数" />
-      <img class="theme-shot theme-shot-dark" src="./assets/screenshots/task-settings-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="AutoMAA 自动化方案：任务执行顺序与理智作战参数" />
-      <figcaption><strong>任务顺序与参数</strong><span>在中间选择任务，在右侧使用推荐参数或自定义设置。</span></figcaption>
-    </figure>
-  </div>
-</section>
+  <section class="home-capabilities" aria-label="核心能力">
+    <article>
+      <h2>方案配一次，日常重复用</h2>
+      <p>客户端与账号只配置一次。收菜、完整日常、每周剿灭，各有自己的任务与参数。</p>
+      <a href="./tasks/">配置任务与参数<span aria-hidden="true"> →</span></a>
+    </article>
+    <article>
+      <h2>按顺序运行，按时间开始</h2>
+      <p>客户端依次运行，关闭并释放连接后才切换下一个。每套方案都能单独安排定时。</p>
+      <a href="./guide/scheduling">安排每周定时<span aria-hidden="true"> →</span></a>
+    </article>
+    <article>
+      <h2>有进度，也有结果</h2>
+      <p>成功步骤按方案保留当日断点。中途可安全停止，结束后查看结果与待处理事项。</p>
+      <a href="./guide/workflow">了解执行与续跑<span aria-hidden="true"> →</span></a>
+    </article>
+  </section>
 
-<section class="home-note">
-  <div>
-    <h2>开始前准备</h2>
-    <p>需要 Apple Silicon Mac、macOS 14，以及独立安装的 MAA 和 PlayCover + MaaTools 游戏环境。<a href="./guide/installation">安装指南</a>会带你完成准备，再从一个客户端、一套方案开始。</p>
-    <p>本文档跟随主分支，新版三栏界面尚未发布。当前正式版的使用说明见 <a href="https://github.com/Rememorio/AutoMAA/tree/v0.15.10/docs">v0.15.10 文档</a>。</p>
-  </div>
-  <div>
-    <h2>遇到问题或想参与改进？</h2>
-    <p>先按现象查阅<a href="./troubleshooting/common">常见问题</a>。欢迎反馈使用体验、改进文档或<a href="./development/">参与开发</a>；AutoMAA 与上游的分工见<a href="./about/credits">项目关系与致谢</a>。</p>
-  </div>
-</section>
+  <nav class="home-resources" aria-label="帮助与项目">
+    <a href="./troubleshooting/common">常见问题</a>
+    <a href="./development/">参与开发</a>
+    <a href="./about/credits">项目关系与致谢</a>
+  </nav>
+</div>
