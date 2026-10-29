@@ -14,6 +14,12 @@
 
 今日总览顶部显示当前方案、账号范围与任务顺序，可用选择器或“我的方案”列表切换方案。运行期间自动显示实际运行的方案、阶段与进度。“需要处理”集中展示待确认结果、作战恢复、配置错误和定时异常，点击进入对应处理页面；“接下来的定时”只展示已同步生效的安排。“最近运行”保留最近三次方案记录，未记录结束的运行会显示状态未确认。
 
+<figure class="guide-screenshot">
+  <img class="theme-shot theme-shot-light" src="../assets/screenshots/overview-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="今日总览：当前方案、任务顺序、待处理事项与最近运行" />
+  <img class="theme-shot theme-shot-dark" src="../assets/screenshots/overview-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="今日总览：当前方案、任务顺序、待处理事项与最近运行" />
+  <figcaption>从总览确认当前方案、执行范围与需要处理的事项。</figcaption>
+</figure>
+
 ## 检测 MAA 环境
 
 从左下角“设置”或按 `Command-,` 打开独立设置窗口，进入“MAA 环境”，确认 `maa-cli` 路径，点击路径右侧的“检测环境”。应能显示 maa-cli 与 MaaCore 版本；Homebrew 默认路径通常是 `/opt/homebrew/bin/maa`。
@@ -32,6 +38,12 @@
 | MaaTools 地址 | 使用游戏窗口显示的地址；本机通常为 `127.0.0.1:1717` |
 | MAA Profile | 为每个客户端设置不同的名称，例如 `client-cn`、`client-jp` |
 | Bundle Identifier | 与所选游戏 App 一致，用于识别和关闭该客户端 |
+
+<figure class="guide-screenshot">
+  <img class="theme-shot theme-shot-light" src="../assets/screenshots/client-editor-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="编辑客户端：服务器、游戏应用及展开的 MaaTools、Bundle ID 和 MAA Profile 连接详情" />
+  <img class="theme-shot theme-shot-dark" src="../assets/screenshots/client-editor-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="编辑客户端：服务器、游戏应用及展开的 MaaTools、Bundle ID 和 MAA Profile 连接详情" />
+  <figcaption>展开“连接详情”，设置 MaaTools 地址、Bundle ID 与独立 MAA Profile。</figcaption>
+</figure>
 
 点击“添加”后回到列表。客户端按列表顺序执行；可以从列表编辑名称和连接信息。MAA Profile 是独立的配置标识，必须非空且不能重复。
 
@@ -63,6 +75,12 @@
 1. **对谁运行**：点击“执行安排…”，选择所有已启用账号或指定账号，再点击“应用”。所有已启用账号会包含以后新增的启用账号。
 2. **执行什么**：在任务列表中启用所需任务，直接拖动调整顺序；右键菜单也可上移、下移。任务参数属于方案，同一方案的目标账号共用这些参数。
 3. **使用哪些参数**：选择任务后，在右侧参数区选择“MAA 推荐参数”或“自定义参数”，修改自动保存。只收基建产物时，选择自定义参数中的“仅收菜”。
+
+<figure class="guide-screenshot">
+  <img class="theme-shot theme-shot-light" src="../assets/screenshots/task-settings-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="自动化方案：任务执行顺序与右侧的理智作战参数" />
+  <img class="theme-shot theme-shot-dark" src="../assets/screenshots/task-settings-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="自动化方案：任务执行顺序与右侧的理智作战参数" />
+  <figcaption>在中间调整执行顺序，选中任务后在右侧设置参数。</figcaption>
+</figure>
 
 具体选项见[任务配置](../tasks/)。先保持定时关闭，手动确认理智药、源石和购物等消耗设置。
 

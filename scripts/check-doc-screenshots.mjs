@@ -6,6 +6,8 @@ const expectedFiles = [
   "overview-dark.webp",
   "client-settings-light.webp",
   "client-settings-dark.webp",
+  "client-editor-light.webp",
+  "client-editor-dark.webp",
   "task-settings-light.webp",
   "task-settings-dark.webp",
 ];

@@ -44,6 +44,33 @@ features:
   <img src="/automaa-slogan.webp" width="1836" height="856" loading="lazy" decoding="async" alt="直到日常变成一次运行。Till the Dailies Become One Run." />
 </figure>
 
+<section class="product-showcase" aria-labelledby="product-tour-title">
+  <div class="showcase-heading">
+    <span class="showcase-kicker">工作方式</span>
+    <h2 id="product-tour-title">一眼看清每套日常怎样执行</h2>
+    <p>从总览确认当前方案与任务，再按需调整客户端、账号和任务参数。</p>
+  </div>
+
+  <figure class="product-shot product-shot-wide">
+    <img class="theme-shot theme-shot-light" src="./assets/screenshots/overview-light.webp" width="2360" height="1560" alt="AutoMAA 今日总览：当前方案、任务顺序、待处理事项与最近运行" />
+    <img class="theme-shot theme-shot-dark" src="./assets/screenshots/overview-dark.webp" width="2360" height="1560" alt="AutoMAA 今日总览：当前方案、任务顺序、待处理事项与最近运行" />
+    <figcaption><strong>今日总览</strong><span>选好方案，确认账号与任务，从这里运行日常或处理待办。</span></figcaption>
+  </figure>
+
+  <div class="product-shot-grid">
+    <figure class="product-shot">
+      <img class="theme-shot theme-shot-light" src="./assets/screenshots/client-settings-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="AutoMAA 客户端与账号：客户端分组、账号列表和添加、编辑入口" />
+      <img class="theme-shot theme-shot-dark" src="./assets/screenshots/client-settings-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="AutoMAA 客户端与账号：客户端分组、账号列表和添加、编辑入口" />
+      <figcaption><strong>客户端与账号</strong><span>按客户端管理账号，分别编辑连接信息与方案归属。</span></figcaption>
+    </figure>
+    <figure class="product-shot">
+      <img class="theme-shot theme-shot-light" src="./assets/screenshots/task-settings-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="AutoMAA 自动化方案：任务执行顺序与理智作战参数" />
+      <img class="theme-shot theme-shot-dark" src="./assets/screenshots/task-settings-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="AutoMAA 自动化方案：任务执行顺序与理智作战参数" />
+      <figcaption><strong>任务顺序与参数</strong><span>在中间选择任务，在右侧使用推荐参数或自定义设置。</span></figcaption>
+    </figure>
+  </div>
+</section>
+
 <section class="home-note">
   <div>
     <h2>开始前准备</h2>
