@@ -53,16 +53,33 @@ struct WorkspaceRunControl: View {
 
     var body: some View {
         if model.isWorkflowRunning {
-            Button { model.cancelCurrentOperation() } label: {
-                Label(model.activePlanID == nil ? "取消更新" : "安全停止", systemImage: model.isCancellingRun ? "hourglass" : "stop.fill")
-            }
-            .labelStyle(.iconOnly)
-            .disabled(!model.canCancelRun || model.isCancellingRun)
-            .help(model.isCancellingRun ? "正在安全停止" : model.activePlanID == nil ? "取消更新" : "安全停止当前流程")
+            OperationStopControl()
         } else if let planID = model.currentPlanID {
             PlanRunControl(planID: planID)
                 .accessibilityHint(model.configuration.plans.first(where: { $0.id == planID })?.displayName ?? "当前方案")
         }
+    }
+}
+
+struct OperationStopControl: View {
+    @EnvironmentObject private var model: AppModel
+    var showsTitle = false
+
+    private var title: String {
+        if model.isCancellingRun { return "正在停止" }
+        return model.activePlanID == nil && !model.isExternalRunActive ? "取消更新" : "安全停止"
+    }
+
+    var body: some View {
+        Button { model.cancelCurrentOperation() } label: {
+            if showsTitle {
+                Label(title, systemImage: model.isCancellingRun ? "hourglass" : "stop.fill")
+            } else {
+                Label(title, systemImage: model.isCancellingRun ? "hourglass" : "stop.fill").labelStyle(.iconOnly)
+            }
+        }
+        .disabled(!model.canCancelRun || model.isCancellingRun)
+        .help(model.isCancellingRun ? "等待当前操作停止并清理连接" : title)
     }
 }
 

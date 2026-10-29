@@ -501,9 +501,9 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func continuation(for planID: UUID) -> PlanContinuation {
+    func continuation(for planID: UUID, at date: Date? = nil) -> PlanContinuation {
         PlanContinuation(configuration: configuration, planID: planID, state: executionState, history: activityEntries,
-                         weeklyAnnihilation: weeklyAnnihilation, now: currentDate)
+                         weeklyAnnihilation: weeklyAnnihilation, now: date ?? currentDate)
     }
 
     func runTitle(for planID: UUID, readyTitle: String = "运行方案") -> String {

@@ -74,4 +74,4 @@ AutoMAA 仍处于 `0.x` 阶段，首次运行请有人值守。它不保存游�
 
 AutoMAA 是独立社区项目，与 MAA 官方、鹰角网络、Hypergryph、Yostar 或《明日方舟》运营方均无隶属、合作或背书关系。上述第三方项目各自的许可证和用户协议仍然适用。
 
-源代码与文档采用 [MIT License](./LICENSE)。**Logo、应用图标与宣传视觉资产不属于 MIT 授权范围**：Logo 与图标为艾雅法拉的非官方二次创作，并非 MAA 官方 Logo；角色名称、形象及相关知识产权归原权利人所有。视觉资产仅用于识别和介绍本项目，完整说明见 [Assets/README.md](./Assets/README.md)。
+源代码与文档采用 [MIT License](./LICENSE)。**Logo、应用图标、总览插画与宣传视觉资产不属于 MIT 授权范围**：Logo、图标与总览插画为艾雅法拉的非官方二次创作，并非 MAA 官方 Logo；角色名称、形象及相关知识产权归原权利人所有。视觉资产仅用于识别和介绍本项目，完整说明见 [Assets/README.md](./Assets/README.md)。

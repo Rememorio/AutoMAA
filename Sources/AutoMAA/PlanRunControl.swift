@@ -3,15 +3,25 @@ import SwiftUI
 struct PlanRunControl: View {
     @EnvironmentObject private var model: AppModel
     let planID: UUID
+    var showsTitle = false
 
     var body: some View {
         switch model.planRunState(planID: planID) {
         case .ready:
             let progress = model.continuation(for: planID)
             if progress.pending > 0 {
-                ActionIconButton(title: actionTitle(model.runTitle(for: planID)), symbol: "play.fill",
-                                 tint: .maaAccent, help: model.runHelp(for: planID)) {
-                    model.runPlan(planID)
+                if showsTitle {
+                    Button { model.runPlan(planID) } label: {
+                        Label(model.runTitle(for: planID), systemImage: "play.fill")
+                    }
+                    .buttonStyle(.borderedProminent).tint(.maaAction).controlSize(.large)
+                    .help(model.runHelp(for: planID))
+                    .accessibilityLabel(actionTitle(model.runTitle(for: planID)))
+                } else {
+                    ActionIconButton(title: actionTitle(model.runTitle(for: planID)), symbol: "play.fill",
+                                     tint: .maaAccent, help: model.runHelp(for: planID)) {
+                        model.runPlan(planID)
+                    }
                 }
             } else if progress.unconfirmed > 0 {
                 ActionTextButton(title: "处理结果", symbol: "exclamationmark.circle", tint: .orange,
@@ -43,11 +53,15 @@ struct PlanRunControl: View {
     }
 
     private func status(_ title: String, symbol: String, tint: Color = .secondary) -> some View {
-        Label(actionTitle(title), systemImage: symbol)
-            .labelStyle(.iconOnly)
-            .foregroundStyle(tint)
-            .frame(width: 26, height: 26)
-            .help(actionTitle(title))
-            .accessibilityLabel(actionTitle(title))
+        Group {
+            if showsTitle {
+                Label(title, systemImage: symbol).font(.callout)
+            } else {
+                Label(title, systemImage: symbol).labelStyle(.iconOnly).frame(width: 26, height: 26)
+            }
+        }
+        .foregroundStyle(tint)
+        .help(actionTitle(title))
+        .accessibilityLabel(actionTitle(title))
     }
 }
