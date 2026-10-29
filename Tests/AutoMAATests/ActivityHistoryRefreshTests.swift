@@ -133,6 +133,8 @@ struct ActivityHistoryRefreshTests {
         )
         let runID = UUID()
         let planID = model.configuration.plans[0].id
+        var lock: ProcessLock? = try ProcessLock(url: directories.lock)
+        #expect(lock != nil)
         let entry = LogEntry(
             level: .info,
             message: "正在执行定时方案",
@@ -141,8 +143,6 @@ struct ActivityHistoryRefreshTests {
             progress: 0.5,
             planID: planID
         )
-        var lock: ProcessLock? = try ProcessLock(url: directories.lock)
-        #expect(lock != nil)
         HistoryStore(directories: directories).append(entry)
 
         model.reloadActivityHistory()

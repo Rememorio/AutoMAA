@@ -4,49 +4,74 @@ import SwiftUI
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openSettings) private var openSettings
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var pendingReadinessDestination: PlanReadinessDestination?
+    @State private var showsSidebar = true
 
     var body: some View {
-        NavigationSplitView {
+        HStack(spacing: 0) {
             SidebarView()
-                .navigationSplitViewColumnWidth(min: 210, ideal: 230, max: 270)
-        } detail: {
+                .frame(width: 200)
+                .frame(maxHeight: .infinity)
+                .background(.regularMaterial)
+                .frame(width: showsSidebar ? 200 : 0, alignment: .leading)
+                .clipped()
+                .allowsHitTesting(showsSidebar)
+                .accessibilityHidden(!showsSidebar)
+            if showsSidebar { Divider() }
             detail
                 .disclosureGroupStyle(FullWidthDisclosureStyle())
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(nsColor: .windowBackgroundColor))
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     if let error = model.configurationSaveError {
-                        HStack(spacing: 12) {
-                            Label("配置尚未保存", systemImage: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
-                            Text(error).font(.caption).textSelection(.enabled)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Spacer(minLength: 0)
-                            Button("重试保存") { model.saveNow() }
-                        }
-                        .padding(14)
-                        .background(.bar)
+                        ConfigurationSaveFeedback(error: error) { model.saveNow() }
+                    } else {
+                        ApplicationFeedbackRegion(center: model.feedback, window: .workspace)
                     }
                 }
         }
-        .navigationSplitViewStyle(.balanced)
-        .sheet(item: $model.updateDetailsRequest) { request in
-            UpdateDetailsView(model: model, request: request)
-        }
-        .sheet(item: $model.readinessRequest) { request in
-            PlanReadinessSheet(planID: request.id)
-                .environmentObject(model)
-        }
-        .tint(.maaAccent)
-        .overlay(alignment: .top) {
-            if let message = model.bannerMessage {
-                banner(message)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                    .padding(.top, 10)
+        .background(WorkspaceWindowAppearance().frame(width: 0, height: 0))
+        .background(ApplicationWindowContext(feedback: model.feedback, destination: .workspace).frame(width: 0, height: 0))
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+                        showsSidebar.toggle()
+                    }
+                } label: {
+                    Label(showsSidebar ? "隐藏边栏" : "显示边栏", systemImage: "sidebar.left")
+                }
+                .help(showsSidebar ? "隐藏边栏" : "显示边栏")
+                .keyboardShortcut("s", modifiers: [.command, .control])
+            }
+            if model.isWorkflowRunning {
+                ToolbarItem(placement: .primaryAction) { WorkspaceActivityStatus() }
+            }
+            if !isPlanSelected && model.isWorkflowRunning {
+                ToolbarItem(placement: .primaryAction) { WorkspaceRunControl() }
             }
         }
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: model.bannerMessage)
+        .focusedSceneValue(\.workspaceActive, true)
+        .sheet(item: $model.entityEditor) { request in
+            EntityEditorSheet(request: request).environmentObject(model)
+        }
+        .sheet(item: $model.updateDetailsRequest) { request in
+            UpdateDetailsView(model: model, request: request)
+                .focusedSceneValue(\.workspaceActive, false)
+        }
+        .sheet(item: $model.readinessRequest, onDismiss: navigateAfterReadinessDismissal) { request in
+            PlanReadinessSheet(planID: request.id) { destination in
+                pendingReadinessDestination = destination
+                model.readinessRequest = nil
+            }
+                .environmentObject(model)
+                .focusedSceneValue(\.workspaceActive, false)
+        }
+        .tint(.maaAccent)
+        .onReceive(NotificationCenter.default.publisher(for: .autoMAAOpenSettings)) { _ in
+            openSettings()
+        }
         .onChange(of: model.configuration) { _, _ in
             model.scheduleSave()
         }
@@ -64,10 +89,6 @@ struct RootView: View {
         .task {
             model.prepareApplication()
         }
-        .task(id: scenePhase) {
-            guard scenePhase == .active else { return }
-            await model.monitorExternalActivity()
-        }
     }
 
     @ViewBuilder
@@ -82,50 +103,30 @@ struct RootView: View {
                 ContentUnavailableView("方案不存在", systemImage: "clock.badge.exclamationmark")
             }
         case let .client(id):
-            if let binding = model.clientBinding(id) {
-                ClientEditorView(client: binding)
-            } else {
-                ContentUnavailableView("客户端不存在", systemImage: "rectangle.slash")
-            }
+            ClientsView().onAppear { model.entityEditor = .client(id); model.selection = .clients }
         case let .account(clientID, accountID):
-            if let account = model.accountBinding(clientID: clientID, accountID: accountID),
-               let client = model.configuration.clients.first(where: { $0.id == clientID }) {
-                AccountEditorView(client: client, account: account)
-            } else {
-                ContentUnavailableView("账号不存在", systemImage: "person.crop.circle.badge.exclamationmark")
-            }
+            ClientsView().onAppear { model.entityEditor = .account(clientID, accountID); model.selection = .clients }
+        case .clients: ClientsView()
         case .activity:
             ActivityView()
-        case .settings:
-            SettingsView()
-        case .about:
-            AboutView()
         }
     }
 
-    private func banner(_ message: String) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "info.circle.fill")
-                .foregroundStyle(Color.maaAccent)
-            Text(message)
-                .font(.callout.weight(.medium))
-                .fixedSize(horizontal: false, vertical: true)
-            Button {
-                model.bannerMessage = nil
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.caption.weight(.semibold))
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .accessibilityLabel("关闭提示")
-            .help("关闭提示")
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .frame(maxWidth: 680)
-        .background(.ultraThickMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .shadow(color: .black.opacity(0.12), radius: 14, y: 5)
-        .padding(.horizontal, 24)
+    private var isPlanSelected: Bool {
+        if case .plan = model.selection { return true }
+        return false
     }
+
+    private func navigateAfterReadinessDismissal() {
+        guard let destination = pendingReadinessDestination else { return }
+        pendingReadinessDestination = nil
+        switch destination {
+        case let .configuration(target):
+            model.showConfigurationRepair(target)
+        case .newClient:
+            model.selection = .clients
+            model.entityEditor = .newClient
+        }
+    }
+
 }

@@ -10,8 +10,7 @@ enum SidebarSelection: Hashable {
     case client(UUID)
     case account(UUID, UUID)
     case activity
-    case settings
-    case about
+    case clients
 }
 
 typealias ReadinessIssue = ConfigurationProblem
@@ -101,17 +100,21 @@ final class AppModel: ObservableObject {
         }
     }
     @Published private(set) var currentPlanID: UUID?
+    @Published var settingsSection: SettingsSection = .general
+    @Published var entityEditor: EntityEditorRequest?
     @Published var activityEntries: [LogEntry]
     @Published var activitySearch = ""
     @Published var activityFilter: ActivityFilter = .all
+    @Published var activitySelection: ActivityWorkspaceSelection?
     @Published private(set) var activityNavigationRequest: ActivityNavigationRequest?
     @Published var phase: RunnerPhase = .idle
     @Published var statusMessage = "等待开始"
     @Published var progress = 0.0
     @Published var isRunning = false
     @Published var runningPlanID: UUID?
+    @Published private(set) var runningRunID: UUID?
     @Published private var externalRunState: ExternalRunState?
-    @Published var bannerMessage: String?
+    let feedback = ApplicationFeedbackCenter()
     @Published private(set) var configurationSaveError: String?
     @Published var readinessRequest: PlanReadinessRequest?
     @Published var installedPlanIDs: Set<UUID>
@@ -130,6 +133,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var releaseNotesState: ReleaseNotesCache.State = .init()
     @Published var updateDetailsRequest: UpdateDetailsRequest?
     @Published private(set) var applicationUpdateStartedAt: Date?
+    @Published private(set) var applicationUpdateCheckedAt: Date?
+    @Published private(set) var applicationUpdateNotice: String?
     @Published private(set) var maaUpdateActivity: MAAUpdateActivity?
     @Published private(set) var isCancellingRun = false
     @Published private(set) var notificationAuthorizationState: NotificationAuthorizationState = .notDetermined
@@ -310,7 +315,7 @@ final class AppModel: ObservableObject {
     }
 
     var activeRunID: UUID? {
-        isRunning ? activityEntries.last?.runID : externalRunState?.runID
+        isRunning ? runningRunID : externalRunState?.runID
     }
 
     var activePlanID: UUID? {
@@ -484,7 +489,7 @@ final class AppModel: ObservableObject {
             try configurationStore.save(configuration)
             synchronizeSavedSchedulesIfNeeded()
             configurationSaveError = nil
-            if showConfirmation { showBanner("配置已保存") }
+            if showConfirmation { showFeedback("配置已保存", tone: .success) }
             return true
         } catch {
             let message = SensitiveDataRedactor.redact(
@@ -492,7 +497,6 @@ final class AppModel: ObservableObject {
                 sensitiveValues: configuration.clients.flatMap { $0.accounts.map(\.accountSelector) }
             )
             configurationSaveError = message
-            showBanner("保存失败：\(message)")
             return false
         }
     }
@@ -528,7 +532,7 @@ final class AppModel: ObservableObject {
         guard !isFightRecoveryBusy,
               continuation(for: item.step.planID).fightRecoveryItems.contains(item),
               item.canHandleRegularWithoutRetry else {
-            showBanner("作战状态已变化或仍在运行，请刷新后重新检查")
+            showFeedback("作战状态已变化或仍在运行，请刷新后重新检查")
             return
         }
         do {
@@ -540,28 +544,28 @@ final class AppModel: ObservableObject {
                                                            totalSteps: 1, manuallyHandledSteps: 1),
                                          fightResult: executionState.fightResults?[item.step.key]))
             reloadActivityHistory()
-            showBanner("已记录：该账号今天不再重试本方案的常规作战")
+            showFeedback("已记录：该账号今天不再重试本方案的常规作战")
         } catch {
-            showBanner("处理结果未保存：\(error.localizedDescription)")
+            showFeedback("处理结果未保存：\(error.localizedDescription)", tone: .error)
         }
     }
 
     func confirmWeeklyAnnihilation(_ step: WorkflowStep) {
         guard !isFightRecoveryBusy else {
-            showBanner("运行或更新进行中，结束后可确认本周剿灭")
+            showFeedback("运行或更新进行中，结束后可确认本周剿灭")
             return
         }
         guard let client = configuration.clients.first(where: { $0.id == step.clientID }),
               client.accounts.contains(where: { $0.id == step.accountID }) else {
-            showBanner("账号配置已变化，请刷新后重新检查")
+            showFeedback("账号配置已变化，请刷新后重新检查")
             return
         }
         do {
             weeklyAnnihilation = try weeklyAnnihilationStore.confirmComplete(client: client, accountID: step.accountID)
             reloadActivityHistory()
-            showBanner("已记录本周剿灭完成；后续运行将继续尚未完成的日常")
+            showFeedback("已记录本周剿灭完成；后续运行将继续尚未完成的日常")
         } catch {
-            showBanner("确认未保存：\(error.localizedDescription)")
+            showFeedback("确认未保存：\(error.localizedDescription)", tone: .error)
         }
     }
 
@@ -596,15 +600,18 @@ final class AppModel: ObservableObject {
         selectCurrentPlan(planID)
         let issues = readinessIssues(for: planID)
         guard canRun(planID: planID) else {
-            showBanner(issues.first(where: { $0.severity == .error })?.message ?? "当前方案无法运行")
+            showFeedback(issues.first(where: { $0.severity == .error })?.message ?? "当前方案无法运行", tone: .error)
             return
         }
         guard saveNow(showConfirmation: false) else { return }
         isRunning = true
         isCancellingRun = false
         runningPlanID = planID
+        runningRunID = nil
         lastReport = nil
         progress = 0
+        phase = .preparing
+        statusMessage = "正在准备运行"
         let snapshot = configuration
         let notificationCenter = importantNotificationCenter
         let noticeSink: WorkflowRunner.NoticeSink?
@@ -630,29 +637,30 @@ final class AppModel: ObservableObject {
             self.isRunning = false
             self.isCancellingRun = false
             self.runningPlanID = nil
+            self.runningRunID = nil
             self.workflowTask = nil
             self.reloadActivityHistory()
             self.reloadFightStageMemory()
             _ = self.saveNow(showConfirmation: false)
             await self.postImportantNotification(for: report, planID: planID)
             if let fatalError = report.fatalError {
-                self.showBanner(fatalError)
+                self.showFeedback(fatalError, tone: .error)
             } else if report.cancelled {
-                self.showBanner("流程已安全停止，当前客户端和连接已清理")
+                self.showFeedback("流程已安全停止，当前客户端和连接已清理")
             } else if report.isSuccess {
                 if report.notices.isEmpty {
                     let name = snapshot.plans.first(where: { $0.id == planID })?.displayName ?? "方案"
-                    self.showBanner(report.runSummary?.successMessage(planName: name) ?? "本轮运行已结束")
+                    self.showFeedback(report.runSummary?.successMessage(planName: name) ?? "本轮运行已结束", tone: .success)
                 } else {
-                    self.showBanner(self.noticeBanner(report.notices))
+                    self.showFeedback(self.noticeBanner(report.notices), tone: .warning)
                 }
             } else if let summary = report.runSummary, summary.isPartial {
-                self.showBanner("流程部分完成：\(summary.completionDescription)，请查看活动记录")
+                self.showFeedback("流程部分完成：\(summary.completionDescription)，请查看活动记录", tone: .warning)
             } else if !report.attentionMessages.isEmpty {
-                self.showBanner(self.attentionBanner(report.attentionMessages))
+                self.showFeedback(self.attentionBanner(report.attentionMessages), tone: .warning)
             } else {
                 let suffix = report.notices.isEmpty ? "" : "，另有 \(report.notices.count) 项公招结果需要确认"
-                self.showBanner("流程完成，但有 \(report.failedSteps) 个步骤失败\(suffix)")
+                self.showFeedback("流程完成，但有 \(report.failedSteps) 个步骤失败\(suffix)", tone: .error)
             }
             self.resumeAutomaticApplicationUpdateIfNeeded()
             self.resumeAutomaticMAAUpdateIfNeeded()
@@ -661,7 +669,7 @@ final class AppModel: ObservableObject {
 
     func runSelectedPlan(resumeToday: Bool = true) {
         guard let currentPlanID else {
-            showBanner("请先创建自动化方案")
+            showFeedback("请先创建自动化方案")
             return
         }
         runPlan(currentPlanID, resumeToday: resumeToday)
@@ -678,7 +686,7 @@ final class AppModel: ObservableObject {
         synchronizeSchedules()
         refreshNotificationAuthorization()
         if let startupNotice {
-            showBanner(startupNotice)
+            showFeedback(startupNotice, tone: .warning)
         }
         if let result = softwareUpdateResultStore.loadAndClear() {
             applicationUpdateState = result.status == .success ? .upToDate : .failed(result.message)
@@ -686,7 +694,7 @@ final class AppModel: ObservableObject {
                 releaseNotesState.unreadVersion = currentApplicationVersion
                 persistReleaseNotes()
             }
-            showBanner(result.message)
+            showFeedback(result.message, tone: result.status == .success ? .success : .error)
             refreshMAAStatus()
             resumeAutomaticMAAUpdateIfNeeded()
             return
@@ -722,15 +730,10 @@ final class AppModel: ObservableObject {
                 let state = try await self.importantNotificationCenter.requestAuthorization()
                 guard !Task.isCancelled else { return }
                 self.notificationAuthorizationState = state
-                if state.canDeliver {
-                    self.showBanner("重要通知已开启")
-                } else {
-                    self.showBanner("macOS 未允许通知，可前往系统设置开启")
-                }
             } catch {
                 guard !Task.isCancelled else { return }
                 self.notificationAuthorizationState = await self.importantNotificationCenter.authorizationState()
-                self.showBanner("无法请求通知权限：\(error.localizedDescription)")
+                self.showFeedback("无法请求通知权限：\(error.localizedDescription)", tone: .error)
             }
         }
     }
@@ -749,11 +752,11 @@ final class AppModel: ObservableObject {
     func testImportantNotification() {
         guard !isTestingImportantNotification else { return }
         guard configuration.notifications.importantEventsEnabled else {
-            showBanner("请先开启重要通知")
+            showFeedback("请先开启重要通知")
             return
         }
         guard FileManager.default.isExecutableFile(atPath: runnerExecutableURL.path) else {
-            showBanner("找不到后台 Runner，无法测试定时通知")
+            showFeedback("找不到后台 Runner，无法测试定时通知", tone: .error)
             return
         }
         isTestingImportantNotification = true
@@ -772,14 +775,14 @@ final class AppModel: ObservableObject {
                 guard !Task.isCancelled else { return }
                 self.refreshNotificationAuthorization()
                 if result.exitCode == 0 {
-                    self.showBanner("后台测试通知已发送")
+                    self.showFeedback("后台测试通知已发送")
                 } else {
                     let message = result.combinedOutput.isEmpty ? "未知错误" : result.combinedOutput
-                    self.showBanner("后台测试通知未送达：\(String(message.prefix(180)))")
+                    self.showFeedback("后台测试通知未送达：\(String(message.prefix(180)))", tone: .warning)
                 }
             } catch {
                 guard !Task.isCancelled else { return }
-                self.showBanner("无法测试后台通知：\(error.localizedDescription)")
+                self.showFeedback("无法测试后台通知：\(error.localizedDescription)", tone: .error)
             }
         }
     }
@@ -811,12 +814,11 @@ final class AppModel: ObservableObject {
         if activityEntries.count > 1_000 { activityEntries.removeFirst(activityEntries.count - 1_000) }
     }
 
-    func refreshMAAStatus(showResult: Bool = false) {
+    func refreshMAAStatus() {
         guard !isCheckingMAAEnvironment else { return }
         let path = configuration.cliPath
         guard FileManager.default.isExecutableFile(atPath: path) else {
             maaVersionSummary = "未找到 maa-cli"
-            if showResult { showBanner("找不到可执行的 maa-cli") }
             return
         }
         let requestID = UUID()
@@ -832,13 +834,9 @@ final class AppModel: ObservableObject {
                 self.maaVersionSummary = result.exitCode == 0 && !output.isEmpty
                     ? output
                     : "检测失败：\(output.isEmpty ? "退出码 \(result.exitCode)" : output)"
-                if showResult {
-                    self.showBanner(result.exitCode == 0 ? "MAA 环境检测完成" : "MAA 环境检测失败")
-                }
             } catch {
                 guard self.maaEnvironmentRequestID == requestID, self.configuration.cliPath == path else { return }
                 self.maaVersionSummary = "检测失败：\(error.localizedDescription)"
-                if showResult { self.showBanner("MAA 环境检测失败：\(error.localizedDescription)") }
             }
             self.isCheckingMAAEnvironment = false
             self.maaEnvironmentTask = nil
@@ -868,12 +866,16 @@ final class AppModel: ObservableObject {
     }
 
     func showApplicationNotes(currentVersion: Bool = false) {
+        updateDetailsRequest = applicationNotesRequest(currentVersion: currentVersion)
+    }
+
+    func applicationNotesRequest(currentVersion: Bool = false) -> UpdateDetailsRequest {
         let version = currentVersion ? currentApplicationVersion : applicationUpdateRelease?.version.description ?? currentApplicationVersion
-        updateDetailsRequest = .application(version)
         if version == currentApplicationVersion {
             releaseNotesState.unreadVersion = nil
             persistReleaseNotes()
         }
+        return .application(version)
     }
 
     func initialReleaseNotes(for request: UpdateDetailsRequest) -> [ReleaseNotes] {
@@ -974,20 +976,21 @@ final class AppModel: ObservableObject {
 
     private func persistReleaseNotes() {
         do { try releaseNotesCache.save(releaseNotesState) }
-        catch { showBanner("更新说明未能保存在本机：\(error.localizedDescription)") }
+        catch { showFeedback("更新说明未能保存在本机：\(error.localizedDescription)", tone: .error) }
     }
 
     private func startMAAUpdate(_ component: MAAComponentUpdate, automatic: Bool = false) {
         reloadActivityHistory()
         guard !isWorkflowRunning, !applicationUpdateState.blocksWorkflow else { return }
         guard FileManager.default.isExecutableFile(atPath: configuration.cliPath) else {
-            showBanner("找不到可执行的 maa-cli")
+            maaVersionSummary = "未找到可执行的 maa-cli，请检查路径。"
             return
         }
         if case .core = component { recordMAACoreUpdateAttempt() }
         isRunning = true
         isCancellingRun = false
         runningPlanID = nil
+        runningRunID = nil
         progress = 0
         phase = .preparing
         maaUpdateActivity = .init(component: component, automatic: automatic)
@@ -1005,19 +1008,18 @@ final class AppModel: ObservableObject {
             self?.consume(event)
         }
         workflowTask = Task { [weak self] in
-            let succeeded: Bool
             switch component {
             case .resources:
-                succeeded = await runner.hotUpdate(cliPath: cliPath)
+                _ = await runner.hotUpdate(cliPath: cliPath)
             case let .core(channel):
-                succeeded = await runner.updateCore(cliPath: cliPath, channel: channel,
+                _ = await runner.updateCore(cliPath: cliPath, channel: channel,
                                                     context: automatic ? .automatic : .manual)
             }
             guard let self else { return }
             self.isRunning = false
             self.isCancellingRun = false
+            self.runningRunID = nil
             self.workflowTask = nil
-            if !automatic || !succeeded || Task.isCancelled { self.showBanner(self.statusMessage) }
             self.refreshMAAStatus()
             self.resumeAutomaticApplicationUpdateIfNeeded()
             self.resumeAutomaticMAAUpdateIfNeeded()
@@ -1054,12 +1056,12 @@ final class AppModel: ObservableObject {
                 } else {
                     self.applicationUpdateState = .checking
                     self.applicationUpdateStartedAt = Date()
-                    await self.performApplicationUpdateCheck(showResult: false)
+                    await self.performApplicationUpdateCheck()
                 }
             } catch {
                 if Task.isCancelled || error is CancellationError {
                     self.applicationUpdateState = .idle
-                    self.showBanner("已取消检查更新")
+                    self.applicationUpdateNotice = "已取消检查，可随时重新检查。"
                 } else {
                     self.applicationUpdateState = .failed(error.localizedDescription)
                 }
@@ -1071,43 +1073,38 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func performApplicationUpdateCheck(showResult: Bool) async {
+    private func performApplicationUpdateCheck() async {
         do {
             let release = try await softwareUpdateService.check()
             try Task.checkCancellation()
+            applicationUpdateCheckedAt = Date()
             if let release {
                 rememberApplicationRelease(release)
                 applicationUpdateState = .available(release)
                 if configuration.applicationUpdates.automaticallyDownloadsUpdates && !automaticApplicationDownloadPaused {
-                    if isWorkflowRunning {
-                        showBanner("发现 AutoMAA v\(release.version)，将在当前流程结束后自动下载")
-                    } else {
-                        showBanner("发现 AutoMAA v\(release.version)，正在自动下载并校验")
+                    if !isWorkflowRunning {
                         await prepareApplicationUpdate(release)
                     }
-                } else {
-                    showBanner("发现 AutoMAA v\(release.version)，可在全局设置中更新")
                 }
             } else {
                 applicationUpdateRelease = nil
                 applicationUpdateState = .upToDate
-                if showResult { showBanner("AutoMAA 已是最新版本") }
             }
         } catch is CancellationError {
             applicationUpdateState = .idle
-            showBanner("已取消检查更新")
+            applicationUpdateNotice = "已取消检查，可随时重新检查。"
         } catch {
             if Task.isCancelled {
                 applicationUpdateState = .idle
-                showBanner("已取消检查更新")
+                applicationUpdateNotice = "已取消检查，可随时重新检查。"
                 return
             }
             applicationUpdateState = .failed(error.localizedDescription)
-            if showResult { showBanner("检查更新失败：\(error.localizedDescription)") }
         }
     }
 
     private func prepareApplicationUpdate(_ release: SoftwareUpdateRelease) async {
+        applicationUpdateNotice = nil
         rememberApplicationRelease(release)
         let progressID = UUID()
         applicationUpdateProgressID = progressID
@@ -1128,18 +1125,16 @@ final class AppModel: ObservableObject {
             }
             try Task.checkCancellation()
             applicationUpdateState = .ready(prepared)
-            showBanner("v\(release.version) 已下载并通过校验，可以重启更新")
         } catch is CancellationError {
             applicationUpdateState = .available(release)
-            showBanner("更新已取消，可以稍后重新下载")
+            applicationUpdateNotice = "下载已取消，可以稍后重新下载。"
         } catch {
             if Task.isCancelled {
                 applicationUpdateState = .available(release)
-                showBanner("更新已取消，可以稍后重新下载")
+                applicationUpdateNotice = "下载已取消，可以稍后重新下载。"
                 return
             }
             applicationUpdateState = .failed(error.localizedDescription)
-            showBanner("下载更新失败：\(error.localizedDescription)")
         }
     }
 
@@ -1232,15 +1227,16 @@ final class AppModel: ObservableObject {
         try? maaMaintenanceStore.save(.init(lastCoreUpdateAttempt: date))
     }
 
-    func checkForApplicationUpdate(showResult: Bool = true) {
+    func checkForApplicationUpdate() {
         guard !applicationUpdateState.isBusy else { return }
+        applicationUpdateNotice = nil
         automaticApplicationDownloadPaused = false
         applicationUpdateTask?.cancel()
         applicationUpdateState = .checking
         applicationUpdateStartedAt = Date()
         applicationUpdateTask = Task { [weak self] in
             guard let self else { return }
-            await self.performApplicationUpdateCheck(showResult: showResult)
+            await self.performApplicationUpdateCheck()
             self.applicationUpdateTask = nil
             self.applicationUpdateStartedAt = nil
             self.resumeAutomaticApplicationUpdateIfNeeded()
@@ -1254,16 +1250,6 @@ final class AppModel: ObservableObject {
         if enabled {
             automaticApplicationDownloadPaused = false
             resumeAutomaticApplicationUpdateIfNeeded()
-        }
-    }
-
-    func copySupportDiagnostics() {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        if pasteboard.setString(supportDiagnostics.text, forType: .string) {
-            showBanner("诊断信息已复制，不含账号、路径和运行日志")
-        } else {
-            showBanner("无法复制诊断信息，请稍后重试")
         }
     }
 
@@ -1339,7 +1325,6 @@ final class AppModel: ObservableObject {
         } catch {
             applicationUpdateInstallLock = nil
             applicationUpdateState = .failed(error.localizedDescription)
-            showBanner("无法开始更新：\(error.localizedDescription)")
         }
     }
 
@@ -1352,7 +1337,7 @@ final class AppModel: ObservableObject {
                 refreshExternalRunState()
             } catch {
                 reloadActivityHistory()
-                showBanner("无法安全停止：\(error.localizedDescription)")
+                showFeedback("无法安全停止：\(error.localizedDescription)", tone: .error)
             }
             return
         }
@@ -1377,12 +1362,17 @@ final class AppModel: ObservableObject {
     }
 
     func resetToday() {
+        reloadActivityHistory()
+        guard !isWorkflowRunning else {
+            showFeedback("运行期间不能重置今日完成记录，请等待当前任务结束后重试。")
+            return
+        }
         do {
             try executionStateStore.reset()
             executionState = executionStateStore.loadForToday()
-            showBanner("今日完成记录已重置")
+            showFeedback("今日完成记录已重置")
         } catch {
-            showBanner("重置失败：\(error.localizedDescription)")
+            showFeedback("重置失败：\(error.localizedDescription)", tone: .error)
         }
     }
 
@@ -1390,17 +1380,35 @@ final class AppModel: ObservableObject {
         do {
             try historyStore.clear()
             activityEntries = []
-            showBanner("活动记录已清除")
+            showFeedback("活动记录已清除")
         } catch {
-            showBanner("清理活动记录失败：\(error.localizedDescription)")
+            showFeedback("清理活动记录失败：\(error.localizedDescription)", tone: .error)
         }
+    }
+
+    func showPlanActivity(_ planID: UUID) {
+        guard configuration.plans.contains(where: { $0.id == planID }) else { return }
+        activityNavigationRequest = nil
+        selectCurrentPlan(planID)
+        activitySelection = .plan(planID)
+        selection = .activity
+    }
+
+    func showCurrentActivity() {
+        activityNavigationRequest = nil
+        activitySearch = ""
+        activityFilter = .all
+        if isWorkflowRunning {
+            activitySelection = activePlanID.map(ActivityWorkspaceSelection.plan) ?? .maintenance
+        }
+        selection = .activity
     }
 
     func showActivity(runID: UUID) {
         reloadActivityHistory()
         activityNavigationRequest = nil
         guard activityEntries.contains(where: { $0.runID == runID }) else {
-            showBanner("该次运行记录已被清除，可在活动记录中打开诊断日志目录")
+            showFeedback("该次运行记录已被清除，可在活动记录中打开诊断日志目录")
             selection = .activity
             return
         }
@@ -1416,10 +1424,40 @@ final class AppModel: ObservableObject {
 
     func showConfigurationRepair(_ target: ConfigurationRepairTarget) {
         switch target {
-        case .settings: selection = .settings
+        case .settings: showSettings(.environment)
         case let .plan(id): selection = .plan(id)
-        case let .client(id): selection = .client(id)
-        case let .account(clientID, accountID): selection = .account(clientID, accountID)
+        case let .client(id):
+            selection = .clients
+            entityEditor = .client(id)
+        case let .account(clientID, accountID):
+            selection = .clients
+            entityEditor = .account(clientID, accountID)
+        }
+    }
+
+    func showSettings(_ section: SettingsSection = .general) {
+        feedback.activeWindow = .settings
+        settingsSection = section
+        NotificationCenter.default.post(name: .autoMAAOpenSettings, object: nil)
+    }
+
+    var applicationUpdateMenuTitle: String {
+        switch applicationUpdateState {
+        case .idle, .upToDate, .failed: "检查更新…"
+        case .restoring, .checking: "正在检查更新…"
+        case .available: "发现新版本…"
+        case .downloading: "查看下载进度…"
+        case .cancelling: "正在取消更新…"
+        case .ready: "更新已就绪…"
+        case .installing: "正在安装更新…"
+        }
+    }
+
+    func openApplicationUpdate() {
+        showSettings(.updates)
+        switch applicationUpdateState {
+        case .idle, .upToDate, .failed: checkForApplicationUpdate()
+        default: break
         }
     }
 
@@ -1444,7 +1482,7 @@ final class AppModel: ObservableObject {
     @discardableResult
     func setFightRecoveryStage(_ stage: String, clientID: UUID, accountID: UUID) -> Bool {
         guard let stage = FightStagePolicy.regularStage(from: stage, times: 1) else {
-            showBanner(FightStagePolicy.regularStageHint)
+            showFeedback(FightStagePolicy.regularStageHint)
             return false
         }
         return updateFightStageMemory(successMessage: "常规目标已更新为 \(stage)") { memory in
@@ -1457,7 +1495,7 @@ final class AppModel: ObservableObject {
         update: (inout FightStageMemory) -> Bool
     ) -> Bool {
         guard !isWorkflowRunning else {
-            showBanner("工作流运行期间不能修改关卡恢复状态")
+            showFeedback("工作流运行期间不能修改关卡恢复状态")
             return false
         }
         do {
@@ -1465,10 +1503,10 @@ final class AppModel: ObservableObject {
             guard update(&memory) else { return false }
             try fightStageMemoryStore.save(memory)
             fightStageMemory = memory
-            showBanner(successMessage)
+            showFeedback(successMessage)
             return true
         } catch {
-            showBanner("更新关卡恢复状态失败：\(error.localizedDescription)")
+            showFeedback("更新关卡恢复状态失败：\(error.localizedDescription)", tone: .error)
             return false
         }
     }
@@ -1493,6 +1531,79 @@ final class AppModel: ObservableObject {
         let account = AccountConfiguration(name: name)
         configuration.clients[index].accounts.append(account)
         selection = .account(clientID, account.id)
+    }
+
+    func newClientDraft() -> ClientConfiguration {
+        ClientConfiguration(name: uniqueName("新客户端", among: configuration.clients.map(\.name)),
+            kind: .official, appPath: "", profileName: uniqueProfileName(), accounts: [])
+    }
+
+    func newAccountDraft(clientID: UUID) -> AccountConfiguration {
+        AccountConfiguration(name: uniqueName("新账号", among:
+            configuration.clients.first(where: { $0.id == clientID })?.accounts.map(\.name) ?? []))
+    }
+
+    func saveClientDraft(_ draft: ClientConfiguration, isNew: Bool) -> String? {
+        reloadActivityHistory()
+        guard !isWorkflowRunning else { return "运行期间不能修改客户端。" }
+        var client = draft
+        client.name = client.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !client.name.isEmpty else { return "请填写客户端名称。" }
+        guard !client.profileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return "请填写 MAA Profile 名称。"
+        }
+        guard !configuration.clients.contains(where: {
+            $0.id != client.id && MAAProfileName.normalize($0.profileName) == MAAProfileName.normalize(client.profileName)
+        }) else { return "该 MAA Profile 已被其他客户端使用。" }
+        var candidate = configuration
+        if isNew {
+            guard !candidate.clients.contains(where: { $0.id == client.id }) else { return "客户端已添加。" }
+            candidate.clients.append(client)
+        } else {
+            guard let index = candidate.clients.firstIndex(where: { $0.id == client.id }) else { return "客户端已被移除。" }
+            client.accounts = candidate.clients[index].accounts
+            candidate.clients[index] = client
+        }
+        return persistEditorCandidate(candidate)
+    }
+
+    func saveAccountDraft(_ draft: AccountConfiguration, clientID: UUID, isNew: Bool, planIDs: Set<UUID>) -> String? {
+        reloadActivityHistory()
+        guard !isWorkflowRunning else { return "运行期间不能修改账号。" }
+        var account = draft
+        account.name = account.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !account.name.isEmpty else { return "请填写账号名称。" }
+        var candidate = configuration
+        guard let index = candidate.clients.firstIndex(where: { $0.id == clientID }) else { return "客户端已被移除。" }
+        if isNew {
+            guard !candidate.clients[index].accounts.contains(where: { $0.id == account.id }) else { return "账号已添加。" }
+            candidate.clients[index].accounts.append(account)
+        } else {
+            guard let accountIndex = candidate.clients[index].accounts.firstIndex(where: { $0.id == account.id }) else { return "账号已被移除。" }
+            candidate.clients[index].accounts[accountIndex] = account
+        }
+        for planIndex in candidate.plans.indices where !candidate.plans[planIndex].includesAllEnabledAccounts {
+            if planIDs.contains(candidate.plans[planIndex].id) {
+                candidate.plans[planIndex].accountIDs.insert(account.id)
+            } else {
+                candidate.plans[planIndex].accountIDs.remove(account.id)
+            }
+        }
+        return persistEditorCandidate(candidate)
+    }
+
+    private func persistEditorCandidate(_ candidate: AppConfiguration) -> String? {
+        do {
+            try configurationStore.save(candidate)
+        } catch {
+            return "保存失败：" + SensitiveDataRedactor.redact(error.localizedDescription,
+                sensitiveValues: candidate.clients.flatMap { $0.accounts.map(\.accountSelector) })
+        }
+        saveTask?.cancel()
+        configuration = candidate
+        configurationSaveError = nil
+        synchronizeSavedSchedulesIfNeeded()
+        return nil
     }
 
     func addPlan(_ template: AutomationPlan = .lightRoutine) {
@@ -1585,17 +1696,17 @@ final class AppModel: ObservableObject {
             if let index = configuration.plans.firstIndex(where: { $0.id == planID }) {
                 configuration.plans[index].schedule.enabled = false
             }
-            showBanner("暂时无法启用定时运行：\(issue.message)")
+            showFeedback("暂时无法启用定时运行：\(issue.message)", tone: .error)
             return
         }
         guard let index = configuration.plans.firstIndex(where: { $0.id == planID }) else { return }
         let schedule = configuration.plans[index].schedule
         if enabled, let problem = PlanScheduleValidator.problem(in: schedule) {
-            showBanner("暂时无法启用定时运行：\(problem.message(planName: configuration.plans[index].displayName))")
+            showFeedback("暂时无法启用定时运行：\(problem.message(planName: configuration.plans[index].displayName))", tone: .error)
             return
         }
         if enabled, let conflict = scheduleConflict(planID: planID, schedule: schedule) {
-            showBanner("暂时无法启用：与「\(conflict.firstPlanName)」的\(conflict.slot.weekday.title)定时运行冲突")
+            showFeedback("暂时无法启用：与「\(conflict.firstPlanName)」的\(conflict.slot.weekday.title)定时运行冲突", tone: .error)
             return
         }
         configuration.plans[index].schedule.enabled = enabled
@@ -1604,6 +1715,48 @@ final class AppModel: ObservableObject {
             feedback: enabled ? .enabled(planID) : .disabled(planID),
             debounce: false
         )
+    }
+
+    func applyPlanExecutionArrangement(
+        _ planID: UUID,
+        includesAllEnabledAccounts: Bool,
+        accountIDs: Set<UUID>,
+        schedule: PlanSchedule,
+        policy: ExecutionPolicy
+    ) -> String? {
+        reloadActivityHistory()
+        guard !isWorkflowRunning else { return "运行期间不能修改执行安排。" }
+        guard let index = configuration.plans.firstIndex(where: { $0.id == planID }) else {
+            return "方案已被移除，请关闭后重新选择。"
+        }
+        var candidate = configuration
+        candidate.plans[index].includesAllEnabledAccounts = includesAllEnabledAccounts
+        candidate.plans[index].accountIDs = accountIDs
+        candidate.plans[index].schedule = schedule
+        candidate.plans[index].policy = policy
+        if let problem = PlanScheduleValidator.problem(in: schedule) {
+            return problem.message(planName: candidate.plans[index].displayName)
+        }
+        if schedule.enabled,
+           let issue = ConfigurationValidator.readinessProblems(in: candidate, planID: planID)
+            .first(where: { $0.severity == .error }) {
+            return "暂时无法启用定时运行：\(issue.message)"
+        }
+        if schedule.enabled, let conflict = scheduleConflict(planID: planID, schedule: schedule) {
+            return "与「\(conflict.firstPlanName)」的\(conflict.slot.weekday.title)定时运行冲突。"
+        }
+        do {
+            try configurationStore.save(candidate)
+        } catch {
+            return "保存失败：" + SensitiveDataRedactor.redact(error.localizedDescription,
+                sensitiveValues: candidate.clients.flatMap { $0.accounts.map(\.accountSelector) })
+        }
+        saveTask?.cancel()
+        configuration = candidate
+        configurationSaveError = nil
+        synchronizeSavedSchedulesIfNeeded()
+        showFeedback("执行安排已保存")
+        return nil
     }
 
     func setPlanScheduleRuleTime(_ planID: UUID, ruleID: UUID, hour: Int, minute: Int) {
@@ -1630,7 +1783,7 @@ final class AppModel: ObservableObject {
         guard let plan = configuration.plans.first(where: { $0.id == planID }),
               let weekday = ScheduleWeekday.allCases.first(where: { !plan.schedule.scheduledWeekdays.contains($0) })
         else {
-            showBanner("每个星期都已有定时时段；同一方案每天最多运行一次")
+            showFeedback("每个星期都已有定时时段；同一方案每天最多运行一次")
             return
         }
         let reference = plan.schedule.rules.last
@@ -1645,7 +1798,7 @@ final class AppModel: ObservableObject {
 
     func removePlanScheduleRule(_ planID: UUID, ruleID: UUID) {
         guard let plan = configuration.plans.first(where: { $0.id == planID }), plan.schedule.rules.count > 1 else {
-            showBanner("至少需要保留一个定时时段")
+            showFeedback("至少需要保留一个定时时段")
             return
         }
         updatePlanSchedule(planID, debounce: false) { schedule in
@@ -1666,12 +1819,12 @@ final class AppModel: ObservableObject {
         update(&schedule)
         guard schedule != configuration.plans[index].schedule else { return }
         if let problem = PlanScheduleValidator.problem(in: schedule) {
-            showBanner(problem.message(planName: configuration.plans[index].displayName))
+            showFeedback(problem.message(planName: configuration.plans[index].displayName))
             return
         }
         if schedule.enabled, let conflict = scheduleConflict(planID: planID, schedule: schedule) {
             let time = PlanScheduleFormatter.time(hour: conflict.slot.hour, minute: conflict.slot.minute)
-            showBanner("无法应用：与「\(conflict.firstPlanName)」的\(conflict.slot.weekday.title) \(time) 冲突")
+            showFeedback("无法应用：与「\(conflict.firstPlanName)」的\(conflict.slot.weekday.title) \(time) 冲突", tone: .error)
             return
         }
         configuration.plans[index].schedule = schedule
@@ -1686,7 +1839,7 @@ final class AppModel: ObservableObject {
         debounce: Bool
     ) {
         guard FileManager.default.isExecutableFile(atPath: runnerExecutableURL.path) else {
-            if feedback != nil { showBanner("找不到 AutoMAARunner，无法配置定时运行") }
+            if feedback != nil { showFeedback("找不到 AutoMAARunner，无法配置定时运行", tone: .error) }
             return
         }
         scheduleSynchronizationRevision += 1
@@ -1721,7 +1874,7 @@ final class AppModel: ObservableObject {
             } catch {
                 guard revision == self.scheduleSynchronizationRevision else { return }
                 self.installedPlanIDs = self.launchAgentManager.installedPlanIDs
-                self.showBanner("定时任务同步失败：\(error.localizedDescription)")
+                self.showFeedback("定时任务同步失败：\(error.localizedDescription)", tone: .error)
             }
             guard revision == self.scheduleSynchronizationRevision else { return }
             self.isSynchronizingSchedules = false
@@ -1745,12 +1898,12 @@ final class AppModel: ObservableObject {
         let name = configuration.plans.first(where: { $0.id == planID })?.displayName ?? "方案"
         switch feedback {
         case .enabled:
-            showBanner("「\(name)」定时运行已启用")
+            showFeedback("「\(name)」定时运行已启用")
         case .disabled:
-            showBanner("「\(name)」定时运行已关闭")
+            showFeedback("「\(name)」定时运行已关闭")
         case .changed:
             let schedule = configuration.plans.first(where: { $0.id == planID })?.schedule
-            showBanner("「\(name)」已改为 \(schedule.map(PlanScheduleFormatter.summary) ?? "新的周计划")")
+            showFeedback("「\(name)」已改为 \(schedule.map(PlanScheduleFormatter.summary) ?? "新的周计划")")
         }
     }
 
@@ -1788,6 +1941,7 @@ final class AppModel: ObservableObject {
 
     private func consume(_ event: RunnerEvent) {
         externalRunState = nil
+        runningRunID = event.log.runID
         phase = event.phase
         statusMessage = event.message
         progress = event.progress
@@ -1813,7 +1967,7 @@ final class AppModel: ObservableObject {
             if isCancellingRun, let runID = externalRunState?.runID {
                 if let terminal = activityEntries.last(where: { $0.runID == runID }),
                    terminal.phase == .cancelled || terminal.phase == .failed {
-                    showBanner(terminal.message)
+                    showFeedback(terminal.message, tone: terminal.phase == .failed ? .error : .information)
                 }
             }
             externalRunState = nil
@@ -1885,13 +2039,8 @@ final class AppModel: ObservableObject {
         return "\(candidate) \(index)"
     }
 
-    private func showBanner(_ message: String) {
-        bannerMessage = message
-        Task { [weak self] in
-            try? await Task.sleep(for: .seconds(4))
-            guard !Task.isCancelled, self?.bannerMessage == message else { return }
-            self?.bannerMessage = nil
-        }
+    func showFeedback(_ message: String, tone: ApplicationFeedback.Tone = .information) {
+        feedback.post(message, tone: tone)
     }
 
     private static var currentArchitecture: String {

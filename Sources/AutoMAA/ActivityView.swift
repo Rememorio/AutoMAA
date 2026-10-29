@@ -2,224 +2,342 @@ import AppKit
 import AutoMAAKit
 import SwiftUI
 
+enum ActivityWorkspaceSelection: Hashable {
+    case plan(UUID)
+    case maintenance
+    case session(String)
+}
+
 struct ActivityView: View {
     @EnvironmentObject private var model: AppModel
-    private var search: String { model.activitySearch }
-    private var filter: ActivityFilter { model.activityFilter }
-    @State private var expandedSessionIDs: Set<String> = []
-    @State private var followsLiveActivity = true
     @State private var showingClearConfirmation = false
+    @State private var latestMaintenanceSessionID: String?
+    @State private var recordSection = ActivityRecordSection.results
 
     private var sessions: [ActivitySession] {
         ActivityHistory.sessions(from: model.activityEntries)
     }
 
-    private var currentRunID: UUID? {
-        model.activeRunID
+    private var currentPlan: AutomationPlan? {
+        guard model.isWorkflowRunning else { return nil }
+        return model.configuration.plans.first { $0.id == model.activePlanID }
     }
 
-    private var currentSession: ActivitySession? {
-        guard let currentRunID else { return nil }
-        return sessions.first { $0.runID == currentRunID }
+    private var showsCurrentMaintenance: Bool {
+        model.isWorkflowRunning && currentPlan == nil
     }
 
     private var historicalSessions: [ActivitySession] {
-        guard let currentRunID else { return sessions }
-        return sessions.filter { $0.runID != currentRunID }
+        guard model.isWorkflowRunning, let runID = model.activeRunID else { return sessions }
+        return sessions.filter { $0.runID != runID }
     }
 
     private var displayedSessions: [ActivitySession] {
         historicalSessions.filter { session in
-            filter.includes(session) && ActivitySearch.matches(session, query: search,
-                title: sessionTitle(session), context: context(for:))
-        }
-    }
-
-    private var recoveryPlans: [AutomationPlan] {
-        model.configuration.plans.filter { !model.continuation(for: $0.id).fightRecoveryItems.isEmpty }
-    }
-
-    var body: some View {
-        activityContent
-        .navigationTitle("活动记录")
-        .alert("清除全部活动记录？", isPresented: $showingClearConfirmation) {
-            Button("取消", role: .cancel) {}
-            Button("清除", role: .destructive) { model.clearActivityHistory() }
-        } message: {
-            Text("活动摘要会被清除，诊断日志文件不会受影响。")
-        }
-    }
-
-    private var controls: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 20) {
-                    recordScope
-                    Spacer(minLength: 0)
-                    searchActions
-                }
-                VStack(alignment: .leading, spacing: 12) {
-                    recordScope
-                    searchActions
-                }
-            }
-
-            HStack(spacing: 12) {
-                Text("\(displayedSessions.count) 次运行" + (hasActiveFilters ? " · 按整次运行筛选，保留完整过程" : " · 展开查看账号结果"))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
-                Button("清除筛选", action: clearFilters)
-                    .buttonStyle(.link)
-                    .opacity(hasActiveFilters ? 1 : 0)
-                    .disabled(!hasActiveFilters)
-                    .accessibilityHidden(!hasActiveFilters)
-            }
-            .font(.caption)
-        }
-        .padding(.horizontal, PageLayout.inset)
-        .padding(.vertical, 12)
-        .background(Color(nsColor: .windowBackgroundColor))
-        .overlay(alignment: .bottom) {
-            Divider().padding(.horizontal, PageLayout.inset)
-        }
-    }
-
-    private var recordScope: some View {
-        HStack(spacing: 16) {
-            Text("历史记录")
-                .font(.headline)
-                .accessibilityAddTraits(.isHeader)
-            Picker("历史运行筛选", selection: $model.activityFilter) {
-                ForEach(ActivityFilter.allCases) { item in
-                    Text(item.title).tag(item)
-                }
-            }
-            .pickerStyle(.segmented)
-            .tint(.maaAction)
-            .labelsHidden()
-            .frame(width: 200)
-            .help("提醒包含警告、错误与未完成事项；失败筛选有失败结果的运行。保留整次过程，不影响当前状态。")
-        }
-        .fixedSize()
-    }
-
-    private var searchActions: some View {
-        HStack(spacing: 12) {
-            ActivitySearchField(text: $model.activitySearch)
-                .frame(minWidth: 200, maxWidth: 280)
-            Spacer(minLength: 0)
-            Menu {
-                Button {
-                    try? model.directories.prepare()
-                    NSWorkspace.shared.open(model.directories.logs)
-                } label: {
-                    Label("在 Finder 中显示诊断日志", systemImage: "folder")
-                }
-
-                Divider()
-
-                Button(role: .destructive) {
-                    showingClearConfirmation = true
-                } label: {
-                    Label("清除活动记录", systemImage: "trash")
-                }
-                .disabled(model.activityEntries.isEmpty || model.isWorkflowRunning)
-            } label: {
-                Image(systemName: "ellipsis")
-                    .frame(width: 28, height: 28)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .foregroundStyle(.secondary)
-            .tint(.secondary)
-            .fixedSize()
-            .help("记录操作")
-            .accessibilityLabel("记录操作")
-        }
-        .frame(maxWidth: 340)
-    }
-
-    private var activityContent: some View {
-        ScrollViewReader { proxy in
-            GeometryReader { viewport in
-                let gutter = NSScroller.preferredScrollerStyle == .legacy
-                    ? NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) : 0
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: PageLayout.sectionSpacing, pinnedViews: [.sectionHeaders]) {
-                        VStack(alignment: .leading, spacing: 14) {
-                            if !recoveryPlans.isEmpty { currentRecovery }
-                            if model.isWorkflowRunning { currentActivity }
-                            if let planID = model.currentPlanID, !model.isWorkflowRunning {
-                                currentPlanProgress(planID)
-                            }
-                        }
-                        .padding(.horizontal, PageLayout.inset)
-                        .padding(.top, PageLayout.inset)
-
-                        Section {
-                            Group {
-                                if displayedSessions.isEmpty {
-                                    ContentUnavailableView(
-                                        historicalSessions.isEmpty ? "还没有历史记录" : "没有匹配的历史记录",
-                                        systemImage: historicalSessions.isEmpty ? "clock.arrow.circlepath" : "magnifyingglass",
-                                        description: Text(historicalSessions.isEmpty
-                                            ? "运行方案或更新 MAA 后，这里会按每次运行整理进度与结果。"
-                                            : "试试其他关键词，或清除筛选查看全部记录。")
-                                    )
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 40)
-                                } else {
-                                    ForEach(ActivityDay.groups(displayedSessions)) { day in
-                                        VStack(alignment: .leading, spacing: 10) {
-                                            Text(dayTitle(day.date))
-                                                .font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
-                                                .accessibilityAddTraits(.isHeader)
-                                            Panel {
-                                                VStack(spacing: 0) {
-                                                    ForEach(Array(day.sessions.enumerated()), id: \.element.id) { index, session in
-                                                        if index > 0 { Divider().padding(.vertical, 12) }
-                                                        sessionRow(session)
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        .id(day.id)
-                                    }
-                                }
-                            }
-                            .padding(.horizontal, PageLayout.inset)
-                        } header: {
-                            controls
-                        }
-                    }
-                    .padding(.bottom, PageLayout.inset)
-                    .frame(maxWidth: PageLayout.readingWidth)
-                    .frame(width: max(0, viewport.size.width - gutter))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .scrollIndicators(.visible)
-                .clipped()
-                .task(id: model.activityNavigationRequest?.id) {
-                    guard let request = model.activityNavigationRequest,
-                          let session = sessions.first(where: { $0.runID == request.runID }) else { return }
-                    if session.runID == currentRunID {
-                        proxy.scrollTo("current-activity", anchor: .top)
-                    } else {
-                        proxy.scrollTo(Calendar.current.startOfDay(for: session.startedAt), anchor: .top)
-                        expandedSessionIDs.insert(session.id)
-                        await Task.yield()
-                        guard !Task.isCancelled else { return }
-                        proxy.scrollTo(session.id, anchor: .center)
-                    }
-                    model.finishActivityNavigation(request)
-                }
-            }
+            model.activityFilter.includes(session)
+                && ActivitySearch.matches(session, query: model.activitySearch,
+                    title: title(for: session), context: context(for:))
         }
     }
 
     private var hasActiveFilters: Bool {
-        !search.isEmpty || filter != .all
+        !model.activitySearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.activityFilter != .all
+    }
+
+    var body: some View {
+        WorkspaceColumns {
+            recordList
+        } detail: {
+            selectedDetail
+        }
+        .navigationTitle("运行记录")
+        .toolbar {
+            if case .session = model.activitySelection {
+                ToolbarItem(placement: .primaryAction) {
+                    ActivityRecordSectionPicker(selection: $recordSection)
+                }
+            }
+            ToolbarItem(placement: .primaryAction) { recordActions }
+            if case let .plan(planID) = model.activitySelection, !model.isWorkflowRunning {
+                ToolbarItem(placement: .primaryAction) {
+                    PlanRunControl(planID: planID)
+                }
+            }
+        }
+        .alert("清除全部运行记录？", isPresented: $showingClearConfirmation) {
+            Button("取消", role: .cancel) {}
+            Button("清除", role: .destructive) {
+                guard !model.isWorkflowRunning else { return }
+                model.clearActivityHistory()
+            }
+            .disabled(model.isWorkflowRunning)
+        } message: {
+            Text("运行摘要会被清除，诊断日志文件不会受影响。")
+        }
+        .onAppear { restoreSelection() }
+        .onChange(of: sessions.map(\.id)) { _, _ in
+            rememberCurrentMaintenanceSession()
+            restoreSelection()
+        }
+        .onChange(of: model.configuration.plans.map(\.id)) { _, _ in restoreSelection() }
+        .onChange(of: model.activitySearch) { _, _ in selectFilteredResultIfNeeded() }
+        .onChange(of: model.activityFilter) { _, _ in selectFilteredResultIfNeeded() }
+        .onChange(of: model.activeRunID, initial: true) { _, _ in
+            rememberCurrentMaintenanceSession()
+        }
+        .onChange(of: model.isWorkflowRunning) { _, running in
+            if running {
+                latestMaintenanceSessionID = nil
+                rememberCurrentMaintenanceSession()
+            }
+            restoreSelection()
+        }
+    }
+
+    private var recordList: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                ActivitySearchField(text: $model.activitySearch)
+                Menu {
+                    Picker("历史运行筛选", selection: $model.activityFilter) {
+                        ForEach(ActivityFilter.allCases) { item in Text(item.title).tag(item) }
+                    }
+                    .pickerStyle(.inline).labelsHidden()
+                } label: {
+                    Image(systemName: model.activityFilter == .all
+                          ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+                        .font(.system(size: 15)).frame(width: 28, height: 28)
+                        .accessibilityLabel("筛选历史运行")
+                }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .tint(model.activityFilter == .all ? .secondary : .maaAccent)
+                .accessibilityLabel("筛选历史运行")
+                .accessibilityValue(model.activityFilter.title)
+                .help("历史运行：\(model.activityFilter.title)；当前运行和今日事项始终保留")
+            }
+            .padding(12)
+            Divider()
+
+            ScrollViewReader { proxy in
+                List(selection: $model.activitySelection) {
+                    if let currentPlan {
+                        Section("当前") {
+                            planRow(currentPlan, isCurrent: true)
+                                .tag(ActivityWorkspaceSelection.plan(currentPlan.id))
+                                .id(ActivityWorkspaceSelection.plan(currentPlan.id))
+                        }
+                    } else if showsCurrentMaintenance {
+                        Section("当前") {
+                            currentMaintenanceRow.tag(ActivityWorkspaceSelection.maintenance)
+                                .id(ActivityWorkspaceSelection.maintenance)
+                        }
+                    }
+
+                    let todayPlans = model.configuration.plans.filter { $0.id != currentPlan?.id }
+                    if !todayPlans.isEmpty {
+                        Section("今日") {
+                            ForEach(todayPlans) { plan in
+                                planRow(plan, isCurrent: false).tag(ActivityWorkspaceSelection.plan(plan.id))
+                                    .id(ActivityWorkspaceSelection.plan(plan.id))
+                            }
+                        }
+                    }
+
+                    ForEach(ActivityDay.groups(displayedSessions)) { day in
+                        Section(ActivityRecordPresentation.dayTitle(day.date)) {
+                            ForEach(day.sessions) { session in
+                                historyRow(session).tag(ActivityWorkspaceSelection.session(session.id))
+                                    .id(ActivityWorkspaceSelection.session(session.id))
+                            }
+                        }
+                    }
+
+                    if displayedSessions.isEmpty, !model.configuration.plans.isEmpty || showsCurrentMaintenance {
+                        Section("历史") {
+                            Text(hasActiveFilters ? "没有匹配的记录" : "还没有运行记录")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .padding(.vertical, 8)
+                        }
+                    }
+                }
+                .listStyle(.inset)
+                .scrollContentBackground(.hidden)
+                .overlay {
+                    if model.configuration.plans.isEmpty, !showsCurrentMaintenance, displayedSessions.isEmpty {
+                        ActivityEmptyState(
+                            title: hasActiveFilters ? "没有匹配的记录" : "还没有运行记录",
+                            symbol: hasActiveFilters ? "magnifyingglass" : "clock.arrow.circlepath",
+                            detail: hasActiveFilters ? "调整关键词或清除筛选。" : "运行方案或更新 MAA 后可在这里查看。"
+                        )
+                        .allowsHitTesting(false)
+                    }
+                }
+                .task(id: model.activityNavigationRequest?.id) {
+                    await navigateToRequestedRun(using: proxy)
+                }
+                .task(id: model.activitySelection) {
+                    await Task.yield()
+                    guard !Task.isCancelled, model.activityNavigationRequest == nil,
+                          let selected = model.activitySelection else { return }
+                    proxy.scrollTo(selected)
+                }
+            }
+
+            HStack {
+                Text("\(displayedSessions.count) 次历史运行" + (model.activityFilter == .all ? "" : " · \(model.activityFilter.title)"))
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                if hasActiveFilters {
+                    Button("清除筛选", action: clearFilters).buttonStyle(.link).font(.caption)
+                }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 9)
+        }
+    }
+
+    private var recordActions: some View {
+        Menu {
+            Button {
+                try? model.directories.prepare()
+                NSWorkspace.shared.open(model.directories.logs)
+            } label: {
+                Label("在 Finder 中显示诊断日志", systemImage: "folder")
+            }
+            Divider()
+            Button("清除运行记录…", role: .destructive) { showingClearConfirmation = true }
+                .disabled(model.activityEntries.isEmpty || model.isWorkflowRunning)
+        } label: {
+            Label("记录操作", systemImage: "ellipsis")
+        }
+        .labelStyle(.iconOnly)
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).tint(.secondary).fixedSize()
+        .help("记录操作").accessibilityLabel("记录操作")
+    }
+
+    private func planRow(_ plan: AutomationPlan, isCurrent: Bool) -> some View {
+        let progress = model.continuation(for: plan.id)
+        let needsRecovery = !progress.fightRecoveryItems.isEmpty
+        return HStack(alignment: .top, spacing: 8) {
+            Image(systemName: isCurrent ? model.activePhase.statusSymbol : needsRecovery ? "exclamationmark.circle" : "calendar")
+                .foregroundStyle(isCurrent ? model.activePhase.statusTint : needsRecovery ? .orange : .secondary)
+                .frame(width: 18).padding(.top, 2).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(plan.displayName).font(.callout.weight(.medium)).lineLimit(2)
+                Text(isCurrent ? model.activePhase.displayName : ActivityRecordPresentation.todaySummary(progress))
+                    .font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 5)
+        .help(plan.displayName)
+    }
+
+    private var currentMaintenanceRow: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "wrench.and.screwdriver")
+                .foregroundStyle(model.activePhase.statusTint).frame(width: 18).padding(.top, 2)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(model.activePlanID == nil ? "MAA 维护" : "当前运行").font(.callout.weight(.medium))
+                Text(model.activePhase.displayName).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 5)
+    }
+
+    private func historyRow(_ session: ActivitySession) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(title(for: session)).font(.callout.weight(.medium)).lineLimit(2)
+                Spacer(minLength: 0)
+                Text(session.startedAt, format: .dateTime.hour().minute())
+                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            }
+            Label(session.historyStatusTitle, systemImage: ActivityRecordPresentation.symbol(session))
+                .font(.caption).foregroundStyle(ActivityRecordPresentation.tint(session))
+            Text(ActivityRecordPresentation.summary(session))
+                .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+        }
+        .padding(.vertical, 5)
+        .help(title(for: session))
+    }
+
+    @ViewBuilder
+    private var selectedDetail: some View {
+        switch model.activitySelection {
+        case let .plan(planID):
+            PlanActivityView(planID: planID, showsPlanTitle: true, showsHistoryLink: false)
+                .id(planID)
+        case .maintenance:
+            ActivityCurrentRunView()
+        case let .session(id):
+            if let session = sessions.first(where: { $0.id == id }) {
+                ActivityRecordDetail(session: session, title: title(for: session), section: recordSection)
+                    .id(session.id)
+            } else {
+                ActivityEmptyState(title: "该记录已被清除", symbol: "clock.arrow.circlepath", detail: "从左侧选择其他记录。")
+            }
+        case nil:
+            ActivityEmptyState(title: hasActiveFilters ? "没有匹配的记录" : "选择运行记录",
+                               symbol: "list.bullet.rectangle", detail: "从左侧查看今日状态或历史结果。")
+        }
+    }
+
+    private func restoreSelection() {
+        guard model.activityNavigationRequest == nil else { return }
+        if let selection = model.activitySelection {
+            switch selection {
+            case let .plan(id) where model.configuration.plans.contains(where: { $0.id == id }): return
+            case let .session(id) where sessions.contains(where: { $0.id == id }): return
+            case .maintenance where showsCurrentMaintenance: return
+            case .maintenance:
+                if let id = latestMaintenanceSessionID, sessions.contains(where: { $0.id == id }) {
+                    model.activitySelection = .session(id)
+                    return
+                }
+            default: break
+            }
+        }
+        if let currentPlan { model.activitySelection = .plan(currentPlan.id) }
+        else if showsCurrentMaintenance { model.activitySelection = .maintenance }
+        else if hasActiveFilters { model.activitySelection = displayedSessions.first.map { .session($0.id) } }
+        else if let id = model.currentPlanID, model.configuration.plans.contains(where: { $0.id == id }) {
+            model.activitySelection = .plan(id)
+        } else if let session = displayedSessions.first { model.activitySelection = .session(session.id) }
+        else { model.activitySelection = model.configuration.plans.first.map { .plan($0.id) } }
+    }
+
+    private func rememberCurrentMaintenanceSession() {
+        guard showsCurrentMaintenance else { return }
+        latestMaintenanceSessionID = model.activeRunID.flatMap { runID in
+            sessions.first { $0.runID == runID }?.id
+        }
+    }
+
+    private func selectFilteredResultIfNeeded() {
+        if case let .session(id) = model.activitySelection,
+           !displayedSessions.contains(where: { $0.id == id }) {
+            model.activitySelection = displayedSessions.first.map { .session($0.id) }
+        } else if model.activitySelection == nil {
+            model.activitySelection = displayedSessions.first.map { .session($0.id) }
+        }
+    }
+
+    private func navigateToRequestedRun(using proxy: ScrollViewProxy) async {
+        guard let request = model.activityNavigationRequest,
+              let session = sessions.first(where: { $0.runID == request.runID }) else { return }
+        let target: ActivityWorkspaceSelection
+        if model.isWorkflowRunning, model.activeRunID == request.runID {
+            target = currentPlan.map { .plan($0.id) } ?? .maintenance
+        } else {
+            target = .session(session.id)
+        }
+        model.activitySelection = target
+        await Task.yield()
+        guard !Task.isCancelled, model.activityNavigationRequest == request else { return }
+        proxy.scrollTo(target, anchor: .center)
+        model.finishActivityNavigation(request)
     }
 
     private func clearFilters() {
@@ -227,373 +345,11 @@ struct ActivityView: View {
         model.activityFilter = .all
     }
 
-    private var currentRecovery: some View {
-        Panel {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Label("需要处理", systemImage: "exclamationmark.circle")
-                        .font(.headline).foregroundStyle(.orange)
-                    Spacer()
-                    Text("\(recoveryPlans.count) 个方案").font(.caption).foregroundStyle(.secondary)
-                }
-                Text("请先核实游戏结果，再决定是否重试。历史提醒不会加入这里。")
-                    .font(.caption).foregroundStyle(.secondary)
-                ForEach(recoveryPlans) { plan in
-                    let progress = model.continuation(for: plan.id)
-                    VStack(alignment: .leading, spacing: 14) {
-                        HStack {
-                            Text(plan.displayName).font(.subheadline.weight(.semibold))
-                            Spacer()
-                            Text("\(progress.fightRecoveryItems.count) 项待核实").font(.caption).foregroundStyle(.secondary)
-                        }
-                        ForEach(progress.fightRecoveryItems) { item in
-                            Divider()
-                            FightRecoveryRow(item: item, context: model.pendingWorkContext(item.step),
-                                pendingTitle: progress.pendingItems.first { $0.id == item.id }?.title)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private func currentPlanProgress(_ planID: UUID) -> some View {
-        let progress = model.continuation(for: planID)
-        return Panel {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(progress.hasStarted && progress.pending > 0 ? "当前待办" : "今日状态").font(.headline)
-                    Spacer()
-                    Picker("方案", selection: Binding(get: { planID }, set: { model.selectCurrentPlan($0) })) {
-                        ForEach(model.configuration.plans) { plan in Text(plan.displayName).tag(plan.id) }
-                    }
-                    .fixedSize()
-                    .disabled(model.isWorkflowRunning)
-                }
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 14) {
-                        progressDescription(progress, planID: planID)
-                        Spacer()
-                        if progress.hasStarted, progress.pending > 0 { PlanRunControl(planID: planID) }
-                    }
-                    VStack(alignment: .leading, spacing: 10) {
-                        progressDescription(progress, planID: planID)
-                        if progress.hasStarted, progress.pending > 0 { PlanRunControl(planID: planID) }
-                    }
-                }
-                let recoveryIDs = Set(progress.fightRecoveryItems.map(\.id))
-                let pendingItems = progress.pendingItems.filter { !recoveryIDs.contains($0.id) }
-                if progress.hasStarted, !pendingItems.isEmpty {
-                    Divider()
-                    PendingWorkList(items: pendingItems)
-                }
-            }
-        }
-        .id(planID)
-    }
-
-    private func progressDescription(_ progress: PlanContinuation, planID: UUID) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            if progress.hasStarted {
-                Text(progress.pending == 0 && progress.unconfirmed == 0
-                     ? progress.completionTitle
-                     : "\(progress.resolved) 项已处理"
-                        + (progress.pending > 0 ? " · \(progress.pending) 项可继续" : "")
-                        + (progress.unconfirmed > 0 ? " · \(progress.unconfirmed) 项待确认" : ""))
-                    .font(.callout).monospacedDigit()
-                if progress.manuallyHandled > 0 {
-                    Text("\(progress.manuallyHandled) 项作战已人工处理，今天不再重试")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                if progress.unconfirmed > 0 {
-                    Text("继续其他任务会保留待确认作战。请先核实结果，再决定是否重新尝试。")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            } else {
-                Text("今日尚未运行").font(.callout)
-                if let plan = model.configuration.plans.first(where: { $0.id == planID }),
-                   model.isPlanScheduleCurrent(plan), let next = PlanScheduleFormatter.nextRunLabel(plan.schedule) {
-                    Text("下次 \(next)").font(.caption).foregroundStyle(.secondary)
-                } else {
-                    Text("开始运行后，这里会显示进度与剩余任务。")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }
-        }
-        .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private var currentActivity: some View {
-        let entries = currentSession?.entries ?? []
-
-        return Panel {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 14) {
-                    Image(systemName: model.activePhase.statusSymbol)
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(model.activePhase.statusTint)
-                        .frame(width: 40, height: 40)
-                        .background(model.activePhase.statusTint.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
-
-                    VStack(alignment: .leading, spacing: 7) {
-                        HStack {
-                            Text(model.activePlanID.flatMap { id in model.configuration.plans.first { $0.id == id }?.displayName } ?? "当前运行")
-                                .font(.headline)
-                            Text(model.activePhase.displayName)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(model.activePhase.statusTint)
-                            if let information = currentSession?.updateInformation {
-                                Button("更新内容") { model.updateDetailsRequest = .maa(information) }
-                                    .buttonStyle(.link).font(.caption)
-                            }
-                        }
-                        Text(model.activeStatusMessage)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                        if model.activePlanID != nil {
-                            WorkflowProgressView(progress: model.activeProgress)
-                        } else if let activity = model.maaUpdateActivity {
-                            Text("已用时 \(activity.startedAt, style: .timer) · 上限 \(UpdatePolicy.durationDescription(activity.timeout))")
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    Spacer(minLength: 12)
-                    if model.canCancelRun || model.isCancellingRun {
-                        StopOperationButton()
-                    } else {
-                        Label("定时任务在后台运行", systemImage: "clock.badge.checkmark")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Divider()
-                liveActivityFeed(entries)
-            }
-        }
-        .id("current-activity")
-    }
-
-    private func liveActivityFeed(_ entries: [LogEntry]) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Label("实时活动", systemImage: "waveform.path.ecg")
-                    .font(.subheadline.weight(.semibold))
-                Spacer()
-                Toggle(isOn: $followsLiveActivity) {
-                    Label("跟随最新", systemImage: "arrow.down.to.line.compact")
-                }
-                .toggleStyle(.button)
-                .tint(.maaAction)
-                .controlSize(.small)
-                .help("开启后，新活动只会在当前运行卡内滚动到最新位置")
-            }
-
-            if entries.isEmpty {
-                Text("正在等待第一条活动…")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 72)
-            } else {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(spacing: 0) {
-                            ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
-                                ActivityEventRow(
-                                    entry: entry,
-                                    context: context(for: entry),
-                                    drawsConnector: index < entries.count - 1
-                                )
-                            }
-                        }
-                        .padding(.trailing, 8)
-                    }
-                    .frame(height: 210)
-                    .task(id: entries.last?.id) {
-                        guard followsLiveActivity, let id = entries.last?.id else { return }
-                        await Task.yield()
-                        proxy.scrollTo(id, anchor: .bottom)
-                    }
-                    .onChange(of: followsLiveActivity) { _, follows in
-                        guard follows, let id = entries.last?.id else { return }
-                        proxy.scrollTo(id, anchor: .bottom)
-                    }
-                }
-            }
-        }
-    }
-
-    private func sessionRow(_ session: ActivitySession) -> some View {
-        DisclosureGroup(isExpanded: expansionBinding(for: session.id)) {
-            VStack(alignment: .leading, spacing: 12) {
-                Divider().padding(.vertical, 8)
-                if let information = session.updateInformation {
-                    Button("更新内容") { model.updateDetailsRequest = .maa(information) }
-                        .buttonStyle(.link).font(.callout)
-                }
-                ActivitySessionDetail(session: session, context: context(for:))
-            }
-            .padding(.leading, 6)
-            .padding(.bottom, 6)
-        } label: {
-            sessionHeader(session).contentShape(Rectangle()).id(session.id)
-        }
-    }
-
-    private func sessionHeader(_ session: ActivitySession) -> some View {
-        let phase = session.finalPhase
-        let tint = session.hasUnfinishedActivity ? Color.secondary : sessionTint(phase: phase, level: session.finalLevel)
-        return HStack(alignment: .top, spacing: 12) {
-            Text(session.startedAt, format: .dateTime.hour().minute())
-                .font(.callout.monospacedDigit()).foregroundStyle(.secondary)
-                .frame(width: 46, alignment: .leading)
-                .padding(.top, 1)
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Text(sessionTitle(session)).font(.subheadline.weight(.semibold))
-                    Spacer(minLength: 4)
-                    Label(session.historyStatusTitle,
-                          systemImage: session.hasUnfinishedActivity ? "questionmark.circle" : sessionSymbol(phase: phase, level: session.finalLevel))
-                        .font(.caption).foregroundStyle(tint)
-                }
-                if session.finalPhase == .failed, let failure = session.entries.last(where: { $0.level == .error }) {
-                    Text(failure.message).font(.callout).foregroundStyle(.secondary).lineLimit(2)
-                }
-                Text(sessionSummary(session))
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(.trailing, 8)
-    }
-
-    private func sessionSummary(_ session: ActivitySession) -> String {
-        var parts: [String] = []
-        if let summary = session.runSummary {
-            parts.append("\(summary.completedSteps + summary.unnecessarySteps + summary.manuallyHandledSteps)/\(summary.totalSteps) 项已处理")
-            if summary.manuallyHandledSteps > 0 { parts.append("\(summary.manuallyHandledSteps) 项人工处理") }
-            if summary.unconfirmedSteps > 0 { parts.append("\(summary.unconfirmedSteps) 项未确认") }
-            if summary.failedSteps > 0 { parts.append("\(summary.failedSteps) 项失败") }
-            if summary.unexecutedSteps > 0 { parts.append("\(summary.unexecutedSteps) 项未执行") }
-            if summary.pendingWeeklyAnnihilation > 0 { parts.append("\(summary.pendingWeeklyAnnihilation) 个账号剿灭待补打") }
-        } else {
-            parts.append("\(session.entries.count) 条记录")
-        }
-        if session.warningCount > 0 { parts.append("\(session.warningCount) 条提醒") }
-        if session.errorCount > 0, (session.runSummary?.failedSteps ?? 0) == 0 { parts.append("\(session.errorCount) 条错误") }
-        if session.endedAt > session.startedAt { parts.append(duration(from: session.startedAt, to: session.endedAt)) }
-        return parts.joined(separator: " · ")
-    }
-
-    private func dayTitle(_ date: Date) -> String {
-        if Calendar.current.isDateInToday(date) { return "今天" }
-        if Calendar.current.isDateInYesterday(date) { return "昨天" }
-        return date.formatted(.dateTime.year().month().day().weekday())
-    }
-
-    private func expansionBinding(for id: String) -> Binding<Bool> {
-        Binding {
-            expandedSessionIDs.contains(id)
-        } set: { expanded in
-            if expanded {
-                expandedSessionIDs.insert(id)
-            } else {
-                expandedSessionIDs.remove(id)
-            }
-        }
-    }
-
-    private func sessionTitle(_ session: ActivitySession) -> String {
-        if let planID = session.planID,
-           let plan = model.configuration.plans.first(where: { $0.id == planID }) {
-            return plan.displayName
-        }
-        if session.planID != nil { return "已移除的方案" }
-        if session.runID == nil { return "较早的运行记录" }
-        return "MAA 维护"
+    private func title(for session: ActivitySession) -> String {
+        ActivityRecordPresentation.title(session, plans: model.configuration.plans)
     }
 
     private func context(for entry: LogEntry) -> String? {
-        var components: [String] = []
-        if let clientID = entry.clientID,
-           let client = model.configuration.clients.first(where: { $0.id == clientID }) {
-            components.append(client.displayName)
-            if let accountID = entry.accountID,
-               let account = client.accounts.first(where: { $0.id == accountID }) {
-                components.append(account.displayName)
-            }
-        }
-        return components.isEmpty ? nil : components.joined(separator: " · ")
-    }
-
-    private func sessionSymbol(phase: RunnerPhase?, level: LogLevel) -> String {
-        if phase == .completed, level == .warning { return "exclamationmark.circle.fill" }
-        if let phase { return phase.statusSymbol }
-        return level.symbol
-    }
-
-    private func sessionTint(phase: RunnerPhase?, level: LogLevel) -> Color {
-        if phase == .completed, level == .warning { return .orange }
-        if let phase { return phase.statusTint }
-        return level.color
-    }
-
-    private func duration(from start: Date, to end: Date) -> String {
-        let seconds = max(1, Int(end.timeIntervalSince(start)))
-        if seconds < 60 { return "\(seconds) 秒" }
-        let minutes = seconds / 60
-        if minutes < 60 { return "\(minutes) 分钟" }
-        return "\(minutes / 60) 小时 \(minutes % 60) 分钟"
-    }
-}
-
-struct ActivityEventRow: View {
-    let entry: LogEntry
-    let context: String?
-    let drawsConnector: Bool
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(spacing: 0) {
-                Image(systemName: entry.level.symbol)
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(entry.level.color)
-                    .frame(width: 24, height: 24)
-                    .background(entry.level.color.opacity(0.11), in: Circle())
-                if drawsConnector {
-                    Rectangle()
-                        .fill(Color.panelStroke)
-                        .frame(width: 1)
-                        .frame(minHeight: 22)
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 5) {
-                Text(entry.message)
-                    .font(.callout)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                HStack(spacing: 7) {
-                    Text(entry.timestamp, format: .dateTime.hour().minute().second())
-                        .monospacedDigit()
-                    if let context {
-                        Text("·")
-                        Text(context)
-                    }
-                }
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-
-                ActivityEntryDetails(entry: entry)
-            }
-            .padding(.bottom, drawsConnector ? 8 : 0)
-
-            Spacer(minLength: 0)
-        }
-        .id(entry.id)
+        ActivityRecordPresentation.context(entry, clients: model.configuration.clients)
     }
 }

@@ -18,10 +18,11 @@ struct BrandLogo: View {
 }
 
 enum PageLayout {
-    static let inset: CGFloat = 28
-    static let sectionSpacing: CGFloat = 20
+    static let inset: CGFloat = 24
+    static let sectionSpacing: CGFloat = 16
     static let contentWidth: CGFloat = 1_060
     static let readingWidth: CGFloat = 900
+    static let listWidth: CGFloat = 780
 }
 
 struct AppPage<Content: View>: View {
@@ -47,19 +48,33 @@ struct SectionHeading: View {
     var detail: String? = nil
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 4) {
             Group {
                 if let symbol { Label(title, systemImage: symbol) }
                 else { Text(title) }
             }
-            .font(.headline)
+            .font(.subheadline.weight(.semibold))
             .accessibilityAddTraits(.isHeader)
             if let detail {
                 Text(detail)
-                    .font(.callout)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+}
+
+struct EditorFieldRow<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(title)
+                .foregroundStyle(.secondary)
+                .frame(width: 80, alignment: .trailing)
+            content.frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
@@ -69,10 +84,9 @@ struct EntityIcon: View {
 
     var body: some View {
         Image(systemName: symbol)
-            .font(.system(size: 24, weight: .semibold))
-            .foregroundStyle(Color.maaAccent)
-            .frame(width: 54, height: 54)
-            .background(Color.maaAccent.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .font(.system(size: 19))
+            .foregroundStyle(.secondary)
+            .frame(width: 32, height: 32)
             .accessibilityHidden(true)
     }
 }
@@ -83,20 +97,17 @@ struct SettingsToggleRow: View {
     @Binding var isOn: Bool
 
     var body: some View {
-        HStack(alignment: .top, spacing: 20) {
+        Toggle(isOn: $isOn) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.subheadline.weight(.medium))
+                Text(title)
                 Text(detail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer(minLength: 0)
-            Toggle(title, isOn: $isOn)
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .accessibilityHint(detail)
         }
+        .toggleStyle(.checkbox)
+        .accessibilityHint(detail)
     }
 }
 
@@ -223,48 +234,33 @@ struct ActivitySearchField: View {
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                .accessibilityHidden(true)
             TextField("搜索记录…", text: $text)
                 .textFieldStyle(.plain)
                 .focused($isFocused)
-                .accessibilityLabel("搜索活动记录")
+                .accessibilityLabel("搜索运行记录")
                 .help("搜索历史运行中的方案、客户端、账号、任务、消息或详情")
-            if !text.isEmpty {
-                Button {
-                    text = ""
-                    isFocused = true
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("清除搜索")
-                .accessibilityLabel("清除搜索")
+            Button {
+                text = ""
+                isFocused = true
+            } label: {
+                Image(systemName: "xmark.circle.fill").frame(width: 16, height: 16)
             }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("清除搜索")
+            .accessibilityLabel("清除搜索")
+            .opacity(text.isEmpty ? 0 : 1)
+            .disabled(text.isEmpty)
+            .accessibilityHidden(text.isEmpty)
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
+        .padding(.vertical, 4)
+        .frame(minHeight: 28)
+        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 6))
         .overlay {
-            RoundedRectangle(cornerRadius: 7)
+            RoundedRectangle(cornerRadius: 6)
                 .stroke(isFocused ? Color.maaAccent : Color.panelStroke, lineWidth: isFocused ? 2 : 1)
         }
-    }
-}
-
-struct StopOperationButton: View {
-    @EnvironmentObject private var model: AppModel
-    var fillsWidth = false
-
-    var body: some View {
-        Button { model.cancelRun() } label: {
-            Label(model.isCancellingRun ? "正在停止…" : model.activePlanID == nil ? "取消更新" : "安全停止",
-                  systemImage: "stop.fill")
-                .frame(minWidth: 76)
-                .frame(maxWidth: fillsWidth ? .infinity : nil)
-        }
-        .buttonStyle(.bordered)
-        .tint(model.activePlanID == nil ? .maaAccent : .red)
-        .disabled(model.isCancellingRun)
-        .help(model.activePlanID == nil ? "取消更新并清理临时文件" : "停止任务，关闭客户端并释放连接")
     }
 }

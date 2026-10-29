@@ -26,6 +26,19 @@ private actor ControlledEnvironmentCheck {
 
 @Suite("MAA environment feedback")
 struct MAAEnvironmentTests {
+    @Test("a missing CLI is reported in the environment page without a global notice")
+    @MainActor
+    func missingCLIIsInline() throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = makeModel(root: root, checker: ControlledEnvironmentCheck())
+        model.configuration.cliPath = root.appending(path: "missing-maa").path
+        model.refreshMAAStatus()
+        #expect(model.maaVersionSummary.contains("未找到"))
+        #expect(model.feedback.notice == nil)
+        #expect(!model.isCheckingMAAEnvironment)
+    }
+
     @Test("changing the CLI path invalidates its detected version")
     @MainActor
     func pathChangeInvalidatesVersion() async throws {
@@ -54,7 +67,7 @@ struct MAAEnvironmentTests {
         let checker = ControlledEnvironmentCheck()
         let model = makeModel(root: root, checker: checker)
         model.configuration.cliPath = "/usr/bin/true"
-        model.refreshMAAStatus(showResult: true)
+        model.refreshMAAStatus()
         try await waitUntil { await checker.isPending(0) }
 
         model.configuration.cliPath = "/usr/bin/false"
@@ -71,7 +84,7 @@ struct MAAEnvironmentTests {
         try await waitUntil { await checker.returned.contains(0) }
         await Task.yield()
         #expect(model.maaVersionSummary == "当前环境")
-        #expect(model.bannerMessage == nil)
+        #expect(model.feedback.notice?.message == nil)
         #expect(!model.isCheckingMAAEnvironment)
     }
 

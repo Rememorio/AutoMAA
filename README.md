@@ -16,11 +16,6 @@
 
 AutoMAA 是原生 macOS 的 [MAA](https://github.com/MaaAssistantArknights/MaaAssistantArknights) 工作流编排器。把客户端、账号和任务配置好后，它会依次启动游戏、执行日常、关闭客户端，再处理下一项；画面识别和游戏操作由 `maa-cli` 与 MaaCore 完成。
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/screenshots/overview-dark.webp">
-  <img src="./docs/assets/screenshots/overview-light.webp" width="1180" alt="AutoMAA 今日总览：两套日常方案、客户端与账号，以及今日状态和运行入口">
-</picture>
-
 ## 能做什么
 
 - **一份账号配置，多套日常方案。** 为同一批账号安排轻量收菜或完整换班，分别选择任务、参数和执行对象。方案可从指定游戏日起优先剿灭，跨方案共享本周完成状态。

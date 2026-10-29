@@ -34,6 +34,8 @@ private actor StubSoftwareUpdateService: SoftwareUpdateServing {
     var slowRestoration = false
     var restorationFails = false
     var downloadFails = false
+    var hasUpdate = true
+    var checkFails = false
     private var progressHandlers: [@Sendable (UpdateProgress) async -> Void] = []
 
     init(release: SoftwareUpdateRelease, prepared: PreparedSoftwareUpdate, restored: PreparedSoftwareUpdate? = nil) {
@@ -44,11 +46,12 @@ private actor StubSoftwareUpdateService: SoftwareUpdateServing {
 
     func check() async throws -> SoftwareUpdateRelease? {
         checkCount += 1
+        if checkFails { throw URLError(.notConnectedToInternet) }
         if slowChecks {
             do { try await Task.sleep(for: .seconds(30)) }
             catch { throw URLError(.cancelled) }
         }
-        return release
+        return hasUpdate ? release : nil
     }
 
     func prepare(
@@ -94,6 +97,11 @@ private actor StubSoftwareUpdateService: SoftwareUpdateServing {
 
     func failDownload() { downloadFails = true }
 
+    func checkResult(hasUpdate: Bool, fails: Bool = false) {
+        self.hasUpdate = hasUpdate
+        checkFails = fails
+    }
+
     func reportProgress(_ update: UpdateProgress, attempt: Int) async {
         await progressHandlers[attempt](update)
     }
@@ -101,6 +109,24 @@ private actor StubSoftwareUpdateService: SoftwareUpdateServing {
 
 @Suite("Application updates")
 struct ApplicationUpdateTests {
+    @Test("update checks keep their result on the update page without global feedback", arguments: [false, true])
+    @MainActor
+    func checkResultIsInline(fails: Bool) async throws {
+        let fixture = try makeFixture(automaticallyDownloads: false)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        await fixture.service.checkResult(hasUpdate: false, fails: fails)
+        fixture.model.checkForApplicationUpdate()
+        try await waitUntil { !fixture.model.applicationUpdateState.isBusy }
+        if fails {
+            if case .failed = fixture.model.applicationUpdateState {} else { Issue.record("检查失败应保留错误") }
+            #expect(fixture.model.applicationUpdateCheckedAt == nil)
+        } else {
+            if case .upToDate = fixture.model.applicationUpdateState {} else { Issue.record("应显示已是最新版本") }
+            #expect(fixture.model.applicationUpdateCheckedAt != nil)
+        }
+        #expect(fixture.model.feedback.notice == nil)
+    }
+
     @Test("download progress clears on cancellation and ignores callbacks from an earlier attempt")
     @MainActor
     func progressLifecycle() async throws {
@@ -269,6 +295,8 @@ struct ApplicationUpdateTests {
         #expect(!fixture.model.applicationUpdateState.canCancel)
         try await waitUntil { !fixture.model.applicationUpdateState.isBusy }
         if case .idle = fixture.model.applicationUpdateState {} else { Issue.record("检查取消后未回到空闲状态") }
+        #expect(fixture.model.applicationUpdateNotice?.contains("已取消检查") == true)
+        #expect(fixture.model.feedback.notice == nil)
         #expect(await fixture.service.counts().prepares == 0)
     }
 
@@ -287,6 +315,8 @@ struct ApplicationUpdateTests {
         try await waitUntil { !fixture.model.applicationUpdateState.isBusy }
         #expect(fixture.model.configuration.applicationUpdates.automaticallyDownloadsUpdates)
         if case .available = fixture.model.applicationUpdateState {} else { Issue.record("取消后没有保留可下载版本") }
+        #expect(fixture.model.applicationUpdateNotice?.contains("下载已取消") == true)
+        #expect(fixture.model.feedback.notice == nil)
         // Finishing another job and reloading history must not undo an explicit cancellation.
         var lock: ProcessLock? = try ProcessLock(url: fixture.model.directories.lock)
         #expect(lock != nil)
@@ -312,7 +342,7 @@ struct ApplicationUpdateTests {
         let fixture = try makeFixture(automaticallyDownloads: false)
         defer { try? FileManager.default.removeItem(at: fixture.root) }
 
-        fixture.model.checkForApplicationUpdate(showResult: false)
+        fixture.model.checkForApplicationUpdate()
         try await waitUntil {
             if case .available = fixture.model.applicationUpdateState { return true }
             return false
@@ -329,7 +359,7 @@ struct ApplicationUpdateTests {
         let fixture = try makeFixture(automaticallyDownloads: true)
         defer { try? FileManager.default.removeItem(at: fixture.root) }
 
-        fixture.model.checkForApplicationUpdate(showResult: false)
+        fixture.model.checkForApplicationUpdate()
         try await waitUntil {
             if case .ready = fixture.model.applicationUpdateState { return true }
             return false
@@ -338,6 +368,8 @@ struct ApplicationUpdateTests {
         let counts = await fixture.service.counts()
         #expect(counts.checks == 1)
         #expect(counts.prepares == 1)
+        #expect(fixture.model.feedback.notice == nil)
+        #expect(fixture.model.applicationUpdateNotice == nil)
     }
 
     @Test("automatic downloads wait until the current workflow is idle")
@@ -347,7 +379,7 @@ struct ApplicationUpdateTests {
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         fixture.model.isRunning = true
 
-        fixture.model.checkForApplicationUpdate(showResult: false)
+        fixture.model.checkForApplicationUpdate()
         try await waitUntil {
             if case .available = fixture.model.applicationUpdateState { return true }
             return false
@@ -374,7 +406,7 @@ struct ApplicationUpdateTests {
         #expect(lock != nil)
         fixture.model.reloadActivityHistory()
 
-        fixture.model.checkForApplicationUpdate(showResult: false)
+        fixture.model.checkForApplicationUpdate()
         try await waitUntil {
             if case .available = fixture.model.applicationUpdateState { return true }
             return false

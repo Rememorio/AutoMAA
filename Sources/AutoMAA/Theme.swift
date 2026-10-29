@@ -2,6 +2,13 @@ import AppKit
 import AutoMAAKit
 import SwiftUI
 
+enum FormWidth {
+    static let stage: CGFloat = 160
+    static let shortText: CGFloat = 220
+    static let list: CGFloat = 320
+    static let quantityRow: CGFloat = 300
+}
+
 extension Color {
     static let maaAction = Color(red: 0, green: 0.49, blue: 0.47)
     static let maaAccent = Color(nsColor: NSColor(name: "AutoMAA Accent") { appearance in
@@ -23,10 +30,10 @@ struct Panel<Content: View>: View {
     var body: some View {
         content
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(18)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .padding(12)
+            .background(Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(Color.panelStroke, lineWidth: 1)
             }
     }
@@ -157,6 +164,24 @@ struct TaskIcon: View {
 }
 
 extension LogLevel {
+    var displayName: String {
+        switch self {
+        case .info: "信息"
+        case .success: "成功"
+        case .warning: "提醒"
+        case .error: "错误"
+        }
+    }
+
+    var messageColor: Color {
+        switch self {
+        case .info: .primary
+        case .success: LogMessagePalette.success
+        case .warning: LogMessagePalette.warning
+        case .error: LogMessagePalette.error
+        }
+    }
+
     var color: Color {
         switch self {
         case .info: .secondary
@@ -173,6 +198,18 @@ extension LogLevel {
         case .warning: "exclamationmark"
         case .error: "xmark"
         }
+    }
+}
+
+private enum LogMessagePalette {
+    static let success = color(light: NSColor(srgbRed: 0.12, green: 0.43, blue: 0.22, alpha: 1), dark: .systemGreen)
+    static let warning = color(light: NSColor(srgbRed: 0.60, green: 0.33, blue: 0, alpha: 1), dark: .systemOrange)
+    static let error = color(light: NSColor(srgbRed: 0.76, green: 0.12, blue: 0.12, alpha: 1), dark: .systemRed)
+
+    private static func color(light: NSColor, dark: NSColor) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+        })
     }
 }
 

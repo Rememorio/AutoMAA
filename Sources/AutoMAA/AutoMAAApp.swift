@@ -5,6 +5,7 @@ import SwiftUI
 @main
 struct AutoMAAApp: App {
     @StateObject private var model: AppModel
+    @NSApplicationDelegateAdaptor(ApplicationDelegate.self) private var applicationDelegate
 
     init() {
         if let root = Self.developmentDataDirectory() {
@@ -25,12 +26,22 @@ struct AutoMAAApp: App {
             RootView()
                 .environmentObject(model)
                 .frame(minWidth: 1_020, minHeight: 680)
+                .onAppear { applicationDelegate.model = model }
         }
         .defaultSize(width: 1_180, height: 780)
-        .windowStyle(.hiddenTitleBar)
+        .windowToolbarStyle(.unified)
         .commands {
             AutoMAACommands(model: model)
         }
+        Settings {
+            SettingsView(selectedSection: $model.settingsSection)
+                .environmentObject(model)
+                .tint(.maaAccent)
+                .focusedSceneValue(\.workspaceActive, false)
+                .onAppear { applicationDelegate.model = model }
+        }
+        .windowResizability(.contentSize)
+        .defaultPosition(.center)
     }
 
     static func developmentDataDirectory(
@@ -50,32 +61,30 @@ struct AutoMAAApp: App {
 
 private struct AutoMAACommands: Commands {
     @ObservedObject var model: AppModel
-    @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
+    @FocusedValue(\.workspaceActive) private var workspaceActive
 
     var body: some Commands {
         CommandGroup(replacing: .appInfo) {
-            Button("关于 AutoMAA") { show(.about) }
+            Button("关于 AutoMAA") { showSettings(.about) }
         }
         CommandGroup(after: .appInfo) {
-            Button("检查更新…") {
-                show(.settings)
-                model.checkForApplicationUpdate()
+            Button(model.applicationUpdateMenuTitle) {
+                model.openApplicationUpdate()
+                openSettings()
+                NSApp.activate(ignoringOtherApps: true)
             }
-            .disabled(model.applicationUpdateState.isBusy)
-        }
-        CommandGroup(replacing: .appSettings) {
-            Button("设置…") { show(.settings) }
-                .keyboardShortcut(",", modifiers: [.command])
         }
         CommandGroup(after: .newItem) {
-            Button(model.currentPlanID.map { model.runTitle(for: $0, readyTitle: "运行当前方案") } ?? "运行当前方案") { model.runSelectedPlan() }
+            Button(runCommandTitle) { model.runSelectedPlan() }
                 .keyboardShortcut("r", modifiers: [.command])
-                .disabled(!model.canRun || model.currentPlanID.map { model.continuation(for: $0).pending == 0 } == true)
+                .disabled(workspaceActive != true || model.entityEditor != nil || model.readinessRequest != nil || model.updateDetailsRequest != nil || !model.canRun || model.currentPlanID.map { model.continuation(for: $0).pending == 0 } == true)
             Button(model.activePlanID == nil ? "取消更新" : "安全停止当前流程") { model.cancelCurrentOperation() }
                 .keyboardShortcut(".", modifiers: [.command])
                 .disabled(!model.canCancelRun && !model.applicationUpdateState.canCancel)
             Button("保存配置") { model.saveNow() }
                 .keyboardShortcut("s", modifiers: [.command])
+                .disabled(workspaceActive != true || model.entityEditor != nil || model.readinessRequest != nil || model.updateDetailsRequest != nil)
         }
         CommandGroup(replacing: .help) {
             Button("AutoMAA 使用文档") {
@@ -87,9 +96,16 @@ private struct AutoMAACommands: Commands {
         }
     }
 
-    private func show(_ selection: SidebarSelection) {
-        model.selection = selection
-        openWindow(id: "main")
+    private var runCommandTitle: String {
+        guard let planID = model.currentPlanID, model.canRun(planID: planID) else {
+            return "运行当前方案"
+        }
+        return model.runTitle(for: planID, readyTitle: "运行当前方案")
+    }
+
+    private func showSettings(_ section: SettingsSection) {
+        model.showSettings(section)
+        openSettings()
         NSApp.activate(ignoringOtherApps: true)
     }
 }

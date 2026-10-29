@@ -1,1009 +1,341 @@
-import AppKit
 import AutoMAAKit
 import SwiftUI
-import UniformTypeIdentifiers
+
+private enum PlanDetailSection { case settings, activity }
 
 struct PlanEditorView: View {
     @EnvironmentObject private var model: AppModel
     @Binding var plan: AutomationPlan
-    @State private var confirmDelete = false
-    @State private var editsSchedule = false
-    @State private var editsOrder = false
-    @State private var useCustomFightStage: Bool?
-    @State private var fightStageEditor: FightStageEditorContext?
+    @State private var selectedTask: TaskKind?
+    @State private var showsArrangement = false
+    @State private var detailSection = PlanDetailSection.settings
+    @State private var showsRename = false
+    @State private var confirmsDelete = false
 
-    private let columns = [GridItem(.adaptive(minimum: 340), spacing: 14, alignment: .topLeading)]
+    init(plan: Binding<AutomationPlan>) {
+        _plan = plan
+        _selectedTask = State(initialValue: plan.wrappedValue.stepOrder.first)
+    }
 
     var body: some View {
-        AppPage(width: PageLayout.contentWidth) {
-            header
-            LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
-                targetPanel
-                schedulePanel
-            }
-            orderPanel
-            ForEach(taskGroups, id: \.self) { tasks in
-                if tasks == [.fight] {
-                    fightCard
+        WorkspaceColumns {
+            taskList
+        } detail: {
+            switch detailSection {
+            case .settings:
+                if let selectedTask {
+                    PlanTaskInspector(plan: $plan, task: selectedTask)
                 } else {
-                    LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
-                        ForEach(tasks) { task in
-                            switch task {
-                            case .fight: EmptyView()
-                            case .recruit: recruitCard
-                            case .infrast: infrastCard
-                            case .mall: mallCard
-                            case .award: awardCard
-                            }
-                        }
-                    }
+                    ContentUnavailableView("选择任务", systemImage: "slider.horizontal.3",
+                                           description: Text("在执行顺序中选择要设置的任务。"))
                 }
+            case .activity:
+                PlanActivityView(planID: plan.id)
             }
-            policyCard
-            actions
         }
         .navigationTitle(plan.displayName)
-        .onAppear { editsSchedule = !plan.schedule.enabled || scheduleNeedsAttention }
-        .onChange(of: scheduleNeedsAttention) { _, needsAttention in
-            if needsAttention { editsSchedule = true }
-        }
-        .confirmationDialog("删除「\(plan.displayName)」？", isPresented: $confirmDelete) {
-            Button("删除方案", role: .destructive) { model.deletePlan(plan.id) }
-        } message: {
-            Text("账号和客户端不会被删除，对应的系统定时任务会一并移除。")
-        }
-        .sheet(item: $fightStageEditor) { context in
-            FightStageEditorSheet(context: context) { stage in
-                model.setFightRecoveryStage(
-                    stage,
-                    clientID: context.clientID,
-                    accountID: context.accountID
-                )
-            }
-        }
-    }
-
-    private var header: some View {
-        HStack(spacing: 16) {
-            EntityIcon(symbol: "clock.arrow.circlepath")
-            VStack(alignment: .leading, spacing: 5) {
-                EditableDisplayNameField(label: "方案名称", placeholder: "例如：工作日早晨", text: $plan.name)
-                Text("\(targetAccounts.count) 个账号 · \(plan.enabledTasks.count) 个步骤")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            PlanRunControl(planID: plan.id, controlSize: .large)
-                .fontWeight(.semibold)
-        }
-    }
-
-    private var targetPanel: some View {
-        Panel {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    SectionHeading(title: "执行账号", symbol: "person.2.fill")
-                    Spacer()
-                    Toggle("所有已启用账号", isOn: $plan.includesAllEnabledAccounts)
-                        .toggleStyle(.switch)
+        .navigationSubtitle("\(accountSummary) · \(scheduleSummary)")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Picker("右侧内容", selection: $detailSection) {
+                    Label("任务设置", systemImage: "slider.horizontal.3")
+                        .accessibilityLabel("任务设置").help("任务设置")
+                        .tag(PlanDetailSection.settings)
+                    Label("运行信息", systemImage: "doc.text")
+                        .accessibilityLabel("运行信息").help("运行信息")
+                        .tag(PlanDetailSection.activity)
                 }
-                Text(plan.includesAllEnabledAccounts
-                     ? "当前 \(targetAccounts.count) 个账号；新启用的账号会自动加入。"
-                     : "已选 \(targetAccounts.count) 个启用账号；停用的账号不会执行。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if !plan.includesAllEnabledAccounts {
-                    Divider()
-                    if model.configuration.clients.isEmpty {
-                        Text("请先添加客户端和账号")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(model.configuration.clients) { client in
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text(client.displayName)
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.secondary)
-                                LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), alignment: .topLeading)], alignment: .leading, spacing: 10) {
-                                    ForEach(client.accounts) { account in
-                                        Toggle(account.displayName, isOn: accountBinding(account.id))
-                                            .toggleStyle(.checkbox)
-                                            .disabled(!client.enabled || !account.enabled)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                .pickerStyle(.segmented)
+                .labelStyle(.iconOnly)
+                .labelsHidden()
+                .fixedSize()
+                .help("切换任务设置与本方案运行信息")
             }
-        }
-    }
-
-    private var schedulePanel: some View {
-        Panel {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    SectionHeading(title: "定时运行", symbol: "clock.badge.checkmark.fill")
-                    Spacer()
-                    Toggle("", isOn: Binding(
-                        get: { plan.schedule.enabled },
-                        set: { model.setPlanScheduleEnabled(plan.id, $0) }
-                    ))
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .accessibilityLabel("启用定时运行")
-                    .disabled(model.isWorkflowRunning)
-                }
-                DisclosureGroup(isExpanded: $editsSchedule) {
-                    ForEach(Array(plan.schedule.rules.enumerated()), id: \.element.id) { index, rule in
-                        scheduleRuleRow(rule, index: index)
-                    }
-                    HStack {
-                        Button {
-                            model.addPlanScheduleRule(plan.id)
-                        } label: {
-                            Label("添加时段", systemImage: "plus")
-                        }
-                        .disabled(model.isWorkflowRunning || plan.schedule.scheduledWeekdays.count == ScheduleWeekday.allCases.count)
-                        .help(plan.schedule.scheduledWeekdays.count == ScheduleWeekday.allCases.count
-                              ? "先从现有时段取消一个星期"
-                              : "为尚未安排的星期添加另一个时间")
-                        Spacer()
-                        if plan.schedule.enabled {
-                            Label("修改后自动应用", systemImage: "arrow.triangle.2.circlepath")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Text("macOS 会在登录会话中独立唤起，无需保持 AutoMAA 打开。若需准时执行，请接通电源、保持系统唤醒且不要停留在锁屏；显示器可以单独熄灭。")
-                        .font(.caption).foregroundStyle(.secondary)
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    showsArrangement = true
                 } label: {
-                    Text(PlanScheduleFormatter.summary(plan.schedule)).font(.callout)
-                        .fixedSize(horizontal: false, vertical: true)
+                    Label("执行安排", systemImage: "calendar.badge.clock")
                 }
-                HStack(spacing: 8) {
-                    StatusDot(color: scheduleStatusColor)
-                    Text(scheduleStatusText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                .labelStyle(.iconOnly)
+                .help("执行安排")
+
+                planMenu
             }
+            ToolbarItem(placement: .primaryAction) {
+                WorkspaceRunControl()
+            }
+        }
+        .onAppear { selectInitialTask() }
+        .onChange(of: plan.id) { _, _ in selectInitialTask() }
+        .onChange(of: isCurrentPlanRunning) { _, running in
+            if running { detailSection = .activity }
+        }
+        .sheet(isPresented: $showsArrangement) {
+            PlanExecutionArrangement(plan: plan)
+        }
+        .sheet(isPresented: $showsRename) {
+            PlanRenameSheet(name: plan.name) { name in
+                guard !model.isWorkflowRunning else { return false }
+                plan.name = name
+                return true
+            }
+        }
+        .confirmationDialog("删除「\(plan.displayName)」？", isPresented: $confirmsDelete) {
+            Button("删除方案", role: .destructive) {
+                guard !model.isWorkflowRunning else { return }
+                model.deletePlan(plan.id)
+            }
+        } message: {
+            Text("账号和客户端会保留，对应的系统定时任务会一并移除。")
         }
     }
 
-    private func scheduleRuleRow(_ rule: WeeklyScheduleRule, index: Int) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+    private var planMenu: some View {
+        Menu {
+            Button("重命名方案…") { showsRename = true }
+                .disabled(model.isWorkflowRunning)
+            Button("复制方案") {
+                guard !model.isWorkflowRunning else { return }
+                model.duplicatePlan(plan.id)
+            }
+            .disabled(model.isWorkflowRunning)
+            Divider()
+            Button("删除方案…", role: .destructive) { confirmsDelete = true }
+                .disabled(model.isWorkflowRunning)
+        } label: {
+            Image(systemName: "ellipsis")
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .tint(.secondary)
+        .fixedSize()
+        .help("方案操作")
+        .accessibilityLabel("方案操作")
+    }
+
+    private var taskList: some View {
+        VStack(spacing: 0) {
             HStack {
-                Text("时段 \(index + 1)")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                DatePicker("时间", selection: scheduleTime(rule), displayedComponents: .hourAndMinute)
-                    .datePickerStyle(.field)
-                    .labelsHidden()
-                    .disabled(model.isWorkflowRunning)
-                if plan.schedule.rules.count > 1 {
-                    Button(role: .destructive) {
-                        model.removePlanScheduleRule(plan.id, ruleID: rule.id)
-                    } label: {
-                        Image(systemName: "trash").frame(width: 28, height: 28).contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.red)
-                    .help("删除这个时段")
-                    .accessibilityLabel("删除时段 \(index + 1)")
-                    .disabled(model.isWorkflowRunning)
-                }
-            }
-            HStack(spacing: 7) {
-                ForEach(ScheduleWeekday.allCases) { weekday in
-                    let selected = rule.weekdays.contains(weekday)
-                    let occupied = usedWeekdays(excluding: rule.id).contains(weekday)
-                    Button {
-                        model.togglePlanScheduleWeekday(plan.id, ruleID: rule.id, weekday: weekday)
-                    } label: {
-                        Text(weekday.shortTitle)
-                            .font(.caption.weight(.semibold))
-                            .frame(width: 32, height: 32)
-                            .foregroundStyle(Color.primary)
-                            .background(
-                                selected ? Color.maaAccent.opacity(0.16) : Color.primary.opacity(0.055),
-                                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            )
-                    }
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .stroke(selected ? Color.maaAccent : .clear, lineWidth: 1)
-                            .allowsHitTesting(false)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(model.isWorkflowRunning || (!selected && occupied))
-                    .opacity(!selected && occupied ? 0.35 : 1)
-                    .help(occupied && !selected ? "已由其他时段使用\(weekday.title)" : weekday.title)
-                    .accessibilityLabel(weekday.title)
-                    .accessibilityValue(selected ? "已选择" : "未选择")
-                }
-                Spacer()
-            }
-        }
-        .padding(11)
-        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-    }
-
-    private var orderPanel: some View {
-        Panel {
-            DisclosureGroup(isExpanded: $editsOrder) {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), alignment: .leading)], spacing: 8) {
-                    ForEach(Array(plan.stepOrder.enumerated()), id: \.element) { index, task in
-                        HStack(spacing: 7) {
-                            Text("\(index + 1)")
-                                .font(.caption2.bold().monospacedDigit())
-                                .foregroundStyle(.secondary)
-                            Image(systemName: task.symbol)
-                                .foregroundStyle(plan.isEnabled(task) ? Color.maaAccent : Color.secondary)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(task.title).font(.caption.weight(.medium))
-                                if !plan.isEnabled(task) {
-                                    Text("未启用").font(.caption2).foregroundStyle(.secondary)
-                                }
-                            }
-                            Spacer(minLength: 0)
-                            ReorderButtons(name: task.title, index: index, count: plan.stepOrder.count) { move(task, by: $0) }
-                        }
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 7)
-                        .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 8))
-                    }
-                }
-            } label: {
-                VStack(alignment: .leading, spacing: 4) {
-                    SectionHeading(title: "步骤顺序", symbol: "arrow.up.arrow.down")
-                    Text(plan.stepOrder.map { plan.isEnabled($0) ? $0.title : "\($0.title)（未启用）" }.joined(separator: " → "))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-        }
-    }
-
-    private var taskGroups: [[TaskKind]] {
-        var groups: [[TaskKind]] = []
-        for task in plan.stepOrder {
-            if task == .fight || groups.isEmpty || groups.last == [.fight] {
-                groups.append([task])
-            } else {
-                groups[groups.count - 1].append(task)
-            }
-        }
-        return groups
-    }
-
-    private var fightCard: some View {
-        PlanTaskCard(task: .fight, enabled: $plan.fight.enabled) {
-            PlanParameterModeRow(task: .fight, usesCustomSettings: $plan.fight.usesCustomSettings)
-            LazyVGrid(columns: columns, alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("作战安排").font(.subheadline.weight(.medium))
-                    weeklyAnnihilationSettings
-                    if plan.fight.usesCustomSettings {
-                        Divider()
-                        fightStageSettings
-                    }
-                }
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("用药与次数").font(.subheadline.weight(.medium))
-                    if plan.fight.usesCustomSettings {
-                        fightResourceSettings
-                    } else {
-                        PlanRecommendedParameters(task: .fight)
-                    }
-                }
-                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-            }
-            fightAccountDetails
-        }
-    }
-
-    private var fightStageSettings: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Picker("关卡策略", selection: fightStageStrategy) {
-                ForEach(FightStageStrategy.allCases) { strategy in
-                    Text(strategy.title).tag(strategy)
-                }
-            }
-            .fixedSize(horizontal: true, vertical: false)
-            if plan.fight.stageStrategy == .fixed {
-                LabeledContent("关卡") {
-                    if customFightStage.wrappedValue {
-                        TextField("如 1-7 或活动关卡", text: $plan.fight.stage)
-                            .textFieldStyle(.roundedBorder)
-                            .accessibilityLabel("固定关卡")
-                            .frame(width: 190)
-                    } else {
-                        Picker("关卡", selection: $plan.fight.stage) {
-                            if FightStagePreset(rawValue: plan.fight.stage) == nil {
-                                Text("自定义：\(plan.fight.stage)").tag(plan.fight.stage)
-                            }
-                            ForEach(FightStagePreset.allCases.filter { $0 != .currentOrLast }) { preset in
-                                Text(preset.title).tag(preset.rawValue)
-                            }
-                        }
-                        .labelsHidden()
-                        .frame(width: 190)
-                    }
-                }
-                Toggle("手动输入关卡名", isOn: customFightStage)
-            }
-            LabeledContent("兜底关卡（可选）") {
-                TextField("如 1-7；留空关闭", text: $plan.fight.fallbackStage)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 190)
-                    .accessibilityLabel("兜底关卡，留空关闭")
-            }
-            Text(plan.fight.weeklyAnnihilation.enabled && plan.fight.stageStrategy != .fixed
-                 ? "优先识别游戏当前/上次的常规关卡；需要剿灭时先保存常规目标，剿灭结束后恢复。本周已满时继续跟随常规关卡。"
-                 : plan.fight.stageStrategy.detail)
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Text("没有可用的常规目标，或选关失败且尚未开战时使用兜底；每个候选只尝试一次。临时兜底不替代原目标或剿灭，建议选择已解锁的常驻关卡。")
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private var fightResourceSettings: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            optionalStepper("吃理智药", value: $plan.fight.medicine, defaultValue: 999, range: 0...999, unit: "次")
-            optionalStepper("临期理智药", value: $plan.fight.medicineExpireDays, defaultValue: 2, range: 1...365, unit: "天")
-            optionalStepper("吃源石", value: $plan.fight.stone, defaultValue: 0, range: 0...99, unit: "颗")
-            optionalStepper("指定次数", value: $plan.fight.times, defaultValue: 5, range: 1...9_999, unit: "次")
-            Picker("连战次数", selection: $plan.fight.series) {
-                Text("保持当前").tag(Int?.none)
-                Text("关闭连战").tag(Int?.some(-1))
-                Text("AUTO").tag(Int?.some(0))
-                ForEach((1...10).reversed(), id: \.self) { value in
-                    Text("\(value)").tag(Int?.some(value))
-                }
-            }
-            .fixedSize(horizontal: true, vertical: false)
-            DisclosureGroup("高级选项") {
-                Toggle("博朗台碎石模式", isOn: $plan.fight.drGrandet)
-            }
-        }
-    }
-
-    private var weeklyAnnihilationSettings: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            SettingsToggleRow(title: "每周优先剿灭", detail: "仅用自然理智；完成状态按账号跨方案共享", isOn: $plan.fight.weeklyAnnihilation.enabled)
-            if plan.fight.weeklyAnnihilation.enabled {
-                Picker("本周开始日", selection: $plan.fight.weeklyAnnihilation.startDay) {
-                    ForEach(ScheduleWeekday.allCases) { day in Text(day.title).tag(day) }
-                }
-                .fixedSize(horizontal: true, vertical: false)
-                Text("按各服游戏日计算；从指定日开始，本周奖励未满时优先补打。")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
-    private var fightAccountDetails: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if (plan.fight.weeklyAnnihilation.enabled || showsRecoveryStage), !fightStageMemoryRows.isEmpty {
-                Divider()
-                Text(showsRecoveryStage ? "账号状态与常规目标" : "每周剿灭状态")
+                Text("执行顺序")
                     .font(.subheadline.weight(.medium))
-                ForEach(fightStageMemoryRows) { row in fightStageMemoryRow(row) }
+                Text("\(plan.enabledTasks.count) 项已启用")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
             }
-        }
-    }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
 
-    private var showsRecoveryStage: Bool {
-        plan.fight.weeklyAnnihilation.enabled
-            ? !plan.fight.usesCustomSettings || plan.fight.stageStrategy != .fixed
-            : plan.fight.usesCustomSettings && plan.fight.stageStrategy == .rememberedRegular
-    }
-
-    private var recruitCard: some View {
-        PlanTaskCard(task: .recruit, enabled: $plan.recruit.enabled, usesCustomSettings: $plan.recruit.usesCustomSettings) {
-            Stepper("招募次数：\(plan.recruit.times)", value: $plan.recruit.times, in: 0...12)
-                .fixedSize(horizontal: true, vertical: false)
-            Toggle("刷新标签", isOn: $plan.recruit.refresh)
-            Toggle("使用加急许可", isOn: $plan.recruit.expedite)
-            Divider()
-            Text("自动确认星级")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            HStack {
-                Toggle("3★", isOn: $plan.recruit.autoConfirm3)
-                Toggle("4★", isOn: $plan.recruit.autoConfirm4)
-                Toggle("5★", isOn: $plan.recruit.autoConfirm5)
-                Toggle("6★", isOn: $plan.recruit.autoConfirm6)
-            }
-            .toggleStyle(.checkbox)
-            Picker("额外标签策略", selection: $plan.recruit.extraTagsMode) {
-                ForEach(RecruitExtraTagsMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
+            List(selection: $selectedTask) {
+                ForEach(plan.stepOrder) { task in
+                    taskRow(task)
+                        .tag(task)
+                        .moveDisabled(model.isWorkflowRunning)
+                        .listRowInsets(EdgeInsets(top: 7, leading: 10, bottom: 7, trailing: 10))
+                        .contextMenu { taskMenu(task) }
+                }
+                .onMove { source, destination in
+                    guard !model.isWorkflowRunning else { return }
+                    plan.stepOrder.move(fromOffsets: source, toOffset: destination)
                 }
             }
-            .fixedSize(horizontal: true, vertical: false)
-            LabeledContent("三星首选标签") {
-                DelimitedListField("三星首选标签", prompt: "可留空", values: $plan.recruit.firstTags)
-                    .frame(width: 210)
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .onChange(of: selectedTask) { _, task in
+                if task != nil { detailSection = .settings }
             }
-            LabeledContent("保留并跳过") {
-                DelimitedListField("保留并跳过的标签", prompt: "例如 支援机械", values: $plan.recruit.preserveTags)
-                    .frame(width: 210)
-            }
-        }
-    }
 
-    private var infrastCard: some View {
-        PlanTaskCard(task: .infrast, enabled: $plan.infrast.enabled, usesCustomSettings: $plan.infrast.usesCustomSettings) {
-            Picker("基建模式", selection: $plan.infrast.mode) {
-                ForEach(InfrastMode.allCases) { mode in Text(mode.title).tag(mode) }
-            }
-            .pickerStyle(.segmented)
-            .tint(.maaAction)
-            Text(plan.infrast.mode.detail)
+            Text(model.isWorkflowRunning ? "运行结束后可调整任务与参数" : "拖动或使用右键菜单调整顺序")
                 .font(.caption)
-                .foregroundStyle(plan.infrast.mode == .collectOnly ? Color.maaAccent : Color.secondary)
-            if plan.infrast.mode == .customSchedule {
-                Divider()
-                Text("排班文件")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                HStack {
-                    TextField("MAA 基建排班 JSON", text: $plan.infrast.customSchedulePath)
-                        .textFieldStyle(.roundedBorder)
-                    Button("选择…") { chooseInfrastSchedule() }
-                }
-                Stepper("方案序号：\(plan.infrast.customSchedulePlanIndex)", value: $plan.infrast.customSchedulePlanIndex, in: 0...99)
-                    .fixedSize(horizontal: true, vertical: false)
-            } else {
-                Divider()
-                Text("处理设施")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 90), alignment: .leading)], alignment: .leading, spacing: 7) {
-                    ForEach(InfrastFacility.allCases) { facility in
-                        Toggle(facility.title, isOn: facilityBinding(facility))
-                            .toggleStyle(.checkbox)
-                    }
-                }
-                Picker("无人机用途", selection: $plan.infrast.drones) {
-                    ForEach(DroneUsage.allCases) { usage in Text(usage.title).tag(usage) }
-                }
-                .fixedSize(horizontal: true, vertical: false)
-                if plan.infrast.mode == .fullShift {
-                    Divider()
-                    Text("上岗最低心情：\(Int(plan.infrast.threshold * 100))%")
-                    Slider(value: $plan.infrast.threshold, in: 0...1, step: 0.05)
-                        .accessibilityLabel("上岗最低心情")
-                        .accessibilityValue("\(Int(plan.infrast.threshold * 100))%")
-                    Text("仅筛选本次换班时的候选干员，不会在心情降到该值时自动换班。每天完整换班一次建议 90%；降低阈值会增加可选干员，但可能在下次换班前疲劳。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Toggle("宿舍空位补信赖未满干员", isOn: $plan.infrast.dormTrust)
-                    Toggle("不将已进驻干员放入宿舍", isOn: $plan.infrast.dormNotStationed)
-                    Toggle("源石碎片自动补货", isOn: $plan.infrast.replenish)
-                    Toggle("训练完成后继续尝试专精", isOn: $plan.infrast.continueTraining)
-                }
-            }
-            Divider()
-            Toggle("领取会客室信息板信用", isOn: $plan.infrast.receptionMessageBoard)
-            Toggle("进行线索交流", isOn: $plan.infrast.receptionClueExchange)
-            Toggle("赠送线索", isOn: $plan.infrast.receptionSendClue)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 10)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
-    private var mallCard: some View {
-        PlanTaskCard(task: .mall, enabled: $plan.mall.enabled, usesCustomSettings: $plan.mall.usesCustomSettings) {
-            Toggle("访问好友基建领取信用", isOn: $plan.mall.visitFriends)
-            Toggle("在信用商店购物", isOn: $plan.mall.shopping)
-            if plan.mall.shopping {
-                Divider()
-                LabeledContent("优先购买") {
-                    DelimitedListField("优先购买的物品", prompt: "招聘许可、龙门币", values: $plan.mall.buyFirst)
-                        .frame(width: 210)
-                }
-                LabeledContent("购物黑名单") {
-                    DelimitedListField("购物黑名单", prompt: "家具零件", values: $plan.mall.blacklist)
-                        .frame(width: 210)
-                }
-                Toggle("信用溢出时无视黑名单", isOn: $plan.mall.forceShoppingIfCreditFull)
-                Toggle("只购买折扣物品", isOn: $plan.mall.onlyBuyDiscount)
-                Toggle("保留 300 信用", isOn: $plan.mall.reserveMaxCredit)
-            }
-            Divider()
-            Toggle("借助战打一局 OF-1 赚次日信用", isOn: $plan.mall.creditFight)
-            if plan.mall.creditFight {
-                Picker("编队", selection: $plan.mall.formationIndex) {
-                    Text("当前编队").tag(0)
-                    ForEach(1...4, id: \.self) { Text("第 \($0) 编队").tag($0) }
-                }
-                .fixedSize(horizontal: true, vertical: false)
-            }
-        }
-    }
-
-    private var awardCard: some View {
-        PlanTaskCard(task: .award, enabled: $plan.award.enabled, usesCustomSettings: $plan.award.usesCustomSettings) {
-            Toggle("日常与周常奖励", isOn: $plan.award.dailyWeekly)
-            Toggle("邮件", isOn: $plan.award.mail)
-            Toggle("免费单抽", isOn: $plan.award.freeRecruit)
-            Toggle("幸运墙 / 签到", isOn: $plan.award.orundum)
-            Toggle("限时采矿", isOn: $plan.award.mining)
-            Toggle("活动专属赠送", isOn: $plan.award.specialAccess)
-        }
-    }
-
-    private var policyCard: some View {
-        Panel {
-            VStack(alignment: .leading, spacing: 11) {
-                SectionHeading(title: "执行策略", symbol: "arrow.clockwise.circle.fill")
-                Divider()
-                LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("运行准备").font(.subheadline.weight(.medium))
-                        Toggle("运行前更新识别数据", isOn: $plan.policy.hotUpdateBeforeRun)
-                        Text("日常完成记录按方案隔离；每周剿灭按账号共享状态，未满时可继续补打。")
+    private func taskRow(_ task: TaskKind) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "line.3.horizontal")
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
+            Toggle("启用\(task.title)", isOn: enabledBinding(for: task))
+                .labelsHidden()
+                .toggleStyle(.checkbox)
+                .disabled(model.isWorkflowRunning)
+            Button {
+                selectTask(task)
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: task.symbol)
+                        .font(.system(size: 14))
+                        .foregroundStyle(plan.isEnabled(task) ? Color.maaAccent : .secondary)
+                        .frame(width: 20)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(task.title).font(.body.weight(.medium))
+                        Text(taskSummary(task))
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                            .lineLimit(1)
+                            .help(taskSummary(task))
                     }
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("失败处理").font(.subheadline.weight(.medium))
-                        Stepper("单步骤失败重试：\(plan.policy.maxRetries) 次", value: $plan.policy.maxRetries, in: 0...3)
-                            .fixedSize(horizontal: true, vertical: false)
-                        Toggle("某一步失败后继续后续步骤", isOn: $plan.policy.continueAfterStepFailure)
+                    Spacer(minLength: 0)
+                    if !plan.isEnabled(task) {
+                        Text("已停用")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
                 }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(model.isWorkflowRunning ? "查看" : "编辑")\(task.title)参数")
+            .accessibilityValue(taskSummary(task))
         }
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .contain)
     }
 
-    private var actions: some View {
-        HStack {
-            Button("复制方案") { model.duplicatePlan(plan.id) }
-            Spacer()
-            Button("删除方案", role: .destructive) { confirmDelete = true }.tint(.red)
+    @ViewBuilder
+    private func taskMenu(_ task: TaskKind) -> some View {
+        Button(model.isWorkflowRunning ? "查看参数" : "编辑参数") {
+            selectTask(task)
         }
-        .padding(.top, 4)
-    }
-
-    private var targetAccounts: [AccountConfiguration] {
-        model.configuration.clients.filter(\.enabled).flatMap { $0.accounts.filter(plan.includes) }
-    }
-
-    private var fightStageMemoryRows: [FightStageMemoryRow] {
-        model.configuration.clients.filter(\.enabled).flatMap { client in
-            client.accounts.filter(plan.includes).map { account in
-                return FightStageMemoryRow(
-                    clientID: client.id,
-                    accountID: account.id,
-                    label: "\(client.displayName) / \(account.displayName)",
-                    stage: model.fightStageMemory.stage(clientID: client.id, accountID: account.id),
-                    weeklyStatus: plan.fight.weeklyAnnihilation.enabled
-                        ? model.weeklyAnnihilation.status(for: plan.fight.weeklyAnnihilation, client: client,
-                                                         accountID: account.id, at: model.currentDate)
-                        : nil
-                )
-            }
+        Button(plan.isEnabled(task) ? "停用任务" : "启用任务") {
+            enabledBinding(for: task).wrappedValue.toggle()
         }
+        .disabled(model.isWorkflowRunning)
+        Divider()
+        Button("上移") { move(task, by: -1) }
+            .disabled(model.isWorkflowRunning || plan.stepOrder.first == task)
+        Button("下移") { move(task, by: 1) }
+            .disabled(model.isWorkflowRunning || plan.stepOrder.last == task)
     }
 
-    private func fightStageMemoryRow(_ row: FightStageMemoryRow) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: "location.fill")
-                    .foregroundStyle(Color.maaAccent)
-                Text(row.label)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 8)
-                if let status = row.weeklyStatus {
-                    Text(status.title)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(status == .unconfirmed ? Color.orange : Color.secondary)
-                        .fixedSize()
-                } else {
-                    Text(row.stage == nil ? "未设置" : "已记录")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(row.stage == nil ? Color.orange : Color.secondary)
-                        .fixedSize()
-                }
-            }
-            if showsRecoveryStage {
-                HStack(alignment: .top, spacing: 8) {
-                    Text(fightStageStatusText(row))
-                        .font(.caption)
-                        .foregroundStyle(row.stage == nil ? Color.orange : Color.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 8)
-                    Button(row.stage == nil ? "设置常规目标" : "修改") {
-                        fightStageEditor = FightStageEditorContext(row: row)
-                    }
-                    .accessibilityLabel("设置\(row.label)的常规目标")
-                    .disabled(model.isWorkflowRunning)
-                }
-            }
-            if row.weeklyStatus != nil,
-               let item = model.continuation(for: plan.id).fightRecoveryItems.first(where: {
-                   $0.step.clientID == row.clientID && $0.step.accountID == row.accountID
-               }) {
-                FightRecoveryActions(item: item, context: row.label)
-            }
+    private var targetAccountCount: Int {
+        model.configuration.clients.filter(\.enabled).flatMap { $0.accounts.filter(plan.includes) }.count
+    }
+
+    private var accountSummary: String {
+        targetAccountCount == 0 ? "尚未选择账号" : "执行 \(targetAccountCount) 个账号"
+    }
+
+    private var scheduleSummary: String {
+        if model.isPlanScheduleCurrent(plan) {
+            return "定时：\(PlanScheduleFormatter.summary(plan.schedule))"
         }
-        .padding(10)
-        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-    }
-
-    private func fightStageStatusText(_ row: FightStageMemoryRow) -> String {
-        row.stage.map { "恢复目标：\($0)；游戏中的新常规关卡优先" }
-            ?? "运行时先识别游戏关卡；可预设已解锁的常规目标用于恢复。"
-    }
-
-    private var scheduleNeedsAttention: Bool {
-        scheduleProblem != nil || scheduleConflict != nil
-            || (!model.isSynchronizingSchedules && plan.schedule.enabled && !model.isPlanScheduleCurrent(plan))
-            || (!plan.schedule.enabled && scheduleInstalled)
-    }
-
-    private var scheduleInstalled: Bool {
-        model.installedPlanIDs.contains(plan.id)
-    }
-
-    private var scheduleStatusColor: Color {
-        if scheduleProblem != nil || scheduleConflict != nil { return .orange }
-        if plan.schedule.enabled {
-            if model.isPlanScheduleCurrent(plan) { return .green }
-            return model.isSynchronizingSchedules ? .maaAccent : .red
+        if plan.schedule.enabled || model.installedPlanIDs.contains(plan.id) {
+            return model.isSynchronizingSchedules ? "定时同步中" : "定时需检查"
         }
-        return scheduleInstalled ? .red : .secondary
+        return "未设定时"
     }
 
-    private var scheduleStatusText: String {
-        if let scheduleProblem {
-            return scheduleProblem.message(planName: plan.displayName)
-        }
-        if let scheduleConflict {
-            let time = PlanScheduleFormatter.time(hour: scheduleConflict.slot.hour, minute: scheduleConflict.slot.minute)
-            return "与「\(scheduleConflict.firstPlanName)」的\(scheduleConflict.slot.weekday.title) \(time) 冲突"
-        }
-        if plan.schedule.enabled {
-            if model.isPlanScheduleCurrent(plan) {
-                let next = PlanScheduleFormatter.nextRunLabel(plan.schedule).map { " · 下次 \($0)" } ?? ""
-                return "已启用\(next)"
-            }
-            if model.isSynchronizingSchedules { return "正在同步系统定时任务…" }
-            return scheduleInstalled
-                ? "系统定时任务与当前设置不一致，请重新切换开关"
-                : "系统定时任务未安装，请重新切换开关"
-        }
-        if scheduleInstalled {
-            return model.isSynchronizingSchedules
-                ? "正在移除系统定时任务…"
-                : "系统定时任务仍存在，请重新开启后关闭"
-        }
-        return "关闭时不会自动运行"
+    private var isCurrentPlanRunning: Bool {
+        model.isWorkflowRunning && model.activePlanID == plan.id
     }
 
-    private var scheduleProblem: PlanScheduleProblem? {
-        PlanScheduleValidator.problem(in: plan.schedule)
+    private func selectInitialTask() {
+        selectedTask = plan.stepOrder.first
+        detailSection = isCurrentPlanRunning ? .activity : .settings
     }
 
-    private var scheduleConflict: PlanScheduleConflict? {
-        guard plan.schedule.enabled else { return nil }
-        return model.scheduleConflict(planID: plan.id, schedule: plan.schedule)
-    }
-
-    private func usedWeekdays(excluding ruleID: UUID) -> Set<ScheduleWeekday> {
-        plan.schedule.rules
-            .filter { $0.id != ruleID }
-            .reduce(into: []) { $0.formUnion($1.weekdays) }
-    }
-
-    private func scheduleTime(_ rule: WeeklyScheduleRule) -> Binding<Date> {
-        Binding {
-            Calendar.current.date(bySettingHour: rule.hour, minute: rule.minute, second: 0, of: Date()) ?? Date()
-        } set: { date in
-            let components = Calendar.current.dateComponents([.hour, .minute], from: date)
-            model.setPlanScheduleRuleTime(
-                plan.id,
-                ruleID: rule.id,
-                hour: components.hour ?? 0,
-                minute: components.minute ?? 0
-            )
-        }
-    }
-
-    private func accountBinding(_ accountID: UUID) -> Binding<Bool> {
-        Binding {
-            plan.accountIDs.contains(accountID)
-        } set: { included in
-            if included { plan.accountIDs.insert(accountID) }
-            else { plan.accountIDs.remove(accountID) }
-        }
-    }
-
-    private func facilityBinding(_ facility: InfrastFacility) -> Binding<Bool> {
-        Binding {
-            plan.infrast.facilities.contains(facility)
-        } set: { enabled in
-            if enabled { plan.infrast.facilities.append(facility) }
-            else { plan.infrast.facilities.removeAll { $0 == facility } }
-        }
-    }
-
-    private func chooseInfrastSchedule() {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.allowedContentTypes = [.json]
-        if !plan.infrast.customSchedulePath.isEmpty {
-            panel.directoryURL = URL(filePath: plan.infrast.customSchedulePath).deletingLastPathComponent()
-        }
-        if panel.runModal() == .OK, let url = panel.url {
-            plan.infrast.customSchedulePath = url.path
-        }
+    private func selectTask(_ task: TaskKind) {
+        selectedTask = task
+        detailSection = .settings
     }
 
     private func move(_ task: TaskKind, by offset: Int) {
-        guard let index = plan.stepOrder.firstIndex(of: task) else { return }
-        let destination = index + offset
-        guard plan.stepOrder.indices.contains(destination) else { return }
-        plan.stepOrder.swapAt(index, destination)
+        guard !model.isWorkflowRunning,
+              let index = plan.stepOrder.firstIndex(of: task),
+              plan.stepOrder.indices.contains(index + offset)
+        else { return }
+        plan.stepOrder.swapAt(index, index + offset)
+        selectedTask = task
     }
 
-    private var customFightStage: Binding<Bool> {
+    private func enabledBinding(for task: TaskKind) -> Binding<Bool> {
         Binding {
-            useCustomFightStage ?? (FightStagePreset(rawValue: plan.fight.stage) == nil)
+            plan.isEnabled(task)
         } set: { enabled in
-            useCustomFightStage = enabled
-        }
-    }
-
-    private var fightStageStrategy: Binding<FightStageStrategy> {
-        Binding {
-            plan.fight.stageStrategy
-        } set: { strategy in
-            plan.fight.stageStrategy = strategy
-            if strategy == .fixed,
-               plan.fight.stage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                plan.fight.stage = FightStagePreset.oneSeven.rawValue
+            guard !model.isWorkflowRunning else { return }
+            switch task {
+            case .fight: plan.fight.enabled = enabled
+            case .recruit: plan.recruit.enabled = enabled
+            case .infrast: plan.infrast.enabled = enabled
+            case .mall: plan.mall.enabled = enabled
+            case .award: plan.award.enabled = enabled
             }
         }
     }
 
-    private func optionalToggle(_ value: Binding<Int?>, defaultValue: Int) -> Binding<Bool> {
-        Binding {
-            value.wrappedValue != nil
-        } set: { enabled in
-            value.wrappedValue = enabled ? (value.wrappedValue ?? defaultValue) : nil
-        }
-    }
-
-    private func optionalValue(_ value: Binding<Int?>, defaultValue: Int) -> Binding<Int> {
-        Binding { value.wrappedValue ?? defaultValue } set: { value.wrappedValue = $0 }
-    }
-
-    private func optionalStepper(
-        _ title: String,
-        value: Binding<Int?>,
-        defaultValue: Int,
-        range: ClosedRange<Int>,
-        unit: String
-    ) -> some View {
-        HStack {
-            Toggle(title, isOn: optionalToggle(value, defaultValue: defaultValue))
-            Spacer()
-            if value.wrappedValue != nil {
-                Stepper("\(value.wrappedValue ?? defaultValue) \(unit)", value: optionalValue(value, defaultValue: defaultValue), in: range)
-                    .accessibilityLabel(title)
-                    .accessibilityValue("\(value.wrappedValue ?? defaultValue) \(unit)")
-                    .fixedSize()
-            }
+    private func taskSummary(_ task: TaskKind) -> String {
+        switch task {
+        case .fight:
+            var parts = [plan.fight.usesCustomSettings ? (plan.fight.stageStrategy == .fixed ? plan.fight.stage : plan.fight.stageStrategy.title) : "MAA 推荐参数"]
+            if plan.fight.usesCustomSettings, let times = plan.fight.times { parts.append("最多 \(times) 次") }
+            if plan.fight.weeklyAnnihilation.enabled { parts.append("每周剿灭") }
+            return parts.joined(separator: " · ")
+        case .recruit:
+            return plan.recruit.usesCustomSettings
+                ? "\(plan.recruit.times) 次招募 · \(plan.recruit.expedite ? "使用加急许可" : "不使用加急许可")"
+                : "MAA 推荐参数"
+        case .infrast:
+            return plan.infrast.usesCustomSettings ? plan.infrast.mode.title : "完整换班 · 心情 30%"
+        case .mall:
+            guard plan.mall.usesCustomSettings else { return "MAA 推荐参数" }
+            return [plan.mall.visitFriends ? "访友信用" : nil, plan.mall.shopping ? "商店购物" : nil, plan.mall.creditFight ? "信用作战" : nil]
+                .compactMap { $0 }.joined(separator: " · ")
+        case .award:
+            guard plan.award.usesCustomSettings else { return "日常与周常奖励" }
+            let count = [plan.award.dailyWeekly, plan.award.mail, plan.award.freeRecruit, plan.award.orundum, plan.award.mining, plan.award.specialAccess].filter { $0 }.count
+            return "\(count) 项奖励"
         }
     }
 }
 
-private struct FightStageMemoryRow: Identifiable {
-    let clientID: UUID
-    let accountID: UUID
-    let label: String
-    let stage: String?
-    let weeklyStatus: WeeklyAnnihilationStatus?
-
-    var id: String { "\(clientID.uuidString)-\(accountID.uuidString)" }
-}
-
-private struct FightStageEditorContext: Identifiable {
-    let clientID: UUID
-    let accountID: UUID
-    let label: String
-    let stage: String?
-
-    init(row: FightStageMemoryRow) {
-        clientID = row.clientID
-        accountID = row.accountID
-        label = row.label
-        stage = row.stage
-    }
-
-    var id: String { "\(clientID.uuidString)-\(accountID.uuidString)" }
-}
-
-private struct FightStageEditorSheet: View {
+private struct PlanRenameSheet: View {
+    @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
-    @FocusState private var fieldFocused: Bool
-    @State private var stage: String
-
-    let context: FightStageEditorContext
+    @State var name: String
+    @FocusState private var isFocused: Bool
     let onSave: (String) -> Bool
 
-    init(context: FightStageEditorContext, onSave: @escaping (String) -> Bool) {
-        self.context = context
-        self.onSave = onSave
-        _stage = State(initialValue: context.stage ?? "")
-    }
-
-    private var normalizedStage: String? {
-        FightStagePolicy.regularStage(from: stage, times: 1)
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text("设置常规目标")
-                    .font(.title3.weight(.semibold))
-                Text(context.label)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 12) {
+            Text("重命名方案").font(.headline)
+            TextField("方案名称", text: $name)
+                .textFieldStyle(.roundedBorder)
+                .frame(maxWidth: FormWidth.shortText)
+                .focused($isFocused)
+                .disabled(model.isWorkflowRunning)
+            if model.isWorkflowRunning {
+                Text("运行结束后可保存").font(.caption).foregroundStyle(.secondary)
             }
-            Text("跟随常规关卡或每周优先剿灭时，用于恢复剿灭或临时兜底之前的目标。请指定 MAA 支持导航且已解锁的关卡；游戏内换到其他常规关卡后，下次运行会优先识别新目标。")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            LabeledContent("关卡") {
-                TextField("关卡", text: $stage, prompt: Text("如 1-7、CE-6 或 PR-A-1"))
-                    .labelsHidden()
-                    .textFieldStyle(.roundedBorder)
-                    .focused($fieldFocused)
-                    .frame(minWidth: 220)
-            }
-            if !stage.isEmpty, normalizedStage == nil {
-                Label {
-                    Text(FightStagePolicy.regularStageHint)
-                } icon: {
-                    Image(systemName: "exclamationmark.circle.fill")
-                        .foregroundStyle(Color.orange)
-                }
-                .font(.caption)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-            HStack {
+            Spacer(minLength: 0)
+            HStack(spacing: 12) {
                 Spacer()
-                Button("取消") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                Button("保存常规目标") {
-                    guard let normalizedStage, onSave(normalizedStage) else { return }
-                    dismiss()
+                Button { dismiss() } label: {
+                    Text("取消").frame(minWidth: 56)
+                }
+                .keyboardShortcut(.cancelAction)
+                Button {
+                    if onSave(name.trimmingCharacters(in: .whitespacesAndNewlines)) { dismiss() }
+                } label: {
+                    Text("保存").frame(minWidth: 56)
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(normalizedStage == nil)
+                .buttonStyle(.borderedProminent).tint(.maaAction)
+                .disabled(model.isWorkflowRunning || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
-        .padding(20)
-        .frame(width: 430)
-        .onAppear { fieldFocused = true }
-    }
-}
-
-private struct PlanTaskCard<Content: View>: View {
-    let task: TaskKind
-    @Binding var enabled: Bool
-    let content: Content
-
-    init(task: TaskKind, enabled: Binding<Bool>, @ViewBuilder content: () -> Content) {
-        self.task = task
-        _enabled = enabled
-        self.content = content()
-    }
-
-    var body: some View {
-        Panel {
-            VStack(alignment: .leading, spacing: 11) {
-                HStack(spacing: 10) {
-                    TaskIcon(task: task, enabled: enabled)
-                    Text(task.title)
-                        .font(.headline)
-                        .foregroundStyle(enabled ? Color.primary : Color.secondary)
-                    Spacer()
-                    Toggle("", isOn: $enabled)
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .accessibilityLabel("启用\(task.title)")
-                }
-                if enabled {
-                    Divider()
-                    content
-                }
-            }
-        }
-    }
-}
-
-extension PlanTaskCard {
-    init<Parameters: View>(
-        task: TaskKind,
-        enabled: Binding<Bool>,
-        usesCustomSettings: Binding<Bool>,
-        @ViewBuilder content: () -> Parameters
-    ) where Content == PlanTaskParameters<Parameters> {
-        self.init(task: task, enabled: enabled) {
-            PlanTaskParameters(task: task, usesCustomSettings: usesCustomSettings, content: content())
-        }
-    }
-}
-
-private struct PlanTaskParameters<Content: View>: View {
-    let task: TaskKind
-    @Binding var usesCustomSettings: Bool
-    let content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 11) {
-            PlanParameterModeRow(task: task, usesCustomSettings: $usesCustomSettings)
-            if usesCustomSettings {
-                VStack(alignment: .leading, spacing: 9) { content }
-            } else {
-                PlanRecommendedParameters(task: task)
-            }
-        }
-    }
-}
-
-private struct PlanParameterModeRow: View {
-    let task: TaskKind
-    @Binding var usesCustomSettings: Bool
-
-    var body: some View {
-        HStack {
-            Text("参数")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            Spacer()
-            Toggle("自定义参数", isOn: $usesCustomSettings)
-                .accessibilityLabel("\(task.title)自定义参数")
-                .toggleStyle(.switch)
-                .controlSize(.small)
-        }
-    }
-}
-
-private struct PlanRecommendedParameters: View {
-    let task: TaskKind
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Image(systemName: "arrow.uturn.backward.circle.fill")
-                .accessibilityHidden(true)
-            Text(summary)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-        }
-        .font(.caption)
-        .foregroundStyle(.secondary)
-    }
-
-    private var summary: String {
-        switch task {
-        case .fight: "MAA 推荐：不使用理智药或源石，不限制次数；未指定恢复目标时跟随游戏。"
-        case .recruit: "MAA 推荐默认：4 次、不加急，自动确认 3★/4★/5★并保留支援机械。"
-        case .infrast: "MAA 推荐默认：对全部设施执行常规换班，不使用无人机，上岗最低心情为 30%。"
-        case .mall: "MAA 推荐默认：访友领信用并按推荐清单购物。"
-        case .award: "MAA 推荐默认：只领取每日与每周任务奖励。"
-        }
+        .padding(24)
+        .frame(width: 380, height: 180, alignment: .topLeading)
+        .focusedSceneValue(\.workspaceActive, false)
+        .onAppear { isFocused = true }
     }
 }

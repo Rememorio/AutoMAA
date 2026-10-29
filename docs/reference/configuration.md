@@ -1,6 +1,6 @@
 # 数据与配置
 
-在“全局设置 → 数据与恢复”中点击“打开配置目录”，即可找到 AutoMAA 的本机数据。默认位置：
+在“设置 → 通用 → 数据与恢复”中点击“打开配置目录”，即可找到 AutoMAA 的本机数据。默认位置：
 
 ```text
 ~/Library/Application Support/AutoMAA
@@ -25,11 +25,11 @@
 
 | 文件或目录 | 内容 |
 | --- | --- |
-| `config.json` | 客户端、账号、方案和全局设置 |
+| `config.json` | 客户端、账号、方案和设置 |
 | `execution-state.json` | 各方案当天的成功断点、作战结果与剿灭／常规分阶段进度 |
 | `fight-stage-memory.json` | 每个账号记录的常规关卡与恢复状态 |
 | `weekly-annihilation.json` | 按客户端、账号、服务器与游戏周保存的剿灭状态；参与方案共享，独立于每日断点 |
-| `history.json` | 活动记录，包括运行结果与 MAA 更新详情 |
+| `history.json` | 运行记录，包括运行结果与 MAA 更新详情 |
 | `release-notes.json` | 更新说明缓存和阅读状态 |
 | `maa-maintenance.json` | 最近一次完整 MAA 更新尝试时间 |
 | `Logs/` | 最近 30 次 maa-cli 诊断输出，以及 Runner 与定时运行输出 |

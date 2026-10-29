@@ -98,6 +98,36 @@ struct ActivityPresentationTests {
         #expect(value.entries.count == 4)
     }
 
+    @Test("result notices retain earlier warnings without repeating displayed task failures")
+    func resultNotices() {
+        let account = UUID()
+        let warning = LogEntry(level: .warning, message: "正在重试", accountID: account, task: .mall)
+        let failure = LogEntry(level: .error, message: "信用商店连接失败", accountID: account, task: .mall)
+        let cleanup = LogEntry(level: .error, message: "清理失败")
+        let value = session([warning, failure, cleanup,
+                             .init(level: .warning, message: "部分完成", phase: .completed)])
+        let summary = ActivityResultSummary(session: value)
+        #expect(summary.accounts.first?.outcomes.map(\.id) == [failure.id])
+        #expect(summary.notices.map(\.id) == [warning.id, cleanup.id])
+        #expect(value.entries.count == 4)
+
+        let recovered = session([failure,
+            .init(level: .success, message: "重试成功", accountID: account, task: .mall)])
+        #expect(ActivityResultSummary(session: recovered).notices.map(\.id) == [failure.id])
+    }
+
+    @Test("account and maintenance notices are shown once when there is no task outcome")
+    func noticesWithoutTaskOutcomes() {
+        let unmatched = LogEntry(level: .warning, message: "账号未匹配", accountID: UUID())
+        let account = ActivityResultSummary(session: session([unmatched]))
+        #expect(account.accounts.first?.lastEvent.id == unmatched.id)
+        #expect(account.notices.isEmpty)
+
+        let earlier = LogEntry(level: .warning, message: "下载重试")
+        let failed = LogEntry(level: .error, message: "更新失败", phase: .failed)
+        #expect(ActivityResultSummary(session: session([earlier, failed])).notices.map(\.id) == [earlier.id])
+    }
+
     private func session(_ entries: [LogEntry]) -> ActivitySession {
         let start = Date(timeIntervalSince1970: 1_000)
         return ActivitySession(id: UUID().uuidString, runID: UUID(), entries: entries.enumerated().map { index, value in

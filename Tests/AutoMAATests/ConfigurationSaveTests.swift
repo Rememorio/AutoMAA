@@ -23,7 +23,7 @@ struct ConfigurationSaveTests {
         try FileManager.default.createDirectory(at: directories.configuration, withIntermediateDirectories: false)
         #expect(!model.saveNow(showConfirmation: false))
         #expect(model.configurationSaveError != nil)
-        model.bannerMessage = nil
+        model.feedback.dismiss()
         #expect(model.configurationSaveError != nil)
         #expect(model.configuration.plans[0].name == "保存测试")
 

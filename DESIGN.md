@@ -5,7 +5,6 @@ description: "A calm, native macOS control surface for configuring and supervisi
 colors:
   primary: "#007D78"
   primary-dark: "#4FCCC2"
-  info: "#217AF0"
 typography:
   sans:
     fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif"
@@ -14,30 +13,22 @@ typography:
 rounded:
   DEFAULT: "0.5625rem"
   sm: "0.5rem"
-  md: "0.625rem"
-  lg: "0.875rem"
+  md: "0.5rem"
+  lg: "0.5rem"
 spacing:
   control-gap: "0.5625rem"
-  card-gap: "0.875rem"
-  section-gap: "1.25rem"
-  page-inset: "1.75rem"
+  card-gap: "0.75rem"
+  section-gap: "1rem"
+  page-inset: "1.5rem"
   page-max: "66.25rem"
   reading-max: "56.25rem"
 components:
-  button:
-    textColor: "{colors.primary}"
   panel:
     rounded: "{rounded.lg}"
-  task-card:
+  task-row:
     textColor: "{colors.primary}"
   accent-dark:
     textColor: "{colors.primary-dark}"
-  field:
-    rounded: "{rounded.DEFAULT}"
-  app-background:
-    backgroundColor: "{colors.info}"
-  status: { }
-  dialog: { }
 ---
 
 # AutoMAA Design System
@@ -46,103 +37,110 @@ components:
 
 ### Creative North Star
 
-AutoMAA should feel like a well-organized macOS utility inspector: a quiet control desk where the current state, the next action, and any safety issue are visible without decorative competition. The product may acknowledge the game domain through task names and SF Symbols, but its visual register stays closer to System Settings and a native operations console than to a game launcher.
+AutoMAA 是原生 macOS MAA 工作流编排器。主界面应像一张整理好的工作台：方案、执行顺序和当前状态一眼可见，选中任务后就在旁边调整参数。多账号、常规关卡恢复、每周剿灭、定时与安全停止构成产品的操作重点。
 
-### Product context and register
+主要用户使用简体中文，在桌面上配置客户端与账号、安排日常、查看结果并处理异常。界面沿用 macOS 系统控件和 SF Symbols，密度参考 MaaMacGui 的任务列表、表单与工具栏。用紧凑行、原生复选框、按内容宽度显示的选择器和轻分隔组织操作；参数和运行语义由 `AutoMAAKit` 与 MAA 官方协议决定。
 
-- **Audience and primary job:** MAA users who configure recurring workflows across clients and accounts, then need to verify readiness, observe progress, and intervene safely when necessary.
-- **Target market(s) and evidence:** The shipped UI and user documentation are Simplified Chinese. Supported game servers do not by themselves establish additional market-specific visual conventions.
-- **Locale(s) and language policy:** User-facing product copy is concise Simplified Chinese. Protocol names, paths, identifiers, and upstream MAA terms remain in their canonical form when translation would reduce precision.
-- **Usage scene:** Desktop macOS use, often during setup or diagnosis, with moderately dense forms and repeated status checks. Safety and scanability have priority over promotional expression.
-- **Register:** Product utility throughout the application; the About and documentation entry points may carry slightly more brand expression.
-- **Memorable signature:** Teal `primary` marks runnable actions, active tasks, and selected operational state inside restrained material panels.
-- **Restraint:** Forms, scheduling, destructive actions, warnings, and progress use familiar native controls and stable geometry.
-- **Anti-references:** Avoid anime artwork, neon gaming dashboards, glass-heavy launchers, and generic web-admin chrome. They obscure operational hierarchy or conflict with the native macOS context.
-- **Token ownership/runtime mapping:** This document mirrors the canonical SwiftUI implementation in `Sources/AutoMAA/Theme.swift` and the shared views that consume it. Runtime values remain owned by SwiftUI and macOS semantic colors; review and design lint are the drift gates.
+青绿色强调选中项与可执行动作，其他区域保持安静。品牌只出现在侧栏身份和“关于”：保留原方框 Logo 和“直到日常变成一次运行”标语图。运行和配置界面避免角色装饰、持续动画及大面积游戏风格背景。
+
+运行时颜色与材料由 `Sources/AutoMAA/Theme.swift` 和 macOS 语义颜色维护；本文记录用途与视觉规则。窗口尺寸由 `AutoMAAApp`、`SettingsView` 和对应 sheet 管理，共享界面部件由 `InterfaceComponents.swift` 与 `SettingsPresentation.swift` 承载。行为规则见 [UX-CONTRACT.md](UX-CONTRACT.md)。
 
 ## Colors
 
-`primary` is the product accent for selection, active task iconography, and constructive actions. `info` is reserved for informational emphasis where a second cool hue is useful. Success, warning, and danger use the corresponding macOS semantic colors; they must not be repurposed for decoration or replaced with fixed light-mode values.
+`primary` 用于选中状态、任务图标和主要动作。浅色外观使用较深的青绿色，深色外观使用较亮的青绿色；带白色文字的强调按钮保持 `maaAction` 深色填充。信息提示沿用系统语义颜色。
 
-The accent adapts through the named AppKit color in `Theme.swift`: a deeper teal for light surfaces and a brighter teal for dark surfaces. Prominent actions use the deep `maaAction` fill in both appearances to retain contrast with their white labels. Selected weekday controls use primary text on a tinted surface; white text is not hand-painted on teal. Overview counts remain neutral, so warning and error colors retain operational meaning.
-
-Panels, labels, dividers, and text rely on SwiftUI semantic colors and materials so light mode, dark mode, increased contrast, and system appearance remain correct. Borders use low-opacity primary text rather than a fixed light-only gray. Status is never communicated by color alone: symbols or text accompany every important state.
+成功、警告和错误使用语义颜色，并配文字或符号；日志正文在浅色外观使用较深的绿、橙、红，以保持可读性。面板、背景、正文和分隔线使用动态颜色与原生材料，支持深浅色及增强对比度。总览数量保持中性色，让警告与错误保留辨识度。
 
 ## Typography
 
-The interface uses the macOS system family through SwiftUI text styles. Titles and section labels use native weight changes instead of separate display typefaces. Body and caption text remain readable in Simplified Chinese and mixed Chinese/Latin strings through the system fallback stack.
+正文、标题和控件使用 macOS 系统字体及 SwiftUI 字体层级，中文与 Latin 字符共用系统回退字体。标题通过字号、字重和间距形成层级。版本、关卡、时间、进度和数量按需要使用等宽字体或等宽数字。
 
-Technical values, stage names, percentages, and counters may use `mono` or monospaced digits when alignment or exact comparison matters. Controls use sentence-style Chinese labels; all-caps styling and decorative italics are avoided.
+文案使用简短、具体的简体中文；MAA、MaaCore、maa-cli、Profile 和协议字段保留准确名称。操作名称在菜单、按钮、反馈与指南中保持一致。
 
 ## Layout
 
-Primary editors use a centered content column capped at `page-max` with `page-inset` padding. Sections follow `section-gap`; related task cards use an adaptive grid with a 21.25rem minimum width and `card-gap`, allowing one column before content becomes cramped.
+主窗口使用 1180 × 780 点默认尺寸，内容区最小为 1020 × 680 点，用户可调整尺寸。原生标题栏与工具栏另计高度；当前最小外框为 1020 × 732 点，系统外观变化时以实际窗口布局为准。导航侧栏固定为 200 点，正文内部使用原生 `HSplitView` 分栏；标题栏横贯整个窗口，内容分隔线从工具栏下方开始。侧栏开关支持 ⌃⌘S，收起后保留当前页面、选择和侧栏滚动位置，展开时宽度保持一致。窗口顶部使用一排原生工具栏，方案名作为标题、账号与时间作为副标题；任务设置/运行信息切换、执行安排、更多操作和运行控制以紧凑图标置于右侧，使用选中底色、逐项悬停说明和辅助功能名称表达含义。标题栏使用不透明的系统背景并隐藏横向分隔线，滚动内容保持在工具栏下方；正文利用剩余空间。
 
-`PageLayout` and `AppPage` own the shared 28-point inset and 20-point section gap. Overview and plan editing use the 1060-point column; client/account editing, activity, settings and About use a 900-point reading column. Account and schedule settings share an adaptive row; step order uses a compact summary with a full-row disclosure for reordering. Fight settings occupy the full column at their position in the execution order, while consecutive shorter task cards keep the adaptive grid.
+方案与运行记录共用 `WorkspaceColumns`，与导航侧栏组成稳定三栏。中列宽度为 240–320 点，建议 280 点；右列最小 440 点并承担剩余宽度，始终保留。方案中列显示五类任务的顺序、启用状态和摘要，右列在任务设置与本方案运行信息间切换。点击任务返回设置；本方案开始运行时切到运行信息一次，随后保留用户选择，其他方案的后台运行不会抢占右栏。各列分别滚动，切换内容或出现错误时窗口外框保持稳定。
 
-Forms preserve label/control relationships with native `Picker`, `Toggle`, `Stepper`, `DatePicker`, and `TextField` behavior. Optional or conditional settings appear directly below their controlling choice. Loading, validation, and saved state must not change the width or position of the primary action.
+方案窗口副标题中的账号和时间为只读摘要，工具栏“执行安排…”是账号范围、定时和执行策略的统一入口。执行安排使用 560 × 520 点 sheet；客户端与账号编辑使用 520 × 480 点 sheet。它们将滚动内容放在固定标题和底部提交按钮之间。
+
+设置是独立窗口，四页共用 560 点宽度：通用、MAA 环境、更新、关于。系统 `Settings` 场景由 `SettingsToolbar` 提供 AppKit 原生偏好设置工具栏，标签显示图标加文字；选中项只切换 `SettingsPresentation` 正文，窗口标题独立固定为“设置”，避免页签先改名再回写。进入页面时按内容调整高度，保留至少 220 点正文；顶部工具栏尽量保持原位，以 0.22 秒缓动调整窗口，内容短暂淡入，开启“减少动态效果”时直接切换。窗口不超过当前屏幕可用区域，长内容内部滚动；同页新增摘要或错误时平滑增高，内容缩短不立即收回，避免下载阶段反复伸缩；切回页面重新适配。复制操作在原按钮位置显示对象名称与成功文字，窗口和正文尺寸保持不变。需要阅读的通用反馈与保存错误计入设置窗口高度，优先增高窗口以保留正文空间，超出屏幕可用高度再滚动。正文以标题、对齐字段和细分隔组成，不为每个设置分组套大卡片。二级界面应保持在屏幕可用区域内，内容较长时优先滚动；草稿表单错误放在滚动区域顶部并定位到错误，底部按钮保持可见。
+
+总览与客户端列表使用 `AppPage`、`PageLayout` 的 24 点边距。总览内容列上限 780 点，以日期、26 点问候标题和 32 点分区间距组织页面；方案使用开放列表与细分隔，展示名称、账号摘要、执行安排和一项当前状态，编辑与运行图标对齐行尾。方案标题栏用“执行 N 个账号”明确账号范围，无账号时显示“尚未选择账号”；定时状态区分未设定时、定时安排及同步异常，和当前运行状态分开。账号明细、任务顺序和长诊断在对应工作区查看。方案增多时整页纵向滚动，不另设嵌套滚动区域，窗口高度保持不变；原生标题栏背景遮住下方滚动内容，侧栏底部入口固定可达。最近运行整行可进入结果。客户端列表共用 780 点宽度，按客户端分组，账号缩进呈现；以组间细分隔代替外层卡片，正常启用状态不重复标注。其他阅读型页面上限 900 点。任务与记录工作区由分栏自行管理滚动和宽度。
 
 ## Elevation & Depth
 
-Hierarchy comes from macOS regular material, a one-pixel semantic border, and tonal grouping. Panels do not stack arbitrary shadows. Modal confirmation and system pickers use native elevation. Dark mode keeps the same hierarchy through materials and semantic opacity instead of a second hand-tuned palette.
+层级由标题、分隔线、轻背景和留白表达。需要包围独立对象或当前状态时，`Panel` 使用 12 点内边距、8 点连续圆角、2.5% 的正文色填充和语义细边框。普通内容没有材料渐变或阴影；设置、致谢和连续表单直接排在页面上。操作结果优先保留在所属页面。通用反馈占用当前窗口底部的内容区域，与正文分隔，避免遮挡；原生窗口与 sheet 使用系统层级。
 
 ## Shapes
 
-Large panels use `lg`; compact groups use `md`; editable fields use `DEFAULT`; task icon containers and small chips use `sm`. Corners remain continuous where SwiftUI supports them. Dividers and one-pixel strokes separate dense content; pills are limited to status or genuinely compact categorical controls.
+大面板使用 `lg` 圆角，紧凑分组使用 `md`，输入容器使用 `DEFAULT`，任务图标和短标签使用 `sm`。密集内容使用分隔线与分组间距组织；胶囊仅用于状态或简短类别。
 
 ## Components
 
-### Foundational visual states
+### 导航与控制
 
-Default state uses primary text and native control styling. Native buttons own pressed and keyboard activation; the shared disclosure header adds a quiet hover surface and a visible focus outline. Selected state uses `primary` plus a label or icon. Disabled actions stay visible at reduced opacity. Disabled task cards retain only their title and enable switch; saved parameters reappear when enabled. Success, warning, and error use semantic color with explicit copy. Busy work uses native `ProgressView`; skeletons are not part of the application language.
+侧栏所有导航项使用图标加文字：今日总览、自动化方案、客户端与账号、运行记录。左下角保留帮助与公告、查找日志和设置，三个入口共用 `footerButton`，图标列、文字起点和命中区域一致，悬停时显示轻背景。帮助与公告直接打开文档站；日志入口直接打开日志目录。Logo 使用原有透明素材，32 点展示。自动化方案标题与添加入口使用独立、不可选中的列表行，方案始终展开，避免原生折叠箭头在悬停时挤动或拦截添加入口。
 
-### Buttons and actions
+方案的运行与安全停止位于原生窗口工具栏右上角；总览从各方案行运行，空闲时不重复提供全局运行入口。运行期间保留全局安全停止。`PlanRunControl` 与菜单使用同一方案、准备状态和续跑规则；总览各方案行复用相同图标状态。普通导航保持中性，危险操作使用原生 destructive role。运行时顶部显示简短阶段与已知进度，点击进入运行记录；空闲时收起状态。自动保存成功保持安静，保存失败持续显示原因与重试入口。
 
-`SectionHeading`, `EntityIcon`, `SettingsToggleRow`, `StatusBadge`, `ReorderButtons` and `DetailDisclosure` in `InterfaceComponents.swift` own repeated page, heading, switch, status, ordering and detail treatments. Native button styles define ordinary actions. Action menus, including split buttons with a primary action, use `fixedSize(horizontal: true, vertical: false)` to size their trigger to its label and indicator; spacers own the remaining row width, while macOS owns popup sizing and keyboard behavior. The principal run action is visually prominent and belongs to the plan beside it. `PlanRunControl` renders ready and continuation actions, a configuration-check action, or a completed/busy status. Completed state never resembles a disabled play button. Ordinary navigation and edit actions stay neutral. Destructive actions use the destructive role and remain separated from constructive actions. Icon-only buttons require a help label and accessibility label.
+`ActionControls.swift` 按操作可辨识性统一行内与设置中的紧凑操作。播放、停止、铅笔编辑、添加及更多等常见控件使用 `ActionIconButton` / `ActionIconMenu`，保留 26 点命中区域、完整辅助功能名称与悬停说明。需要说明对象、去向或副作用的操作使用无边框的 `ActionTextButton` / `ActionTextMenu`：更新内容、检查更新、检测环境、通知测试、文件选择、添加账号、运行检查修复和记录导航均显示 SF Symbol 与短文字；菜单保留下拉指示。同类操作跨页面保持名称与图标一致，正文辅助操作使用中性色，警告处理使用语义色。`ActionTextLabel` 统一 14 点图标列、6 点间距、callout 字体与 26 点最小高度，状态会变的标签预留最大宽度。客户端标题行集中添加账号、编辑和更多操作；账号行保留编辑和更多，行尾对齐。空状态引导、保存、取消、下载、安装及恢复操作保留明确文字。按钮不能只在悬停时出现。更新进度中的取消仍使用紧凑图标，取消处理中保留相同尺寸并禁用；保存失败显示“重试保存”。搜索框为清除图标保留固定位置，输入与清除时不挤动文本区。
 
-### Navigation and data display
+macOS“AutoMAA”菜单中的设置、关于和更新指向同一设置窗口。更新菜单随实际阶段显示检查、下载进度或已就绪状态，安装动作留在更新页。应用不创建常驻菜单栏图标。
 
-The macOS sidebar is the persistent navigation model. Panels organize dashboards and editors; activity records use structured rows and expandable details. The sidebar footer shows global idle/running state and retains progress, stop and activity navigation during a run; it does not duplicate the plan picker or start action. Overview cards own their next scheduled time, compact expandable execution scope, readiness issues and plan action. Dense values use aligned digits, not oversized KPI decoration.
+### 任务参数
 
-Activity places its record toolbar after the current-work panel and pins it when scrolling through records. The history heading and native three-part run selector (全部 / 提醒 / 失败) form the leading group; `ActivitySearchField` and the neutral icon-only actions menu form the trailing group. Narrow layouts move search and actions onto a second row. Toolbar content and date-grouped record panels share `PageLayout.inset`; a stable caption row explains the displayed scope and offers filter reset. The semantic window background keeps pinned content readable in either appearance without introducing another panel.
+`PlanEditorView` 管理唯一五类任务列表、选择与排序，`PlanTaskInspector` 管理所选任务参数。列表直接拖动，右键菜单保留上移、下移作为键盘与辅助操作入口。停用任务仍保留参数，再次启用后继续使用。
 
-History uses aligned time columns, quiet dividers and two-line summaries inside one panel per day. A single run expands into account outcomes with drops and short explanations directly visible, followed by notices and an optional complete timeline; rows never expand automatically when new records arrive. Current recovery is a directly visible queue grouped by plan above the live run or daily state. Warning color is reserved for actionable state and recorded warnings, rather than repeated decorative badges. Search and level selection retain the whole matching run and never filter the live feed.
+参数模式与其他短选项使用按内容宽度显示的原生菜单 `Picker`，不拉满参数栏。切到“MAA 推荐参数”只改变模式，自定义值继续保留。常用参数直接显示，条件字段随控制项出现；只有较长的账号状态、诊断及历史过程使用折叠。理智作战按常规作战、理智与次数、每周剿灭分组，各组的说明留在所属控件旁。
 
-Content disclosures use `FullWidthDisclosureStyle`: the whole title row is a native button, at least 36 points tall, with explicit expanded state and keyboard focus. Only long diagnostics and optional historical detail start collapsed; actionable recovery and pending work stay visible. Sidebar hierarchy retains the native outline behavior.
+次数、普通理智药、临期理智药和源石沿用可选值语义；零值与未设置保持区别。关闭可选项后省略生成字段，同一次应用会话内重新开启时恢复此前输入，缓存按方案和字段隔离。账号常规目标、兜底关卡与每周剿灭沿用既有执行规则。
 
-### Forms and overlays
+### 表单与二级界面
 
-Data entry uses native controls and keeps validation near the affected setting. Short finite-choice pickers and numeric steppers use their native intrinsic width with `fixedSize(horizontal: true, vertical: false)` so labels, values and actions remain together. Text entry, segmented controls and sliders retain the space appropriate to their content. `DelimitedListField` retains raw editing text until focus leaves or the user submits; switching stage input modes preserves the chosen target. A controlling strategy choice precedes its conditional fields. Confirmation dialogs are reserved for destructive or consequential actions. Banners summarize save and run results in a bounded overlay; details remain in readiness or activity views. Save failures also persist in a bottom inset with a retry action until saving succeeds. Settings explains automatic saving without duplicating a manual save button. Banner and editable-name transitions respect Reduce Motion. Shared behavior and native-control ownership are documented in [UX-CONTRACT.md](UX-CONTRACT.md).
+使用原生 `TextField`、`Picker`、`Toggle`、`Stepper` 和时间控件。客户端与账号草稿通过 `EditorFieldRow` 对齐标签和输入区，取消与提交按钮并排置于右下角。短选项与数值控件按内容宽度显示；`FormWidth` 统一关卡输入 160 点、名称及标识等短文本 220 点、多项清单与设施选项 320 点、数值行与滑条 300 点的宽度上限。输入靠近标签，长文本和路径保留足够空间与完整值访问方式。系统负责输入法、焦点、菜单、滚动条和选项弹层。
 
-Task cards follow the plan’s step order. A configured schedule starts as a full-row expandable summary; new/disabled schedules and errors expose their controls. Task cards share `PlanParameterModeRow` and `PlanRecommendedParameters`; the parameter mode applies to the whole task. The fight card groups weekly annihilation, its weekday and regular stage settings in the left “作战安排” column, beside “用药与次数” on the right. Weekly annihilation uses `SettingsToggleRow` and a native weekday `Picker`, and remains available in both parameter modes. Explanations stay with their owning controls; combined account status and recovery follow below across the card. Execution policy likewise groups preparation and failure handling side by side. These sections stack at narrow widths; account status wraps rather than clipping long labels. `FightRecoveryActions` owns explicit weekly-confirmation, retry, and daily manual-handling actions in plan settings and the activity recovery queue. Confirmation and manual handling save records without launching a game; manual handling preserves the unconfirmed evidence and never counts as automatic success. Actions remain visible while busy, with an inline explanation. Activity places actionable current state before immutable historical runs; historical rows contain no live recovery or resume actions, and status counts wrap at narrow widths.
+客户端为空时，说明与唯一的添加入口在右侧内容区居中；创建成功后切换到可滚动列表。任务参数、任务启用与顺序、通用设置自动保存。执行安排、客户端和账号编辑使用独立草稿及明确的取消/应用或取消/保存按钮；取消返回原页面，保存失败保留输入与原配置。编辑期间不连续打开第二个创建表单。删除、重置完成记录、尝试 Beta 等有明确后果的操作使用原生确认。
 
-`PendingWorkList` shares the account, task or phase, and known reason presentation across Overview and Activity. It directly groups remaining work by account with wrapping rows and task symbols. Unstarted daily work stays in a compact state summary rather than enumerating future tasks. Run labels remain stable across task types; exact continuation scope comes from the core state model beside the action.
+`DelimitedListField` 在失焦或提交前保留原始输入；切换关卡输入方式保留目标。错误就近显示并说明修正方式。`ApplicationFeedbackSurface` 统一普通反馈与保存失败的图标、内边距和操作位置，保存失败持续显示重试入口。动画遵循“减少动态效果”。
 
-### Update behavior
+运行检查使用 560 × 380 点 sheet，固定标题和完成按钮，正文独立滚动。问题分为“需要处理”和“提醒”，每行保留完整原因，并在右侧用图标加短文字明确修复去向；缺少客户端时对应问题直接提供创建入口。maa-cli 路径以单独的等宽文本行展示，长路径中间截断，可悬停查看和复制。底部仅保留完成，Escape 与 Return 都可关闭；修复导航在 sheet 关闭后执行。
 
-`UpdateProgressRow` owns pending update feedback in Settings: named stage, elapsed time, the shared limit from `UpdatePolicy` or `MAAUpdateContext`, and a consistently labeled “取消更新” action aligned to the top of the row. Known transfer sizes add a native linear progress bar, received/total bytes and a percentage; unknown totals never produce an estimated percentage. MAA transfers reserve a caption line for recent average speed and estimated download time, using only newly received bytes; before enough samples exist, the line explains that estimation is pending. Download completion yields to extraction, synchronization and validation feedback before the update is ready. Automatic and manual work use the same controls with their respective budgets. Cancellation remains busy until cleanup finishes; old rate samples cannot survive cancellation, retry or a later attempt. Reusable MAA archive bytes persist separately from candidate installations, and cancellation or failure explains whether the cache was retained. Transfer samples stay transient and do not flood activity history. Errors remain beside the owning update action and in MAA activity history. `AppModel.startMAAUpdate` owns both automatic and manual MAA task lifecycle. `WorkflowRunner` owns staged validation and activation; the UI never infers compatibility.
+### 运行记录与恢复
 
-“更新 MAA” includes the engine and recognition data; “仅更新识别数据” synchronizes separately published data without replacing the engine. Beta remains an explicit native confirmation. SwiftUI/macOS own focus, menus, semantic colors and scrolling; these native variants also apply to update controls.
+运行记录中列使用原生列表：搜索框与筛选图标在同一行，筛选使用带勾选状态的原生菜单，底部持续显示当前条件和清除入口。当前运行和各方案今日事项独立于历史条件，历史按日期分组。右列显示选中对象的详情；历史的“运行结果 / 完整过程”以原生窗口工具栏图标切换，记录操作和当前方案运行入口也集中在工具栏。方案标题与今日摘要合并呈现，最近结果直接展示账号、掉落和提醒，通过“完整记录”进入对应历史；日志采用“时间 / 信息”两列及系统隔行底色；信息正文按成功、提醒、错误分别使用绿、橙、红，普通信息保持正文色，上下文与诊断使用次要色。逐行日志省略重复状态图标，读屏名称保留等级；整体结果摘要保留状态图标。标题、状态与行尾操作放在同一行并对齐首条文字基线。选择以稳定记录 ID 保留，新增事件不抢占用户正在阅读的历史。实时日志提供明确的“跟随最新”，空记录与筛选无结果分别说明。
 
-Release information remains visible independently of operation state. Settings shows the installed and target versions with a short list of changes; `UpdateDetailsView` is the shared native sheet for full release notes and MAA installation comparisons. Settings uses one release-notes entry with an unread marker; when an update exists, its menu distinguishes the target and installed versions. About retains a permanent current-version entry. Headings, lists and source links preserve the upstream document structure; technical validation output stays in disclosure details. Offline or missing notes never replace known version information or change update eligibility. MAA history distinguishes the installed snapshot from a successfully activated snapshot and labels upstream GUI-specific content.
+`PendingWorkList` 统一展示账号、待执行任务和已知原因；`FightRecoveryActions` 统一呈现确认本周已满、重新尝试和当天不再重试。可操作的恢复项直接显示，长诊断使用 `DetailDisclosure`。历史描述当次结果，当前操作来自最新运行状态。
 
-### Iconography
+`FullWidthDisclosureStyle` 的整行标题至少 36 点高，提供悬停、键盘焦点和展开状态。重要文字可换行、选择和复制。空历史、筛选无结果和当前无待办各自使用明确文案。
 
-Use SF Symbols. Filled task symbols are acceptable inside the 2rem task container; ordinary action symbols follow the native rendering mode. Symbols support text rather than replace it for consequential actions.
+### 更新与反馈
 
-Brand artwork is limited to project identity: `Assets/AutoMAA-logo.png` uses a tilted frame on transparency for README, documentation, sidebar and About. `Assets/AutoMAA-icon.png` uses a circular frame on a gradient rounded tile exclusively for the macOS application icon, generated as `Assets/AutoMAA.icns`. Web variants derive from the transparent logo. Preserve the character and framing across sizes; do not add artwork to operational controls.
+`UpdateProgressRow` 统一自动与手动更新的阶段、耗时、实际时限和取消操作。已知总大小时显示真实字节数、百分比和进度；未知总大小时使用原生不定进度。MAA 下载速度与预计剩余时间只使用本次传输样本，阶段变化或重试后清理旧估计。
 
-### Motion
+下载完成后继续显示解压、同步与校验；校验通过才进入就绪。取消保持忙碌直到清理完成，并说明下载缓存是否保留。错误位于所属更新操作附近，详细信息可在运行记录查看。
 
-Motion communicates focus or state transitions and stays short, typically around 140ms for local feedback. Animations must be interruptible and respect Reduce Motion. Avoid continuous decorative animation.
+AutoMAA 更新与 MAA 环境分属设置的两个页面。版本信息和发布说明独立于下载状态保留；`UpdateDetailsView` 使用固定 560 × 520 点 sheet 展示完整说明或安装对照，正文内部滚动，关闭说明只取消说明请求。缺少上游说明时保留已知版本和操作状态。关于页集中版本、原标语图、开源致谢与诊断复制。检测、发布说明和复制操作使用中性图标与短文字，直接说明动作或对象。MAA 维护标题右侧的“更新 MAA”打开原生菜单，列出稳定版、识别数据和 Beta 更新；Beta 保留确认，点击菜单本身不启动更新。AutoMAA 本体的下载、安装与授权保留文字。低频数据操作进入“数据与恢复”的更多菜单，重置继续使用原生确认。
 
-### Content and data visualization
+复制路径和诊断信息共用 `ClipboardCopyButton`：常态显示图标与“复制”加对象名称，成功后显示对勾与“已复制”加对象名称，4 秒后恢复；控件预留所有状态的最大宽度，保持 26 点最小高度，不挤动相邻内容。重复复制重新计时，失败保留具体对象与警告图标，并显示所属窗口的错误信息；重试成功只清除该次复制产生的错误。
 
-Product voice is direct, specific, and actionable. State copy says what happened and what the user can do next. Times use the user's locale and 24-hour scheduling presentation already established by the app. Counts and percentages use monospaced digits when they update in place. There is no chart palette until a data visualization is introduced with an accessible textual alternative.
+更新检查、下载、取消、失败与环境检测结果显示在原页面，不另发全局提示。`ApplicationFeedbackCenter` 统一管理其他通用反馈：按产生时的活动窗口分配唯一呈现位置，切换焦点不复制提示；信息和成功提示在 6 秒后消失，警告和错误保持可关闭。每条反馈使用独立 ID，旧计时器不能清除新提示。配置保存失败持续显示并提供重试入口。
+
+### 图标与品牌资产
+
+普通操作采用 SF Symbols。任务图标可使用填充变体及 32 点容器；图标支持文字层级。运行等紧凑控制可以只显示图标，保留工具提示、辅助功能名称和可见禁用状态。
+
+`Assets/AutoMAA-logo.png` 是方框透明 Logo，用于侧栏、关于与文档；`Assets/AutoMAA-icon.png` 和生成的 `Assets/AutoMAA.icns` 用于应用图标。“直到日常变成一次运行”直接使用 `Assets/AutoMAA-slogan.png`。保持原素材的角色、框架与比例，不重绘为文字或加入操作控件。视觉资产许可与源代码许可分别保留。
+
+### 动效
+
+动效只解释焦点或状态变化，局部反馈通常约 140 毫秒。动画可打断并遵循系统“减少动态效果”。加载使用原生 `ProgressView`，不加入持续装饰动画。
 
 ## Do's and Don'ts
 
-- **Do:** Keep safety checks, remembered state, and the next recovery action visible beside the setting they affect.
-- **Do:** Reuse native controls, semantic colors, `Panel`, and established spacing before introducing a new component.
-- **Don't:** Add game-themed decoration, gradients, or animated chrome to routine configuration surfaces.
-- **Don't:** hide errors behind color-only state, transient hover, or layout-shifting banners.
+- 保持当前方案、执行范围、运行状态和下一步操作可辨认。
+- 优先使用系统控件、动态颜色与共享部件，保证深浅色及键盘行为一致。
+- 常用任务参数直接呈现，长诊断和历史细节按需展开。
+- 保留原配置字段和 schema 7；五类任务各一份配置，布局选择与临时缓存只属于界面会话。
+- 避免依赖颜色、悬停或短暂提示传达唯一的错误信息。

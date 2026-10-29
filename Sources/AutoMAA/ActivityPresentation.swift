@@ -106,6 +106,24 @@ struct ActivityAccountSummary: Identifiable {
     }
 }
 
+struct ActivityResultSummary {
+    let accounts: [ActivityAccountSummary]
+    let notices: [LogEntry]
+
+    init(session: ActivitySession) {
+        accounts = ActivityAccountSummary.groups(in: session)
+        let displayedIDs = Set(accounts.isEmpty
+            ? session.entries.last.map { [$0.id] } ?? []
+            : accounts.flatMap { account in
+                account.outcomes.isEmpty ? [account.lastEvent.id] : account.outcomes.map(\.id)
+            })
+        notices = session.entries.filter {
+            ($0.level == .warning || $0.level == .error)
+                && $0.phase != .completed && !displayedIDs.contains($0.id)
+        }
+    }
+}
+
 enum ActivitySearch {
     static func matches(_ session: ActivitySession, query: String, title: String,
                         context: (LogEntry) -> String?) -> Bool {

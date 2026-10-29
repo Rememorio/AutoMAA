@@ -61,6 +61,6 @@ shasum -a 256 -c AutoMAA-<版本>-macOS-arm64.dmg.sha256
 
 ## 确认安装完成
 
-打开 AutoMAA 的“全局设置”，确认 `maa-cli` 路径正确，点击“检测环境”能看到版本信息。然后进入[首次配置](./getting-started)。若检测失败，先查看[常见问题](../troubleshooting/common#找不到-maa-cli)。
+打开 AutoMAA 的“设置 → MAA 环境”，确认 `maa-cli` 路径正确，点击“检测环境”能看到版本信息。然后进入[首次配置](./getting-started)。若检测失败，先查看[常见问题](../troubleshooting/common#找不到-maa-cli)。
 
 后续维护见[更新应用与 MAA](./updates)；不需要为每次更新重新配置账号和方案。

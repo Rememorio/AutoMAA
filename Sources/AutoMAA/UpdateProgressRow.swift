@@ -18,6 +18,7 @@ struct UpdateProgressRow: View {
                     Text(isCancelling ? "正在结束传输并整理更新文件…" : message)
                         .font(.subheadline)
                 }
+                .frame(minHeight: 26, alignment: .leading)
                 if !isCancelling, let download = progress {
                     if let fraction = download.fractionCompleted {
                         ProgressView(value: fraction)
@@ -53,12 +54,9 @@ struct UpdateProgressRow: View {
                 .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Button(action: cancel) {
-                Text(isCancelling ? "正在取消…" : "取消更新")
-                    .frame(minWidth: 64)
-            }
+            ActionIconButton(title: isCancelling ? "正在取消更新" : "取消更新", symbol: "xmark.circle",
+                             help: isCancelling ? "正在结束传输并清理临时文件" : "取消更新并清理临时文件", action: cancel)
             .disabled(isCancelling)
-            .fixedSize()
         }
         .accessibilityElement(children: .contain)
     }

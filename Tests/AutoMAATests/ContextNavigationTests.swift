@@ -5,6 +5,20 @@ import Testing
 
 @Suite("Context navigation")
 struct ContextNavigationTests {
+    @Test("readiness offers client creation only when the account issue has no existing client")
+    func readinessEmptyConfigurationRepair() {
+        let planID = UUID()
+        let issue = ReadinessIssue(id: "plan-accounts-empty", severity: .error,
+                                   message: "没有可执行的账号", scope: .plan(planID))
+        #expect(PlanReadiness.repairDestination(for: issue, hasClients: false) == .newClient)
+        #expect(PlanReadiness.repairDestination(for: issue, hasClients: true) == .configuration(.plan(planID)))
+        let environment = ReadinessIssue(id: "maa-cli-missing", severity: .error,
+                                        message: "缺少 MAA", repairTarget: .settings)
+        #expect(PlanReadiness.repairDestination(for: environment, hasClients: false) == .configuration(.settings))
+        let unknown = ReadinessIssue(id: "unmapped", severity: .warning, message: "需要人工检查")
+        #expect(PlanReadiness.repairDestination(for: unknown, hasClients: false) == nil)
+    }
+
     @Test("opening an update result reveals its run while ordinary navigation retains filters")
     @MainActor
     func updateResultNavigation() throws {
@@ -31,7 +45,9 @@ struct ContextNavigationTests {
 
         model.activitySearch = "账号搜索"
         model.activityFilter = .failed
-        model.selection = .settings
+        model.showSettings()
+        #expect(model.selection == .activity)
+        model.selection = .clients
         model.selection = .activity
         #expect(model.activitySearch == "账号搜索")
         #expect(model.activityFilter == .failed)
@@ -52,7 +68,7 @@ struct ContextNavigationTests {
         #expect(model.activityNavigationRequest == nil)
         #expect(model.activitySearch == "已有条件")
         #expect(model.activityFilter == .attention)
-        #expect(model.bannerMessage?.contains("记录已被清除") == true)
+        #expect(model.feedback.notice?.message.contains("记录已被清除") == true)
     }
 
     @Test("readiness repairs target the owning settings, client or account without changing plan scope")
@@ -69,25 +85,32 @@ struct ContextNavigationTests {
         let plan = AutomationPlan.lightRoutine
         model.configuration = AppConfiguration(cliPath: root.appending(path: "missing-cli").path,
                                                clients: [client], plans: [plan])
+        model.selection = .plan(plan.id)
         let problems = ConfigurationValidator.readinessProblems(in: model.configuration, planID: plan.id)
         let settings = try #require(problems.first { $0.id == "maa-cli-missing" }?.repairTarget)
         #expect(settings == .settings)
         model.showConfigurationRepair(settings)
-        #expect(model.selection == .settings)
+        #expect(model.selection == .plan(plan.id))
+        #expect(model.settingsSection == .environment)
+        #expect(model.currentPlanID == plan.id)
 
         for suffix in ["name-empty", "app-missing", "bundle-missing", "address-invalid"] {
             let problem = try #require(problems.first { $0.id == "client-\(client.id)-\(suffix)" })
             #expect(problem.scope == .plan(plan.id))
             #expect(problem.repairTarget == .client(client.id))
             model.showConfigurationRepair(try #require(problem.repairTarget))
-            #expect(model.selection == .client(client.id))
+            #expect(model.selection == .clients)
+            #expect(model.entityEditor == .client(client.id))
+            #expect(model.currentPlanID == plan.id)
         }
         for suffix in ["name-empty", "selector-empty"] {
             let problem = try #require(problems.first { $0.id == "account-\(account.id)-\(suffix)" })
             #expect(problem.scope == .plan(plan.id))
             #expect(problem.repairTarget == .account(clientID: client.id, accountID: account.id))
             model.showConfigurationRepair(try #require(problem.repairTarget))
-            #expect(model.selection == .account(client.id, account.id))
+            #expect(model.selection == .clients)
+            #expect(model.entityEditor == .account(client.id, account.id))
+            #expect(model.currentPlanID == plan.id)
         }
         let planProblem = ConfigurationProblem(id: "plan-problem", severity: .error,
                                                 message: "方案参数错误", scope: .plan(plan.id))

@@ -34,7 +34,7 @@ features:
     details: 作战、公招、基建、信用购物与奖励领取，既可使用推荐参数，也能按方案精细调整。
   - icon: 📋
     title: 结果与异常
-    details: 在活动记录中查看每次运行的结果、失败原因和日志，需要人工处理时接收系统通知。
+    details: 在运行记录中查看每次运行的结果、失败原因和日志，需要人工处理时接收系统通知。
   - icon: 🕗
     title: 每方案定时
     details: 每个方案分别选择星期和时间。在用户登录、Mac 唤醒时，主 App 退出后仍能按时运行。
@@ -43,33 +43,6 @@ features:
 <figure class="slogan-artwork">
   <img src="/automaa-slogan.webp" width="1836" height="856" loading="lazy" decoding="async" alt="直到日常变成一次运行。Till the Dailies Become One Run." />
 </figure>
-
-<section class="product-showcase" aria-labelledby="product-tour-title">
-  <div class="showcase-heading">
-    <span class="showcase-kicker">工作方式</span>
-    <h2 id="product-tour-title">一眼看清每套日常怎样执行</h2>
-    <p>从总览确认方案、目标账号和运行条件；需要调整时，再进入客户端或任务配置。</p>
-  </div>
-
-  <figure class="product-shot product-shot-wide">
-    <img class="theme-shot theme-shot-light" src="./assets/screenshots/overview-light.webp" width="2360" height="1560" alt="AutoMAA 今日总览：展示简中服与日服两个客户端、两个演示账号和两套日常方案" />
-    <img class="theme-shot theme-shot-dark" src="./assets/screenshots/overview-dark.webp" width="2360" height="1560" alt="AutoMAA 今日总览：展示简中服与日服两个客户端、两个演示账号和两套日常方案" />
-    <figcaption><strong>今日总览</strong><span>每套方案直接显示今日状态与下次定时，可按需展开执行范围并运行。</span></figcaption>
-  </figure>
-
-  <div class="product-shot-grid">
-    <figure class="product-shot">
-      <img class="theme-shot theme-shot-light" src="./assets/screenshots/client-settings-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="AutoMAA 客户端配置：服务器、应用、MaaTools、独立 Profile、账号队列和生命周期保护" />
-      <img class="theme-shot theme-shot-dark" src="./assets/screenshots/client-settings-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="AutoMAA 客户端配置：服务器、应用、MaaTools、独立 Profile、账号队列和生命周期保护" />
-      <figcaption><strong>客户端与账号队列</strong><span>每个客户端独立配置，顺序、连接与关闭边界都清晰可见。</span></figcaption>
-    </figure>
-    <figure class="product-shot">
-      <img class="theme-shot theme-shot-light" src="./assets/screenshots/task-settings-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="AutoMAA 方案设置：执行账号、定时、步骤顺序与跟随常规关卡的作战参数" />
-      <img class="theme-shot theme-shot-dark" src="./assets/screenshots/task-settings-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="AutoMAA 方案设置：执行账号、定时、步骤顺序与跟随常规关卡的作战参数" />
-      <figcaption><strong>熟悉的 MAA 任务参数</strong><span>需要时精细配置，不需要时关闭开关使用 MAA 推荐值。</span></figcaption>
-    </figure>
-  </div>
-</section>
 
 <section class="home-note">
   <div>

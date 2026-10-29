@@ -2,32 +2,26 @@ import SwiftUI
 
 struct PlanRunControl: View {
     @EnvironmentObject private var model: AppModel
-
     let planID: UUID
-    var controlSize: ControlSize = .regular
 
     var body: some View {
         switch model.planRunState(planID: planID) {
         case .ready:
             let progress = model.continuation(for: planID)
             if progress.pending > 0 {
-                Button { model.runPlan(planID) } label: {
-                    Label(model.runTitle(for: planID), systemImage: "play.fill")
+                ActionIconButton(title: actionTitle(model.runTitle(for: planID)), symbol: "play.fill",
+                                 tint: .maaAccent, help: model.runHelp(for: planID)) {
+                    model.runPlan(planID)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.maaAction)
-                .controlSize(controlSize)
-                .help(model.runHelp(for: planID))
             } else if progress.unconfirmed > 0 {
-                Button {
-                    model.selectCurrentPlan(planID)
-                    model.selection = .activity
-                } label: {
-                    Label("处理待确认结果", systemImage: "exclamationmark.circle")
+                ActionTextButton(title: "处理结果", symbol: "exclamationmark.circle", tint: .orange,
+                                 help: actionTitle("处理待确认结果")) {
+                    model.showPlanActivity(planID)
                 }
-                .controlSize(controlSize)
             } else {
-                status(progress.completionTitle, symbol: progress.manuallyHandled > 0 ? "checkmark.circle" : "checkmark.circle.fill", tint: progress.manuallyHandled > 0 ? .secondary : .green)
+                status(progress.completionTitle,
+                       symbol: progress.manuallyHandled > 0 ? "checkmark.circle" : "checkmark.circle.fill",
+                       tint: progress.manuallyHandled > 0 ? .secondary : .green)
             }
         case .running:
             status("正在运行", symbol: "arrow.triangle.2.circlepath", tint: .maaAccent)
@@ -36,21 +30,24 @@ struct PlanRunControl: View {
         case .maintenanceRunning:
             status("维护进行中", symbol: "wrench.and.screwdriver")
         case .configurationIncomplete:
-            Button {
+            ActionTextButton(title: "检查配置", symbol: "exclamationmark.circle", tint: .orange,
+                             help: actionTitle("检查配置")) {
                 model.readinessRequest = PlanReadinessRequest(id: planID)
-            } label: {
-                Label("检查配置", systemImage: "exclamationmark.circle")
             }
-            .controlSize(controlSize)
-            .tint(.orange)
         }
     }
 
+    private func actionTitle(_ title: String) -> String {
+        let name = model.configuration.plans.first { $0.id == planID }?.displayName ?? "当前方案"
+        return "\(title) · \(name)"
+    }
+
     private func status(_ title: String, symbol: String, tint: Color = .secondary) -> some View {
-        Label(title, systemImage: symbol)
-            .font(.callout.weight(.medium))
+        Label(actionTitle(title), systemImage: symbol)
+            .labelStyle(.iconOnly)
             .foregroundStyle(tint)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.vertical, 6)
+            .frame(width: 26, height: 26)
+            .help(actionTitle(title))
+            .accessibilityLabel(actionTitle(title))
     }
 }

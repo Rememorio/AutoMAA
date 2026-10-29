@@ -57,37 +57,47 @@ struct UpdateDetailsView: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    if case let .maa(information) = resolvedRequest { installedVersions(information) }
-                    ForEach(releases) { release in releaseSection(release) }
-                    if isLoading {
-                        HStack(spacing: 10) {
-                            ProgressView().controlSize(.small)
-                            Text("正在读取更新说明…").foregroundStyle(.secondary)
-                        }
-                    } else if releases.isEmpty, error == nil, notice == nil {
-                        Text("上游未提供可读取的详细变更说明。已知版本与修订信息显示在上方。")
-                            .foregroundStyle(.secondary)
+                    if let notice {
+                        Text(notice)
+                            .font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
                     }
-                    if let notice { Text(notice).font(.callout).foregroundStyle(.secondary) }
                     if let error {
                         Label(error, systemImage: "exclamationmark.circle")
                             .font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+                    if case let .maa(information) = resolvedRequest { installedVersions(information) }
+                    ForEach(releases) { release in releaseSection(release) }
+                    if !isLoading, releases.isEmpty, error == nil, notice == nil {
+                        Text("上游未提供可读取的详细变更说明。已知版本与修订信息显示在上方。")
+                            .foregroundStyle(.secondary)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(24)
             }
             Divider()
-            HStack {
-                if error != nil || notice != nil {
-                    Button("重新读取说明") { reloadID += 1 }.disabled(isLoading)
+            HStack(spacing: 12) {
+                if isLoading {
+                    ProgressView().controlSize(.small)
+                    Text("正在读取更新说明…")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else if error != nil || notice != nil {
+                    Label(error == nil ? "部分说明暂不可用" : "更新说明读取失败", systemImage: "exclamationmark.circle")
+                        .font(.caption).foregroundStyle(.secondary)
+                    ActionTextButton(title: "重新读取", symbol: "arrow.clockwise", help: "重新读取更新说明") { reloadID += 1 }
                 }
                 Spacer()
                 Button("完成") { dismiss() }.keyboardShortcut(.defaultAction)
             }
+            .frame(minHeight: 28)
             .padding(16)
         }
-        .frame(minWidth: 620, idealWidth: 720, maxWidth: 820, minHeight: 460, idealHeight: 640, maxHeight: 760)
+        .frame(width: 560, height: 520)
+        .focusedSceneValue(\.workspaceActive, false)
         .environment(\.openURL, OpenURLAction { url in
             ReleaseNotes.safePageURL(url) == nil ? .discarded : .systemAction
         })

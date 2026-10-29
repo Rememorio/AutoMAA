@@ -84,7 +84,7 @@ struct ScheduleManagementTests {
         model.setPlanScheduleRuleTime(completeID, ruleID: completeRuleID, hour: 10, minute: 17)
         model.setPlanScheduleEnabled(completeID, true)
         #expect(model.configuration.plans[1].schedule.enabled == false)
-        #expect(model.bannerMessage?.contains("周一定时运行冲突") == true)
+        #expect(model.feedback.notice?.message.contains("周一定时运行冲突") == true)
 
         model.setPlanScheduleEnabled(lightID, false)
         model.setPlanScheduleEnabled(lightID, true)
