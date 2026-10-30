@@ -113,11 +113,12 @@ struct ApplicationLifecycleTests {
 
     @MainActor
     private func waitForExternalState(_ active: Bool, model: AppModel) async throws {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
-        while model.isExternalRunActive != active, ContinuousClock.now < deadline {
+        // Give the monitor another scheduling opportunity after a busy main actor resumes.
+        for _ in 0..<150 {
+            if model.isExternalRunActive == active { return }
             try await Task.sleep(for: .milliseconds(20))
         }
-        #expect(model.isExternalRunActive == active)
+        try #require(model.isExternalRunActive == active)
     }
 
     private func action(
