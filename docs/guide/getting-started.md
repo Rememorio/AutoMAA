@@ -3,7 +3,7 @@
 先配置一个客户端、一个账号和一个方案，跑通后再扩展账号与定时。可以在尚未安装 MAA 时填写配置；运行前完成[MAA 运行环境安装](./installation)、游戏登录和数据下载。
 
 ::: info 文档版本
-本页对应 [v0.16.0-beta.1 预发布版](https://github.com/Rememorio/AutoMAA/releases/tag/v0.16.0-beta.1)界面。使用当前正式安装包时，请参阅 [v0.15.10 首次配置](https://github.com/Rememorio/AutoMAA/blob/v0.15.10/docs/guide/getting-started.md)。
+本页对应 [v0.16.0-beta.2 预发布版](https://github.com/Rememorio/AutoMAA/releases/tag/v0.16.0-beta.2)界面。使用当前正式安装包时，请参阅 [v0.15.10 首次配置](https://github.com/Rememorio/AutoMAA/blob/v0.15.10/docs/guide/getting-started.md)。
 :::
 
 ## 认识主窗口
