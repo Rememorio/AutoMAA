@@ -16,9 +16,9 @@ open .build/AutoMAA.app --args --data-directory /tmp/automaa-development
 
 ## 上游协议范围
 
-任务生成与作战结果解析对照 [MaaCore v6.18.0](https://github.com/MaaAssistantArknights/MaaAssistantArknights/releases/tag/v6.18.0)、[MAA 集成文档](https://docs.maa.plus/zh-cn/protocol/integration.html) 和 [maa-cli v0.7.5](https://github.com/MaaAssistantArknights/maa-cli/releases/tag/v0.7.5)。临期理智药使用 `medicine_expire_days`，公招保留标签使用 `preserve_tags`；不生成旧字段 `expiring_medicine`、`skip_robot` 或已失效的 `expedite_times`。
+任务生成参数与配置结构对照 [MaaCore v6.20.1](https://github.com/MaaAssistantArknights/MaaAssistantArknights/releases/tag/v6.20.1)、[MAA 集成文档](https://docs.maa.plus/zh-cn/protocol/integration.html) 和 [maa-cli v0.7.7](https://github.com/MaaAssistantArknights/maa-cli/releases/tag/v0.7.7) 的[任务 schema](https://github.com/MaaAssistantArknights/maa-cli/blob/v0.7.7/crates/maa-cli/schemas/task.schema.json)与[连接 schema](https://github.com/MaaAssistantArknights/maa-cli/blob/v0.7.7/crates/maa-cli/schemas/asst.schema.json)。临期理智药使用 `medicine_expire_days`，公招保留标签使用 `preserve_tags`；不生成旧字段 `expiring_medicine`、`skip_robot` 或已失效的 `expedite_times`。
 
-AutoMAA 仅提供已建模的日常任务参数，不等同于上游 GUI 的完整能力。v6.18.0 新增的三星招聘许可保留量、基建副手换班和限时活动签到暂未提供配置入口；不会自动启用这些选项。基建设施继续按方案中明确列出的设施派发。maa-cli 的 Profile 连接方式、额外资源加载顺序和服务器游戏日偏移保持独立核对。
+AutoMAA 提供已建模的日常任务参数。三星招聘许可保留量、基建副手换班、限时活动签到和回收站（`Recycle`）换班暂未提供配置入口；不会自动启用这些选项。基建设施按方案中明确列出的设施派发，自定义训练位参数由外部排班 JSON 交给 MaaCore 解析。maa-cli 的 Profile 连接方式、额外资源加载顺序和服务器游戏日偏移保持独立核对；作战结果与回调解析的依据见下文。
 
 ## 代码从哪里看
 
