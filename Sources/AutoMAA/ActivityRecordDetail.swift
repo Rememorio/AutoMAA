@@ -188,32 +188,19 @@ struct ActivitySessionContents: View {
         let accounts = summary.accounts
         return VStack(alignment: .leading, spacing: 18) {
             if accounts.isEmpty, let entry = session.entries.last {
-                Text(entry.message).font(.callout).textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                ActivityEntryDetails(entry: entry)
+                ActivityLogRows(entries: [entry])
             }
             ForEach(accounts) { account in
                 VStack(alignment: .leading, spacing: 9) {
                     Text(ActivityRecordPresentation.context(account.lastEvent, clients: model.configuration.clients) ?? "已移除的账号")
                         .font(.subheadline.weight(.semibold))
                     if account.outcomes.isEmpty {
-                        Text("未记录任务结果 · \(account.lastEvent.message)")
+                        Text("未记录任务结果")
                             .font(.callout).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    ForEach(account.outcomes) { entry in
-                        HStack(alignment: .top, spacing: 8) {
-                            Image(systemName: entry.level.symbol)
-                                .foregroundStyle(entry.level.color).frame(width: 16)
-                                .accessibilityHidden(true)
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(entry.message).textSelection(.enabled)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                ActivityEntryDetails(entry: entry)
-                            }
-                        }
-                        .font(.callout)
-                    }
+                    ActivityLogRows(entries: account.outcomes.isEmpty ? [account.lastEvent] : account.outcomes,
+                                    showsContext: false)
                 }
                 if account.id != accounts.last?.id { Divider() }
             }
@@ -278,6 +265,7 @@ struct ActivityLiveLog: View {
 struct ActivityLogRows: View {
     @EnvironmentObject private var model: AppModel
     let entries: [LogEntry]
+    var showsContext = true
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 0) {
@@ -291,7 +279,8 @@ struct ActivityLogRows: View {
             Divider()
             ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                 ActivityEventRow(entry: entry,
-                    context: ActivityRecordPresentation.context(entry, clients: model.configuration.clients))
+                    context: showsContext
+                        ? ActivityRecordPresentation.context(entry, clients: model.configuration.clients) : nil)
                     .padding(.horizontal, 10).padding(.vertical, 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color(nsColor: NSColor.alternatingContentBackgroundColors[index % 2]))
