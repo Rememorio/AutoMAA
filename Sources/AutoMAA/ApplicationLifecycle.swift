@@ -130,8 +130,12 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
             alert.runModal()
             return .terminateCancel
         case .stopWorkflow, .cancelUpdate, .waitForCleanup:
+            model.setTerminationPreparationActive(true)
             let scope = ApplicationTerminationScope.capture(model)
-            guard confirmTermination(action) else { return .terminateCancel }
+            guard confirmTermination(action) else {
+                model.setTerminationPreparationActive(false)
+                return .terminateCancel
+            }
             waitForTermination(sender, model: model, scope: scope)
             return .terminateLater
         }
@@ -190,12 +194,17 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
                 sender.reply(toApplicationShouldTerminate: false)
                 return
             }
-            defer { self.terminationTask = nil }
+            var terminationAllowed = false
+            defer {
+                self.terminationTask = nil
+                if !terminationAllowed { model.setTerminationPreparationActive(false) }
+            }
             let deadline = ContinuousClock.now.advanced(by: .seconds(120))
             var requestedCancellation = false
             while !Task.isCancelled {
                 model.reloadActivityHistory()
                 if case .installing = model.applicationUpdateState {
+                    terminationAllowed = true
                     sender.reply(toApplicationShouldTerminate: true)
                     return
                 }
@@ -211,6 +220,7 @@ final class ApplicationDelegate: NSObject, NSApplicationDelegate {
                         return
                     }
                     let saved = model.saveNow(showConfirmation: false)
+                    terminationAllowed = saved
                     sender.reply(toApplicationShouldTerminate: saved)
                     return
                 }

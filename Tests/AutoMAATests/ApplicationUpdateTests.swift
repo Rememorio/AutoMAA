@@ -25,9 +25,13 @@ private final class InstallerValidationSpy {
 private actor StubSoftwareUpdateService: SoftwareUpdateServing {
     let release: SoftwareUpdateRelease
     let prepared: PreparedSoftwareUpdate
-    let restored: PreparedSoftwareUpdate?
+    var restored: PreparedSoftwareUpdate?
     private(set) var checkCount = 0
+    private(set) var checkedChannels: [SoftwareUpdateChannel] = []
+    var savesLateDownload = false
+    var returnsLateRestoration = false
     private(set) var prepareCount = 0
+    private(set) var restorationCount = 0
     var slowChecks = false
     var slowDownloads = false
     var returnsLateResult = false
@@ -44,19 +48,22 @@ private actor StubSoftwareUpdateService: SoftwareUpdateServing {
         self.restored = restored
     }
 
-    func check() async throws -> SoftwareUpdateRelease? {
+    func check(channel: SoftwareUpdateChannel) async throws -> SoftwareUpdateRelease? {
         checkCount += 1
+        checkedChannels.append(channel)
         if checkFails { throw URLError(.notConnectedToInternet) }
         if slowChecks {
+            slowChecks = false
             do { try await Task.sleep(for: .seconds(30)) }
-            catch { throw URLError(.cancelled) }
+            catch { if !returnsLateResult { throw URLError(.cancelled) } }
         }
-        return hasUpdate ? release : nil
+        return hasUpdate && channel.accepts(release) ? release : nil
     }
 
     func prepare(
         _ release: SoftwareUpdateRelease,
         directories: AppDirectories,
+        channel: SoftwareUpdateChannel,
         progress: @escaping @Sendable (UpdateProgress) async -> Void
     ) async throws -> PreparedSoftwareUpdate {
         prepareCount += 1
@@ -71,13 +78,30 @@ private actor StubSoftwareUpdateService: SoftwareUpdateServing {
                 catch { throw URLError(.cancelled) }
             }
         }
+        if savesLateDownload {
+            try FileManager.default.createDirectory(at: prepared.applicationURL, withIntermediateDirectories: true)
+            try PreparedSoftwareUpdateStore(directories: directories).save(prepared)
+        }
         return prepared
     }
 
-    func restorePreparedUpdate(directories: AppDirectories) async throws -> PreparedSoftwareUpdate? {
-        if slowRestoration { try await Task.sleep(for: .seconds(30)) }
+    func saveDownloadAfterCancellation() { savesLateDownload = true }
+    func restore(_ prepared: PreparedSoftwareUpdate?, late: Bool = false) {
+        restored = prepared
+        slowRestoration = late
+        returnsLateRestoration = late
+    }
+
+    func restorePreparedUpdate(directories: AppDirectories, channel: SoftwareUpdateChannel) async throws -> PreparedSoftwareUpdate? {
+        restorationCount += 1
+        let result = restored
+        if slowRestoration {
+            slowRestoration = false
+            do { try await Task.sleep(for: .seconds(30)) }
+            catch { if !returnsLateRestoration { throw error } }
+        }
         if restorationFails { throw URLError(.timedOut) }
-        return restored
+        return result
     }
 
     func counts() -> (checks: Int, prepares: Int) {
@@ -109,6 +133,154 @@ private actor StubSoftwareUpdateService: SoftwareUpdateServing {
 
 @Suite("Application updates")
 struct ApplicationUpdateTests {
+    @Test("termination confirmation also defers checks after empty cache restoration")
+    @MainActor
+    func terminationDefersCheckAfterRestoration() async throws {
+        let fixture = try makeFixture(automaticallyDownloads: false, startup: true)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        fixture.model.prepareApplication()
+        fixture.model.setTerminationPreparationActive(true)
+        let scope = ApplicationTerminationScope.capture(fixture.model)
+        try await waitUntil { !fixture.model.applicationUpdateState.isBusy }
+        #expect(scope.contains(.capture(fixture.model)))
+        #expect(await fixture.service.counts().checks == 0)
+        fixture.model.setTerminationPreparationActive(false)
+        try await waitUntil { !fixture.model.applicationUpdateState.isBusy }
+        #expect(await fixture.service.counts().checks == 1)
+    }
+
+    @Test("termination confirmation defers a pending channel check until quitting is cancelled")
+    @MainActor
+    func terminationDefersChannelRecheck() async throws {
+        let fixture = try makeFixture(automaticallyDownloads: true, receivesPrereleases: true, releaseVersion: "0.16.0-beta.2")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        await fixture.service.delay(downloads: true, lateResult: true)
+        await fixture.service.saveDownloadAfterCancellation()
+        fixture.model.checkForApplicationUpdate()
+        try await waitUntil { fixture.model.applicationUpdateProgress != nil }
+        fixture.model.setPrereleaseApplicationUpdatesEnabled(false)
+        fixture.model.setTerminationPreparationActive(true)
+        let scope = ApplicationTerminationScope.capture(fixture.model)
+        try await waitUntil { !fixture.model.applicationUpdateState.isBusy }
+        #expect(scope.contains(.capture(fixture.model)))
+        #expect(await fixture.service.counts().checks == 1)
+        #expect(try PreparedSoftwareUpdateStore(directories: fixture.model.directories).load() == nil)
+        #expect(!fixture.model.canChangeApplicationUpdateChannel)
+        fixture.model.setTerminationPreparationActive(false)
+        try await waitUntil { !fixture.model.applicationUpdateState.isBusy }
+        #expect(await fixture.service.checkedChannels == [.preview, .stable])
+        #expect(fixture.model.canChangeApplicationUpdateChannel)
+    }
+
+    @Test("switching channels discards late checks and uses the last preference")
+    @MainActor
+    func switchingChannelsDuringCheck() async throws {
+        let fixture = try makeFixture(automaticallyDownloads: true, receivesPrereleases: true, releaseVersion: "0.16.0-beta.2")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        await fixture.service.delay(checks: true, lateResult: true)
+        fixture.model.checkForApplicationUpdate()
+        try await waitUntilAsync { await fixture.service.counts().checks == 1 }
+        fixture.model.setPrereleaseApplicationUpdatesEnabled(false)
+        fixture.model.setPrereleaseApplicationUpdatesEnabled(true)
+        fixture.model.setPrereleaseApplicationUpdatesEnabled(false)
+        if case .cancelling = fixture.model.applicationUpdateState {} else { Issue.record("旧检查应先退出") }
+        await fixture.service.delay()
+        try await waitUntil { !fixture.model.applicationUpdateState.isBusy }
+        #expect(await fixture.service.checkedChannels == [.preview, .stable])
+        #expect(await fixture.service.counts().prepares == 0)
+        #expect(fixture.model.applicationUpdateRelease == nil)
+        #expect(!fixture.model.configuration.applicationUpdates.receivesPrereleaseUpdates)
+    }
+
+    @Test("leaving preview waits for a late saved download before removing its manifest")
+    @MainActor
+    func switchingChannelsDuringDownload() async throws {
+        let fixture = try makeFixture(automaticallyDownloads: true, receivesPrereleases: true, releaseVersion: "0.16.0-beta.2")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        await fixture.service.delay(downloads: true, lateResult: true)
+        await fixture.service.saveDownloadAfterCancellation()
+        fixture.model.checkForApplicationUpdate()
+        try await waitUntil { fixture.model.applicationUpdateProgress != nil }
+        fixture.model.setPrereleaseApplicationUpdatesEnabled(false)
+        try await waitUntil { !fixture.model.applicationUpdateState.isBusy }
+        #expect(fixture.model.applicationUpdateRelease == nil)
+        #expect(fixture.model.applicationUpdateProgress == nil)
+        #expect(await fixture.service.counts().prepares == 1)
+        #expect(try PreparedSoftwareUpdateStore(directories: fixture.model.directories).load() == nil)
+        #expect(!FileManager.default.fileExists(atPath: fixture.service.prepared.workingDirectory.path))
+        await fixture.service.reportProgress(.init(message: "过期回调"), attempt: 0)
+        #expect(fixture.model.applicationUpdateProgress == nil)
+        fixture.model.downloadApplicationUpdate(fixture.service.release)
+        #expect(await fixture.service.counts().prepares == 1)
+    }
+
+    @Test("leaving preview invalidates an installed candidate and stale installation actions")
+    @MainActor
+    func switchingChannelsWhenReady() async throws {
+        let installer = InstallerValidationSpy()
+        let fixture = try makeFixture(automaticallyDownloads: true, receivesPrereleases: true,
+                                      releaseVersion: "0.16.0-beta.2", availabilityValidator: { try installer.validate() })
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        await fixture.service.saveDownloadAfterCancellation()
+        fixture.model.checkForApplicationUpdate()
+        try await waitUntil {
+            if case .ready = fixture.model.applicationUpdateState { return true }; return false
+        }
+        installer.rejectsInstallerStart = true
+        fixture.model.setPrereleaseApplicationUpdatesEnabled(false)
+        try await waitUntil { !fixture.model.applicationUpdateState.isBusy }
+        fixture.model.restartAndInstallApplicationUpdate(fixture.service.prepared)
+        #expect(!installer.reachedInstallerValidation)
+        #expect(fixture.model.applicationUpdateRelease == nil)
+        #expect(try PreparedSoftwareUpdateStore(directories: fixture.model.directories).load() == nil)
+    }
+
+    @Test("switching channels while restoring ignores a late preview candidate")
+    @MainActor
+    func switchingChannelsDuringRestoration() async throws {
+        let fixture = try makeFixture(automaticallyDownloads: true, startup: true,
+                                      receivesPrereleases: true, releaseVersion: "0.16.0-beta.2")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        await fixture.service.restore(fixture.service.prepared, late: true)
+        fixture.model.prepareApplication()
+        try await waitUntilAsync { await fixture.service.restorationCount == 1 }
+        fixture.model.setPrereleaseApplicationUpdatesEnabled(false)
+        await fixture.service.restore(nil)
+        try await waitUntil { !fixture.model.applicationUpdateState.isBusy }
+        #expect(fixture.model.applicationUpdateRelease == nil)
+        #expect(await fixture.service.counts().prepares == 0)
+        #expect(await fixture.service.checkedChannels.last == .stable)
+    }
+
+    @Test("installed previews can wait for stable without accepting a downgrade")
+    @MainActor
+    func installedPreviewWaitsForStable() async throws {
+        let fixture = try makeFixture(automaticallyDownloads: true, releaseVersion: "0.15.10", currentVersion: "0.16.0-beta.1")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        await fixture.service.checkResult(hasUpdate: false)
+        fixture.model.checkForApplicationUpdate()
+        try await waitUntil { !fixture.model.applicationUpdateState.isBusy }
+        #expect(fixture.model.applicationUpdateCurrentStatus == "暂无更新的正式版本")
+        fixture.model.downloadApplicationUpdate(fixture.service.release)
+        #expect(await fixture.service.counts().prepares == 0)
+    }
+
+    @Test("enabling preview persists the preference and prepares a newer beta")
+    @MainActor
+    func enablingPreviewChecksImmediately() async throws {
+        let fixture = try makeFixture(automaticallyDownloads: true, releaseVersion: "0.16.0-beta.2", currentVersion: "0.16.0-beta.1")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        fixture.model.setPrereleaseApplicationUpdatesEnabled(true)
+        try await waitUntil {
+            if case .ready = fixture.model.applicationUpdateState { return true }; return false
+        }
+        #expect(fixture.model.saveNow(showConfirmation: false))
+        let configuration = try ConfigurationStore(directories: fixture.model.directories).load()
+        #expect(configuration.applicationUpdates.receivesPrereleaseUpdates)
+        #expect(await fixture.service.checkedChannels == [.preview])
+        #expect(fixture.model.applicationUpdateRelease?.version.description == "0.16.0-beta.2")
+    }
+
     @Test("update checks keep their result on the update page without global feedback", arguments: [false, true])
     @MainActor
     func checkResultIsInline(fails: Bool) async throws {
@@ -428,6 +600,9 @@ struct ApplicationUpdateTests {
     private func makeFixture(
         automaticallyDownloads: Bool,
         startup: Bool = false,
+        receivesPrereleases: Bool = false,
+        releaseVersion: String = "9.9.9",
+        currentVersion: String = "0.15.10",
         availabilityValidator: @escaping @MainActor () throws -> Void = {}
     ) throws -> (root: URL, model: AppModel, service: StubSoftwareUpdateService) {
         let root = FileManager.default.temporaryDirectory
@@ -437,23 +612,24 @@ struct ApplicationUpdateTests {
         configuration.cliPath = "/usr/bin/true"
         configuration.maaUpdates.automaticallyUpdatesCoreAndResources = false
         configuration.applicationUpdates.automaticallyDownloadsUpdates = automaticallyDownloads
+        configuration.applicationUpdates.receivesPrereleaseUpdates = receivesPrereleases
         try ConfigurationStore(directories: directories).save(configuration)
-        let version = try #require(SoftwareVersion("9.9.9"))
-        let diskImageName = "AutoMAA-9.9.9-macOS-arm64.dmg"
+        let version = try #require(SoftwareVersion(releaseVersion))
+        let diskImageName = "AutoMAA-\(releaseVersion)-macOS-arm64.dmg"
         let release = SoftwareUpdateRelease(
             version: version,
-            tagName: "v9.9.9",
+            tagName: "v\(releaseVersion)",
             releaseNotes: "测试更新",
-            pageURL: URL(string: "https://github.com/Rememorio/AutoMAA/releases/tag/v9.9.9")!,
+            pageURL: URL(string: "https://github.com/Rememorio/AutoMAA/releases/tag/v\(releaseVersion)")!,
             diskImage: SoftwareUpdateAsset(
                 name: diskImageName,
                 size: 1,
-                downloadURL: URL(string: "https://github.com/Rememorio/AutoMAA/releases/download/v9.9.9/\(diskImageName)")!
+                downloadURL: URL(string: "https://github.com/Rememorio/AutoMAA/releases/download/v\(releaseVersion)/\(diskImageName)")!
             ),
             checksum: SoftwareUpdateAsset(
                 name: "\(diskImageName).sha256",
                 size: 1,
-                downloadURL: URL(string: "https://github.com/Rememorio/AutoMAA/releases/download/v9.9.9/\(diskImageName).sha256")!
+                downloadURL: URL(string: "https://github.com/Rememorio/AutoMAA/releases/download/v\(releaseVersion)/\(diskImageName).sha256")!
             )
         )
         let workingDirectory = root
@@ -470,11 +646,21 @@ struct ApplicationUpdateTests {
             launchAgentsDirectory: root.appending(path: "LaunchAgents", directoryHint: .isDirectory),
             managesSystemLaunchAgents: false,
             checksForUpdatesAutomatically: startup,
+            applicationVersion: currentVersion,
             softwareUpdateService: service,
             applicationUpdateAvailabilityValidator: availabilityValidator,
             releaseNotesService: UnavailableReleaseNotesService()
         )
         return (root, model, service)
+    }
+
+    @MainActor
+    private func waitUntilAsync(_ condition: () async -> Bool) async throws {
+        for _ in 0..<100 {
+            if await condition() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        Issue.record("等待更新服务超时")
     }
 
     @MainActor

@@ -106,7 +106,7 @@ struct SettingsView: View {
             switch model.applicationUpdateState {
             case .idle:
                 updateRow(
-                    message: "启动时会自动检查正式版本。",
+                    message: "启动时自动检查更新 · \(model.applicationUpdateChannelDescription)",
                     buttonTitle: "检查更新",
                     action: { model.checkForApplicationUpdate() }
                 )
@@ -120,8 +120,8 @@ struct SettingsView: View {
             case .upToDate:
                 updateRow(
                     message: model.applicationUpdateCheckedAt.map {
-                        "已是最新版本 · \($0.formatted(date: .omitted, time: .standard)) 检查"
-                    } ?? "已是最新版本。",
+                        "\(model.applicationUpdateCurrentStatus) · \($0.formatted(date: .omitted, time: .standard)) 检查"
+                    } ?? model.applicationUpdateCurrentStatus,
                     symbol: "checkmark.circle.fill",
                     color: .green,
                     buttonTitle: "再次检查",
@@ -202,6 +202,15 @@ struct SettingsView: View {
             }
             Divider()
             SettingsToggleRow(
+                title: "接收预发布更新",
+                detail: "包含 Beta、RC 等预发布版本，可能出现新问题。关闭后保留当前版本，等待更新的正式版。",
+                isOn: Binding(
+                    get: { model.configuration.applicationUpdates.receivesPrereleaseUpdates },
+                    set: { model.setPrereleaseApplicationUpdatesEnabled($0) }
+                )
+            )
+            .disabled(!model.canChangeApplicationUpdateChannel)
+            SettingsToggleRow(
                 title: "自动下载并准备更新",
                 detail: "空闲时下载并校验，准备好后手动重启安装。",
                 isOn: Binding(
@@ -209,12 +218,12 @@ struct SettingsView: View {
                     set: { model.setAutomaticApplicationUpdatesEnabled($0) }
                 )
             )
-            Text("来源：\(model.applicationUpdateRepository) · 正式 Release")
+            Text("来源：\(model.applicationUpdateRepository) · \(model.applicationUpdateChannelDescription)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .help("仅从 \(model.applicationUpdateRepository) 的正式 Release 下载。MAA 与游戏包体分别维护。")
+                .help("从 \(model.applicationUpdateRepository) 下载所选通道的更新。MAA 与游戏包体分别维护。")
         }
     }
 

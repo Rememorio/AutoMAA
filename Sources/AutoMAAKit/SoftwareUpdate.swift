@@ -1,35 +1,17 @@
 import CryptoKit
 import Foundation
 
-public struct SoftwareVersion: Codable, Comparable, CustomStringConvertible, Sendable {
-    public let major: Int
-    public let minor: Int
-    public let patch: Int
+public enum SoftwareUpdateChannel: String, Codable, Sendable {
+    case stable
+    case preview
 
-    public init?(_ value: String) {
-        var normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if normalized.lowercased().hasPrefix("v") {
-            normalized.removeFirst()
-        }
-        normalized = String(normalized.split(whereSeparator: { $0 == "-" || $0 == "+" }).first ?? "")
-        let parts = normalized.split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count == 3,
-              let major = Int(parts[0]),
-              let minor = Int(parts[1]),
-              let patch = Int(parts[2]),
-              major >= 0, minor >= 0, patch >= 0
-        else { return nil }
-        self.major = major
-        self.minor = minor
-        self.patch = patch
+    public func accepts(_ release: SoftwareUpdateRelease) -> Bool {
+        self == .preview || !release.version.isPrerelease
     }
 
-    public var description: String {
-        "\(major).\(minor).\(patch)"
-    }
-
-    public static func < (lhs: SoftwareVersion, rhs: SoftwareVersion) -> Bool {
-        (lhs.major, lhs.minor, lhs.patch) < (rhs.major, rhs.minor, rhs.patch)
+    public func allows(_ release: SoftwareUpdateRelease, currentVersion: String) -> Bool {
+        guard let current = SoftwareVersion(currentVersion) else { return false }
+        return accepts(release) && release.version > current
     }
 }
 
@@ -226,7 +208,9 @@ public enum SoftwareUpdateError: Equatable, LocalizedError, Sendable {
 }
 
 public enum SoftwareUpdateReleaseResolver {
-    public static func newerRelease(from data: Data, currentVersion: String) throws -> SoftwareUpdateRelease? {
+    public static func newerRelease(
+        from data: Data, currentVersion: String, channel: SoftwareUpdateChannel = .stable
+    ) throws -> SoftwareUpdateRelease? {
         guard let current = SoftwareVersion(currentVersion) else {
             throw SoftwareUpdateError.invalidCurrentVersion(currentVersion)
         }
@@ -236,13 +220,49 @@ public enum SoftwareUpdateReleaseResolver {
         } catch {
             throw SoftwareUpdateError.invalidRelease(error.localizedDescription)
         }
-        guard !response.draft, !response.prerelease,
-              let version = SoftwareVersion(response.tagName)
+        guard !response.draft, let version = SoftwareVersion(response.tagName),
+              !response.prerelease || version.isPrerelease,
+              channel == .preview || (!response.prerelease && !version.isPrerelease)
         else {
             throw SoftwareUpdateError.invalidRelease("版本号、草稿或预发布状态不符合要求")
         }
         guard version > current else { return nil }
 
+        return try release(from: response, version: version)
+    }
+
+    public static func newestRelease(
+        from data: Data, currentVersion: String, channel: SoftwareUpdateChannel
+    ) throws -> SoftwareUpdateRelease? {
+        let responses = try JSONDecoder().decode([GitHubReleaseResponse].self, from: data)
+        return try newestRelease(from: responses, currentVersion: currentVersion, channel: channel)
+    }
+
+    fileprivate static func newestRelease(
+        from responses: [GitHubReleaseResponse], currentVersion: String, channel: SoftwareUpdateChannel
+    ) throws -> SoftwareUpdateRelease? {
+        guard let current = SoftwareVersion(currentVersion) else {
+            throw SoftwareUpdateError.invalidCurrentVersion(currentVersion)
+        }
+        let candidates = responses.compactMap { response -> (GitHubReleaseResponse, SoftwareVersion)? in
+            guard !response.draft, let version = SoftwareVersion(response.tagName), version > current,
+                  !response.prerelease || version.isPrerelease,
+                  channel == .preview || (!response.prerelease && !version.isPrerelease) else { return nil }
+            return (response, version)
+        }.sorted { $0.1 > $1.1 }
+        var missingAssets: SoftwareUpdateError?
+        for (response, version) in candidates {
+            do { return try release(from: response, version: version) }
+            catch let error as SoftwareUpdateError {
+                guard case .missingAssets = error else { throw error }
+                if missingAssets == nil { missingAssets = error }
+            }
+        }
+        if let missingAssets { throw missingAssets }
+        return nil
+    }
+
+    private static func release(from response: GitHubReleaseResponse, version: SoftwareVersion) throws -> SoftwareUpdateRelease {
         let diskImageName = "AutoMAA-\(version)-macOS-arm64.dmg"
         let checksumName = "\(diskImageName).sha256"
         guard let diskImage = response.assets.first(where: { $0.name == diskImageName }),
@@ -274,7 +294,7 @@ public enum SoftwareUpdateReleaseResolver {
 
     static func validate(_ release: SoftwareUpdateRelease) throws {
         let diskImageName = "AutoMAA-\(release.version)-macOS-arm64.dmg"
-        guard SoftwareVersion(release.tagName) == release.version,
+        guard SoftwareVersion(release.tagName)?.description == release.version.description,
               release.diskImage.name == diskImageName,
               release.checksum.name == "\(diskImageName).sha256"
         else {
@@ -329,12 +349,12 @@ public enum SoftwareUpdateVerifier {
 }
 
 public protocol SoftwareUpdateServing: Sendable {
-    func check() async throws -> SoftwareUpdateRelease?
+    func check(channel: SoftwareUpdateChannel) async throws -> SoftwareUpdateRelease?
     func prepare(
-        _ release: SoftwareUpdateRelease, directories: AppDirectories,
+        _ release: SoftwareUpdateRelease, directories: AppDirectories, channel: SoftwareUpdateChannel,
         progress: @escaping @Sendable (UpdateProgress) async -> Void
     ) async throws -> PreparedSoftwareUpdate
-    func restorePreparedUpdate(directories: AppDirectories) async throws -> PreparedSoftwareUpdate?
+    func restorePreparedUpdate(directories: AppDirectories, channel: SoftwareUpdateChannel) async throws -> PreparedSoftwareUpdate?
 }
 
 public actor SoftwareUpdateService: SoftwareUpdateServing {
@@ -360,21 +380,40 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
         self.session = session
     }
 
-    public func check() async throws -> SoftwareUpdateRelease? {
+    public func check(channel: SoftwareUpdateChannel = .stable) async throws -> SoftwareUpdateRelease? {
         try await UpdateDeadline(timeout: UpdatePolicy.checkTimeout).perform(operation: "检查 AutoMAA 更新") {
-            try await self.checkRelease()
+            try await self.checkRelease(channel: channel)
         }
     }
 
-    private func checkRelease() async throws -> SoftwareUpdateRelease? {
+    private func checkRelease(channel: SoftwareUpdateChannel) async throws -> SoftwareUpdateRelease? {
         let repositoryParts = repository.split(separator: "/", omittingEmptySubsequences: false)
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
         guard repositoryParts.count == 2,
               repositoryParts.allSatisfy({ !$0.isEmpty && $0.unicodeScalars.allSatisfy(allowed.contains) }),
-              let url = URL(string: "https://api.github.com/repos/\(repository)/releases/latest")
+              let baseURL = URL(string: "https://api.github.com/repos/\(repository)/releases")
         else {
             throw SoftwareUpdateError.invalidDownloadURL
         }
+        if channel == .stable {
+            let data = try await releaseData(at: baseURL.appending(path: "latest"))
+            return try SoftwareUpdateReleaseResolver.newerRelease(from: data, currentVersion: currentVersion)
+        }
+        var releases: [GitHubReleaseResponse] = []
+        for page in 1...10 {
+            try Task.checkCancellation()
+            let url = baseURL.appending(queryItems: [.init(name: "per_page", value: "100"), .init(name: "page", value: String(page))])
+            let data = try await releaseData(at: url)
+            let batch = try JSONDecoder().decode([GitHubReleaseResponse].self, from: data)
+            releases += batch
+            if batch.count < 100 {
+                return try SoftwareUpdateReleaseResolver.newestRelease(from: releases, currentVersion: currentVersion, channel: channel)
+            }
+        }
+        throw SoftwareUpdateError.invalidRelease("发布记录过多，无法确认最新版本，请在发布页查看")
+    }
+
+    private func releaseData(at url: URL) async throws -> Data {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: UpdatePolicy.checkTimeout)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
@@ -386,14 +425,17 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
         guard (200..<300).contains(http.statusCode) else {
             throw SoftwareUpdateError.httpStatus(http.statusCode)
         }
-        return try SoftwareUpdateReleaseResolver.newerRelease(from: data, currentVersion: currentVersion)
+        return data
     }
 
     public func prepare(
-        _ release: SoftwareUpdateRelease, directories: AppDirectories,
+        _ release: SoftwareUpdateRelease, directories: AppDirectories, channel: SoftwareUpdateChannel = .stable,
         progress: @escaping @Sendable (UpdateProgress) async -> Void
     ) async throws -> PreparedSoftwareUpdate {
         try SoftwareUpdateReleaseResolver.validate(release)
+        guard channel.allows(release, currentVersion: currentVersion) else {
+            throw SoftwareUpdateError.invalidRelease("候选版本不符合当前更新通道或没有更新")
+        }
         return try await UpdateDeadline(timeout: UpdatePolicy.packageTimeout).perform(operation: "准备 AutoMAA 更新") {
             try await self.prepareRelease(release, directories: directories, progress: progress)
         }
@@ -457,7 +499,7 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
         }
     }
 
-    public func restorePreparedUpdate(directories: AppDirectories) async throws -> PreparedSoftwareUpdate? {
+    public func restorePreparedUpdate(directories: AppDirectories, channel: SoftwareUpdateChannel = .stable) async throws -> PreparedSoftwareUpdate? {
         guard !Task.isCancelled else { return nil }
         let store = PreparedSoftwareUpdateStore(directories: directories)
         let prepared: PreparedSoftwareUpdate
@@ -469,8 +511,7 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
             store.clear()
             return nil
         }
-        guard let current = SoftwareVersion(currentVersion) else { return nil }
-        guard prepared.release.version > current else {
+        guard channel.allows(prepared.release, currentVersion: currentVersion) else {
             store.clear()
             return nil
         }
@@ -709,10 +750,7 @@ public struct SoftwareUpdateApplicationValidator: Sendable {
         else {
             throw SoftwareUpdateError.invalidApplication("Bundle ID 或目录结构不正确")
         }
-        let version = info["CFBundleShortVersionString"] as? String
-        if let expectedVersion, version != expectedVersion {
-            throw SoftwareUpdateError.invalidApplication("版本应为 \(expectedVersion)，实际为 \(version ?? "未知")")
-        }
+        try ApplicationReleaseVersion.validate(info: info, expectedVersion: expectedVersion)
         guard let executableName = info["CFBundleExecutable"] as? String,
               !executableName.isEmpty,
               !executableName.contains("/"),

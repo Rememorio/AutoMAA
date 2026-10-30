@@ -3,7 +3,12 @@ set -euo pipefail
 
 PROJECT_DIR="${0:A:h:h}"
 INFO_PLIST="$PROJECT_DIR/scripts/Info.plist"
-VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO_PLIST")"
+CORE_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO_PLIST")"
+VERSION="$(/usr/libexec/PlistBuddy -c 'Print :AutoMAAReleaseVersion' "$INFO_PLIST" 2>/dev/null || print -r -- "$CORE_VERSION")"
+if [[ "${VERSION%%[-+]*}" != "$CORE_VERSION" ]]; then
+    print -u2 "Release version $VERSION does not match bundle core version $CORE_VERSION"
+    exit 2
+fi
 DMG_PATH="$PROJECT_DIR/dist/AutoMAA-$VERSION-macOS-arm64.dmg"
 CHECKSUM_PATH="$DMG_PATH.sha256"
 MOUNT_DIR="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/automaa-release-mount.XXXXXX")"
@@ -43,7 +48,9 @@ APP_PATH="$MOUNT_DIR/AutoMAA.app"
 /bin/test -d "$APP_PATH"
 /bin/test -L "$MOUNT_DIR/Applications"
 /bin/test "$(/usr/bin/readlink "$MOUNT_DIR/Applications")" = "/Applications"
-/bin/test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist")" = "$VERSION"
+/bin/test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist")" = "$CORE_VERSION"
+PACKAGED_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :AutoMAAReleaseVersion' "$APP_PATH/Contents/Info.plist" 2>/dev/null || /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist")"
+/bin/test "$PACKAGED_VERSION" = "$VERSION"
 /bin/test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Contents/Info.plist")" = "com.rememorio.AutoMAA"
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 RUNNER_IDENTIFIER="$(/usr/bin/codesign -dvv "$APP_PATH/Contents/MacOS/AutoMAARunner" 2>&1 | /usr/bin/sed -n 's/^Identifier=//p')"

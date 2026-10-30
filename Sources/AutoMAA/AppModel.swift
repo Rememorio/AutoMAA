@@ -169,6 +169,8 @@ final class AppModel: ObservableObject {
     private var automaticMAAUpdateWakeTask: Task<Void, Never>?
     private var lastMAACoreUpdateAttempt: Date?
     private var applicationUpdateTask: Task<Void, Never>?
+    private var applicationUpdateRecheckPending = false
+    private var isPreparingForTermination = false
     private var automaticApplicationDownloadPaused = false
     private var notificationTask: Task<Void, Never>?
     private var notificationTestTask: Task<Void, Never>?
@@ -189,6 +191,7 @@ final class AppModel: ObservableObject {
         allowsAutomaticMAAMaintenance: Bool = true,
         runnerExecutableURL: URL? = nil,
         resourceProbeExecutable: URL? = nil,
+        applicationVersion: String = ApplicationReleaseVersion.current() ?? "开发构建",
         softwareUpdateService: (any SoftwareUpdateServing)? = nil,
         applicationUpdateAvailabilityValidator: (@MainActor () throws -> Void)? = nil,
         releaseNotesService: any ReleaseNotesServing = ReleaseNotesService(),
@@ -211,8 +214,6 @@ final class AppModel: ObservableObject {
         executionState = ExecutionStateStore(directories: directories).loadForToday()
         fightStageMemoryStore = FightStageMemoryStore(directories: directories)
         weeklyAnnihilationStore = WeeklyAnnihilationStore(directories: directories)
-        let applicationVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-            ?? "开发构建"
         let applicationBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
             ?? "local"
         currentApplicationVersion = applicationVersion
@@ -889,6 +890,7 @@ final class AppModel: ObservableObject {
             let intermediate = releaseNotesState.releases.filter {
                 guard $0.pageURL?.absoluteString.hasPrefix(prefix) == true, let version = SoftwareVersion($0.version) else { return false }
                 return version > current && version < target
+                    && (current.isPrerelease || target.isPrerelease || !version.isPrerelease)
             }.sorted { (SoftwareVersion($0.version) ?? current) > (SoftwareVersion($1.version) ?? current) }
             return [targetNotes] + intermediate
         case let .maa(information):
@@ -1048,11 +1050,15 @@ final class AppModel: ObservableObject {
         applicationUpdateTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let prepared = try await self.softwareUpdateService.restorePreparedUpdate(directories: self.directories)
+                let prepared = try await self.softwareUpdateService.restorePreparedUpdate(
+                    directories: self.directories, channel: self.configuration.applicationUpdates.channel)
                 try Task.checkCancellation()
-                if let prepared {
+                if let prepared, self.allowsApplicationUpdate(prepared.release) {
                     self.rememberApplicationRelease(prepared.release)
                     self.applicationUpdateState = .ready(prepared)
+                } else if self.isPreparingForTermination {
+                    self.applicationUpdateRecheckPending = true
+                    self.applicationUpdateState = .idle
                 } else {
                     self.applicationUpdateState = .checking
                     self.applicationUpdateStartedAt = Date()
@@ -1066,22 +1072,23 @@ final class AppModel: ObservableObject {
                     self.applicationUpdateState = .failed(error.localizedDescription)
                 }
             }
-            self.applicationUpdateTask = nil
-            self.applicationUpdateStartedAt = nil
-            self.resumeAutomaticApplicationUpdateIfNeeded()
-            self.resumeAutomaticMAAUpdateIfNeeded()
+            self.completeApplicationUpdateOperation()
         }
     }
 
     private func performApplicationUpdateCheck() async {
         do {
-            let release = try await softwareUpdateService.check()
+            let release = try await softwareUpdateService.check(channel: configuration.applicationUpdates.channel)
             try Task.checkCancellation()
             applicationUpdateCheckedAt = Date()
             if let release {
+                guard allowsApplicationUpdate(release) else {
+                    throw SoftwareUpdateError.invalidRelease("候选版本不符合当前更新通道或没有更新")
+                }
                 rememberApplicationRelease(release)
                 applicationUpdateState = .available(release)
-                if configuration.applicationUpdates.automaticallyDownloadsUpdates && !automaticApplicationDownloadPaused {
+                if configuration.applicationUpdates.automaticallyDownloadsUpdates
+                    && !automaticApplicationDownloadPaused && !isPreparingForTermination {
                     if !isWorkflowRunning {
                         await prepareApplicationUpdate(release)
                     }
@@ -1104,6 +1111,7 @@ final class AppModel: ObservableObject {
     }
 
     private func prepareApplicationUpdate(_ release: SoftwareUpdateRelease) async {
+        guard allowsApplicationUpdate(release) else { return }
         applicationUpdateNotice = nil
         rememberApplicationRelease(release)
         let progressID = UUID()
@@ -1120,7 +1128,9 @@ final class AppModel: ObservableObject {
             try Task.checkCancellation()
             applicationUpdateState = .downloading(release)
             applicationUpdateStartedAt = Date()
-            let prepared = try await softwareUpdateService.prepare(release, directories: directories) { [weak self] update in
+            let prepared = try await softwareUpdateService.prepare(
+                release, directories: directories, channel: configuration.applicationUpdates.channel
+            ) { [weak self] update in
                 await self?.receiveApplicationUpdateProgress(update, id: progressID)
             }
             try Task.checkCancellation()
@@ -1145,7 +1155,7 @@ final class AppModel: ObservableObject {
     }
 
     private func resumeAutomaticApplicationUpdateIfNeeded() {
-        guard configuration.applicationUpdates.automaticallyDownloadsUpdates,
+        guard !isPreparingForTermination, configuration.applicationUpdates.automaticallyDownloadsUpdates,
               !automaticApplicationDownloadPaused,
               !isWorkflowRunning,
               applicationUpdateTask == nil,
@@ -1157,7 +1167,7 @@ final class AppModel: ObservableObject {
     private func resumeAutomaticMAAUpdateIfNeeded(now: Date = Date()) {
         automaticMAAUpdateWakeTask?.cancel()
         automaticMAAUpdateWakeTask = nil
-        guard allowsAutomaticMAAMaintenance,
+        guard !isPreparingForTermination, allowsAutomaticMAAMaintenance,
               configuration.maaUpdates.automaticallyUpdatesCoreAndResources,
               workflowTask == nil,
               applicationUpdateTask == nil,
@@ -1237,10 +1247,85 @@ final class AppModel: ObservableObject {
         applicationUpdateTask = Task { [weak self] in
             guard let self else { return }
             await self.performApplicationUpdateCheck()
-            self.applicationUpdateTask = nil
-            self.applicationUpdateStartedAt = nil
-            self.resumeAutomaticApplicationUpdateIfNeeded()
-            self.resumeAutomaticMAAUpdateIfNeeded()
+            self.completeApplicationUpdateOperation()
+        }
+    }
+
+    private func allowsApplicationUpdate(_ release: SoftwareUpdateRelease) -> Bool {
+        configuration.applicationUpdates.channel.allows(release, currentVersion: currentApplicationVersion)
+    }
+
+    var canChangeApplicationUpdateChannel: Bool {
+        if case .installing = applicationUpdateState { return false }
+        return !isPreparingForTermination
+    }
+
+    var applicationUpdateChannelDescription: String {
+        configuration.applicationUpdates.receivesPrereleaseUpdates ? "正式版与预发布版" : "仅正式版"
+    }
+
+    var applicationUpdateCurrentStatus: String {
+        if !configuration.applicationUpdates.receivesPrereleaseUpdates,
+           SoftwareVersion(currentApplicationVersion)?.isPrerelease == true {
+            return "暂无更新的正式版本"
+        }
+        return "已是最新版本"
+    }
+
+    func setPrereleaseApplicationUpdatesEnabled(_ enabled: Bool) {
+        guard canChangeApplicationUpdateChannel,
+              configuration.applicationUpdates.receivesPrereleaseUpdates != enabled else { return }
+        configuration.applicationUpdates.receivesPrereleaseUpdates = enabled
+        scheduleSave()
+        applicationUpdateRecheckPending = true
+        applicationUpdateRelease = nil
+        applicationUpdateCheckedAt = nil
+        applicationUpdateNotice = nil
+        applicationUpdateProgressID = nil
+        applicationUpdateProgress = nil
+        if let applicationUpdateTask {
+            applicationUpdateState = .cancelling
+            applicationUpdateTask.cancel()
+        } else {
+            completeApplicationUpdateOperation()
+        }
+    }
+
+    private func completeApplicationUpdateOperation() {
+        applicationUpdateTask = nil
+        applicationUpdateStartedAt = nil
+        if applicationUpdateRecheckPending {
+            // Wait for the old operation to exit before touching its manifest or starting another download.
+            let store = PreparedSoftwareUpdateStore(directories: directories)
+            do {
+                if let prepared = try store.load(), !allowsApplicationUpdate(prepared.release) { store.clear() }
+            } catch {
+                store.clear()
+            }
+            applicationUpdateRelease = nil
+            applicationUpdateNotice = nil
+            automaticApplicationDownloadPaused = false
+            applicationUpdateState = .idle
+            if !isPreparingForTermination {
+                applicationUpdateRecheckPending = false
+                restorePreparedApplicationUpdateOrCheck()
+            }
+        } else {
+            resumeAutomaticApplicationUpdateIfNeeded()
+            resumeAutomaticMAAUpdateIfNeeded()
+        }
+    }
+
+    func setTerminationPreparationActive(_ active: Bool) {
+        isPreparingForTermination = active
+        if active {
+            automaticMAAUpdateWakeTask?.cancel()
+            automaticMAAUpdateWakeTask = nil
+        } else if applicationUpdateRecheckPending && applicationUpdateTask == nil {
+            completeApplicationUpdateOperation()
+        } else {
+            resumeAutomaticApplicationUpdateIfNeeded()
+            resumeAutomaticMAAUpdateIfNeeded()
         }
     }
 
@@ -1255,16 +1340,14 @@ final class AppModel: ObservableObject {
 
     func downloadApplicationUpdate(_ release: SoftwareUpdateRelease) {
         reloadActivityHistory()
-        guard !isWorkflowRunning, !applicationUpdateState.isBusy else { return }
+        guard !isWorkflowRunning, !applicationUpdateState.isBusy, allowsApplicationUpdate(release) else { return }
         automaticApplicationDownloadPaused = false
         applicationUpdateState = .downloading(release)
         applicationUpdateStartedAt = Date()
         applicationUpdateTask = Task { [weak self] in
             guard let self else { return }
             await self.prepareApplicationUpdate(release)
-            self.applicationUpdateTask = nil
-            self.applicationUpdateStartedAt = nil
-            self.resumeAutomaticMAAUpdateIfNeeded()
+            self.completeApplicationUpdateOperation()
         }
     }
 
@@ -1278,7 +1361,9 @@ final class AppModel: ObservableObject {
 
     func restartAndInstallApplicationUpdate(_ prepared: PreparedSoftwareUpdate) {
         reloadActivityHistory()
-        guard !isWorkflowRunning, !applicationUpdateState.isBusy else { return }
+        guard !isWorkflowRunning, !applicationUpdateState.isBusy,
+              case let .ready(current) = applicationUpdateState, current == prepared,
+              allowsApplicationUpdate(prepared.release) else { return }
         guard saveNow(showConfirmation: false) else { return }
         do {
             try validateAutomaticUpdateAvailability()

@@ -5,77 +5,7 @@ public enum MAAUpdateChannel: String, Sendable {
     case beta
 }
 
-struct MAASemanticVersion: Comparable, CustomStringConvertible, Sendable {
-    private enum Identifier: Comparable, Sendable {
-        case numeric(Int)
-        case text(String)
-
-        static func < (lhs: Identifier, rhs: Identifier) -> Bool {
-            switch (lhs, rhs) {
-            case let (.numeric(lhs), .numeric(rhs)): lhs < rhs
-            case (.numeric, .text): true
-            case (.text, .numeric): false
-            case let (.text(lhs), .text(rhs)): lhs < rhs
-            }
-        }
-    }
-
-    let major: Int
-    let minor: Int
-    let patch: Int
-    private let prerelease: [Identifier]
-    let description: String
-
-    init?(_ value: String) {
-        var normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if normalized.hasPrefix("v") || normalized.hasPrefix("V") {
-            normalized.removeFirst()
-        }
-        normalized = String(normalized.split(separator: "+", maxSplits: 1)[0])
-        let parts = normalized.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
-        let core = parts[0].split(separator: ".", omittingEmptySubsequences: false)
-        guard core.count == 3,
-              let major = Int(core[0]),
-              let minor = Int(core[1]),
-              let patch = Int(core[2]),
-              major >= 0, minor >= 0, patch >= 0
-        else { return nil }
-
-        let prerelease: [Identifier]
-        if parts.count == 2 {
-            let values = parts[1].split(separator: ".", omittingEmptySubsequences: false)
-            guard !values.isEmpty, values.allSatisfy({ !$0.isEmpty }) else { return nil }
-            prerelease = values.map { value in
-                if let number = Int(value) { return .numeric(number) }
-                return .text(String(value))
-            }
-        } else {
-            prerelease = []
-        }
-
-        self.major = major
-        self.minor = minor
-        self.patch = patch
-        self.prerelease = prerelease
-        description = normalized
-    }
-
-    var isPrerelease: Bool { !prerelease.isEmpty }
-
-    static func < (lhs: MAASemanticVersion, rhs: MAASemanticVersion) -> Bool {
-        if lhs.major != rhs.major { return lhs.major < rhs.major }
-        if lhs.minor != rhs.minor { return lhs.minor < rhs.minor }
-        if lhs.patch != rhs.patch { return lhs.patch < rhs.patch }
-        if lhs.prerelease.isEmpty { return false }
-        if rhs.prerelease.isEmpty { return true }
-        for index in 0..<min(lhs.prerelease.count, rhs.prerelease.count) {
-            if lhs.prerelease[index] != rhs.prerelease[index] {
-                return lhs.prerelease[index] < rhs.prerelease[index]
-            }
-        }
-        return lhs.prerelease.count < rhs.prerelease.count
-    }
-}
+typealias MAASemanticVersion = SoftwareVersion
 
 enum MAACoreReleaseManifestError: LocalizedError {
     case invalidEndpoint(String)

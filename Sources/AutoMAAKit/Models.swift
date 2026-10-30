@@ -547,9 +547,21 @@ public struct NotificationConfiguration: Codable, Equatable, Sendable {
 
 public struct ApplicationUpdateConfiguration: Codable, Equatable, Sendable {
     public var automaticallyDownloadsUpdates: Bool
+    public var receivesPrereleaseUpdates: Bool
 
-    public init(automaticallyDownloadsUpdates: Bool = false) {
+    public init(automaticallyDownloadsUpdates: Bool = false, receivesPrereleaseUpdates: Bool = false) {
         self.automaticallyDownloadsUpdates = automaticallyDownloadsUpdates
+        self.receivesPrereleaseUpdates = receivesPrereleaseUpdates
+    }
+
+    public var channel: SoftwareUpdateChannel { receivesPrereleaseUpdates ? .preview : .stable }
+
+    private enum CodingKeys: String, CodingKey { case automaticallyDownloadsUpdates, receivesPrereleaseUpdates }
+
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        automaticallyDownloadsUpdates = try values.decodeIfPresent(Bool.self, forKey: .automaticallyDownloadsUpdates) ?? false
+        receivesPrereleaseUpdates = try values.decodeIfPresent(Bool.self, forKey: .receivesPrereleaseUpdates) ?? false
     }
 }
 

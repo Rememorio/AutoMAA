@@ -3,12 +3,21 @@ set -euo pipefail
 
 PROJECT_DIR="${0:A:h:h}"
 INFO_PLIST="$PROJECT_DIR/scripts/Info.plist"
-APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO_PLIST")"
+APP_CORE_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO_PLIST")"
+APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :AutoMAAReleaseVersion' "$INFO_PLIST" 2>/dev/null || print -r -- "$APP_CORE_VERSION")"
 VERSION="${1:-$APP_VERSION}"
 ARCH="$(/usr/bin/uname -m)"
+CORE_VERSION_PATTERN='(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+PRERELEASE_IDENTIFIER_PATTERN='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+RELEASE_VERSION_PATTERN="^${CORE_VERSION_PATTERN}(-${PRERELEASE_IDENTIFIER_PATTERN}(\.${PRERELEASE_IDENTIFIER_PATTERN})*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$"
 
-if [[ ! "$VERSION" =~ '^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$' ]]; then
+if [[ ! "$VERSION" =~ "$RELEASE_VERSION_PATTERN" ]]; then
     print -u2 "Invalid version: $VERSION"
+    exit 2
+fi
+
+if [[ "${VERSION%%[-+]*}" != "$APP_CORE_VERSION" ]]; then
+    print -u2 "Release version $VERSION does not match bundle core version $APP_CORE_VERSION"
     exit 2
 fi
 

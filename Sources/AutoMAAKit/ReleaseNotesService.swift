@@ -59,8 +59,9 @@ public struct ReleaseNotesService: ReleaseNotesServing {
         return try await UpdateDeadline(timeout: UpdatePolicy.checkTimeout).perform(operation: "读取更新说明") {
             if current == target {
                 let release = try await githubRelease(repository: repositoryURL, tag: "v\(target)")
-                guard !release.prerelease, SoftwareVersion(release.tag_name) == target else {
-                    throw ReleaseNotesError.unavailable("上游说明与所选正式版本不匹配")
+                guard SoftwareVersion(release.tag_name)?.description == target.description,
+                      !release.prerelease || target.isPrerelease else {
+                    throw ReleaseNotesError.unavailable("上游说明与所选版本不匹配")
                 }
                 return .init(releases: [release.notes])
             }
@@ -69,9 +70,13 @@ public struct ReleaseNotesService: ReleaseNotesServing {
             for page in 1...3 {
                 let url = URL(string: "https://api.github.com/repos\(repositoryURL.path)/releases?per_page=30&page=\(page)")!
                 let releases = try JSONDecoder().decode([GitHubNotes].self, from: await data(at: url))
-                let published = releases.filter { !$0.draft && !$0.prerelease }
+                let includesPrereleases = current.isPrerelease || target.isPrerelease
+                let published = releases.filter { !$0.draft }
                 notes += published.compactMap { release in
-                    guard let version = SoftwareVersion(release.tag_name), version > current, version <= target else { return nil }
+                    guard let version = SoftwareVersion(release.tag_name), version > current, version <= target,
+                          version != target || version.description == target.description,
+                          !release.prerelease || version.isPrerelease,
+                          includesPrereleases || (!release.prerelease && !version.isPrerelease) else { return nil }
                     return release.notes
                 }
                 if releases.count < 30 {

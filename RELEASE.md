@@ -10,7 +10,7 @@ AutoMAA 使用[语义化版本](https://semver.org/lang/zh-CN/)：
 - `MINOR`：向后兼容的新功能；在 `0.x` 阶段，不兼容的配置或行为调整也递增 `MINOR`，并在更新日志中醒目标注；
 - `MAJOR`：稳定协议后的不兼容变化。
 
-Git tag 使用 `vX.Y.Z`，App 版本使用 `X.Y.Z`。公开发布后不得移动或覆盖 tag；发现问题时发布新的补丁版本。
+正式版使用 `vX.Y.Z` tag；预发布版使用 `vX.Y.Z-beta.N` 或 `vX.Y.Z-rc.N`，例如 `v0.16.0-beta.1`。App 显示、更新比较和附件名称保留完整版本；同一数字核心按 `beta.1 < beta.2 < rc.1 < 正式版` 升级。公开发布后不得移动或覆盖 tag；发现问题时发布新的补丁版或递增预发布编号。
 
 ## 1. 确认发布范围
 
@@ -42,6 +42,7 @@ gh release view "vX.Y.Z"
 在 `scripts/Info.plist` 中更新：
 
 - `CFBundleShortVersionString` 为 `X.Y.Z`；
+- `AutoMAAReleaseVersion` 为完整版本，正式版为 `X.Y.Z`，预发布版为 `X.Y.Z-beta.N` 等；其数字核心必须与 `CFBundleShortVersionString` 一致。旧包缺少该字段时按 `CFBundleShortVersionString` 读取；
 - `CFBundleVersion` 由 `build-app.sh` 写入 UTC 时间戳构建号；`scripts/Info.plist` 中的值只是构建前占位符，不需要手动修改。
 
 在 `CHANGELOG.md` 顶部增加本次版本、发布日期和用户可见变化。优先使用以下分类：
@@ -52,7 +53,7 @@ gh release view "vX.Y.Z"
 - 分发；
 - 已知限制或不兼容变化。
 
-同步检查 `README.md` 和 `docs/` 的系统要求、安装方式、支持功能、导航名称与已知限制。界面定稿后按[文档截图规范](docs/development/docs.md#产品截图)替换对应截图并恢复页面引用；公开发布时移除本次界面的“尚未发布”提示，更新正式版文档链接。版本提交使用：
+同步检查 `README.md` 和 `docs/` 的系统要求、安装方式、支持功能、导航名称与已知限制。界面定稿后按[文档截图规范](docs/development/docs.md#产品截图)替换对应截图并恢复页面引用；预发布时将“尚未发布”改为具体预发布版本，并保留正式版下载入口和对应文档链接；正式发布时移除预发布提示并更新正式版文档链接。版本提交使用完整版本：
 
 ```bash
 git add scripts/Info.plist CHANGELOG.md README.md <其他发布改动>
@@ -69,13 +70,13 @@ npm run docs:build
 
 ## 3. 完整发布验证
 
-`verify-release.sh` 是正式发版的唯一完整验收入口。它要求工作区干净，并只使用临时目录和隔离对象：
+`verify-release.sh` 是正式版与预发布版的完整验收入口。它要求工作区干净，并只使用临时目录和隔离对象：
 
 ```bash
 ./scripts/verify-release.sh
 ```
 
-脚本会依次检查公开文案，验证 Swift 测试、Release App 构建、更新器替换、文档站、DMG、SHA-256、只读挂载结构、版本、Bundle ID、arm64 架构、代码签名，并从 DMG 启动使用临时用户目录的 App。还需人工确认：
+脚本会依次检查公开文案，验证 Swift 测试、Release App 构建、更新器替换、文档站、DMG、SHA-256、只读挂载结构、完整版本与数字核心、Bundle ID、arm64 架构、代码签名，并从 DMG 启动使用临时用户目录的 App。还需人工确认：
 
 - 测试使用临时目录、假 Bundle Identifier 和测试专用高位端口；
 - 不存在连接默认 MaaTools 地址、调用系统 LaunchAgent 或启动真实游戏的测试；
@@ -95,7 +96,8 @@ npm run docs:build
 7. 深浅色下的最小、默认与放大窗口；侧栏反复收起展开后宽度、选择与滚动位置保持稳定，多方案总览和长列表可滚动且不透入标题栏，三栏内容及右上角操作无裁切；
 8. 客户端、账号和执行安排弹窗的草稿取消、校验失败与重试，长表单底部按钮始终可达；设置四页切换时标题保持“设置”，高度适配屏幕，复制与进度反馈不挤动布局、跨窗口不重复；
 9. 键盘导航、图标帮助、VoiceOver 标签、拖动的菜单替代和“减少动态效果”；
-10. 文档截图与待发布界面一致，使用通用假数据，不含维护者路径或账号信息。
+10. 文档截图与待发布界面一致，使用通用假数据，不含维护者路径或账号信息；
+11. “接收预发布更新”默认关闭；检查、下载和恢复期间切换通道会等待旧操作清理，旧结果与进度不覆盖当前状态。关闭后清除预发布候选；已安装的预发布版保留当前版本，直到有更高正式版可升级。安装已开始后无法切换通道。
 
 真实游戏验证不属于自动化 Release 门禁，也不能替代隔离测试。若某项能力存在会影响普通用户的已知限制，应以产品行为描述写入更新日志；本机验收过程、账号范围和协作背景不进入面向用户的发布文案。
 
@@ -106,7 +108,7 @@ npm run docs:build
 当前公开包为 Apple Silicon、临时代码签名且未公证。完整验证已生成产物时不应再次打包；仅在定位打包问题时单独运行：
 
 ```bash
-/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' scripts/Info.plist
+/usr/libexec/PlistBuddy -c 'Print :AutoMAAReleaseVersion' scripts/Info.plist
 ./scripts/package-dmg.sh
 ```
 
@@ -117,7 +119,7 @@ dist/AutoMAA-X.Y.Z-macOS-arm64.dmg
 dist/AutoMAA-X.Y.Z-macOS-arm64.dmg.sha256
 ```
 
-打包脚本从 `CFBundleShortVersionString` 读取版本；如果手动传入版本参数，它也必须与 App 版本一致。构建后执行：
+打包脚本优先从 `AutoMAAReleaseVersion` 读取完整版本，缺少时回退到 `CFBundleShortVersionString`；如果手动传入版本参数，它必须与完整版本一致。预发布附件例如 `AutoMAA-0.16.0-beta.1-macOS-arm64.dmg`，对应校验文件追加 `.sha256`。脚本会核对完整版本的数字核心与短版本一致。以下命令中的 `X.Y.Z` 均替换为实际完整版本。构建后执行：
 
 ```bash
 hdiutil verify "dist/AutoMAA-X.Y.Z-macOS-arm64.dmg"
@@ -131,7 +133,7 @@ hdiutil verify "dist/AutoMAA-X.Y.Z-macOS-arm64.dmg"
 - `codesign --verify --deep --strict` 通过；
 - App 和 `AutoMAARunner` 都是 arm64；
 - App 内包含可执行的 `AutoMAAUpdater` 和独立签名的 `AutoMAAResourceProbe`，更新器已通过隔离临时目录中的替换冒烟测试；
-- Info.plist 版本正确；
+- Info.plist 的完整版本和数字核心与附件版本一致；
 - `smoke-test-app.sh` 能从 DMG 启动 App，在临时用户目录生成空白配置并完整退出，不读取默认 AutoMAA 数据或安装系统 LaunchAgent；
 - 退出 App 后能够正常卸载镜像。
 
@@ -170,6 +172,8 @@ Release Notes、README、更新日志与文档站必须脱离维护协作语境�
 ./scripts/check-public-content.sh /tmp/automaa-release-notes.md
 ```
 
+正式版创建为 Latest：
+
 ```bash
 gh release create "vX.Y.Z" \
   "dist/AutoMAA-X.Y.Z-macOS-arm64.dmg" \
@@ -179,6 +183,20 @@ gh release create "vX.Y.Z" \
   --title "AutoMAA vX.Y.Z" \
   --notes-file /tmp/automaa-release-notes.md \
   --latest
+```
+
+预发布版显式设置预发布标记，并保留原正式版为 Latest：
+
+```bash
+gh release create "vX.Y.Z-beta.N" \
+  "dist/AutoMAA-X.Y.Z-beta.N-macOS-arm64.dmg" \
+  "dist/AutoMAA-X.Y.Z-beta.N-macOS-arm64.dmg.sha256" \
+  --repo Rememorio/AutoMAA \
+  --target main \
+  --title "AutoMAA vX.Y.Z-beta.N" \
+  --notes-file /tmp/automaa-release-notes.md \
+  --prerelease \
+  --latest=false
 ```
 
 `--target` 使用远端分支名或完整 commit SHA；不要使用缩写 SHA。
@@ -192,7 +210,7 @@ git ls-remote origin "refs/tags/vX.Y.Z"
 
 重新下载两个附件，在独立临时目录中执行 `.sha256` 校验，并与本地已验证的 DMG 做字节比较。挂载下载的 DMG，把 App 复制到临时 `Applications` 目录，再用 `smoke-test-app.sh` 完成隔离启动；不要覆盖维护者正在使用的 `/Applications/AutoMAA.app`。最后从未登录状态打开 Release 页面，确认 README 徽章、下载链接、说明和附件均可访问。
 
-应用内更新依赖 Release 附件的固定命名和公开元数据。发布后还要确认 `releases/latest` 指向本次版本，DMG 与 `.sha256` 的名称、大小和下载地址均正确；不要静默替换已经公开的附件。
+应用内更新依赖 Release 附件的固定命名和公开元数据。正式版发布后确认 `releases/latest` 指向本次版本；预发布版确认 `prerelease` 为 `true`，`releases/latest` 仍指向原正式版，开启预发布通道时能够发现新版本。两个通道的 DMG 与 `.sha256` 名称、大小和下载地址都必须正确；不要静默替换已经公开的附件。
 
 ## 8. 发布后处理
 
@@ -205,7 +223,7 @@ git ls-remote origin "refs/tags/vX.Y.Z"
 ## 发布检查表
 
 - [ ] `main` 与远端同步，工作区干净
-- [ ] 版本号和 `CHANGELOG.md` 已更新
+- [ ] 完整版本、数字核心和 `CHANGELOG.md` 已更新
 - [ ] README 与实际能力、限制和签名状态一致
 - [ ] 公开文案和 Release Notes 不含协作背景、本机验收记录或私人信息
 - [ ] 文档站构建通过，安装与常见问题页面已同步
@@ -220,6 +238,7 @@ git ls-remote origin "refs/tags/vX.Y.Z"
 - [ ] 发布提交已推送到 `main`
 - [ ] tag 指向正确提交
 - [ ] Release 附件上传完成并重新下载验证
+- [ ] Release 的预发布标记及 Latest 指向与通道一致
 - [ ] 从公开附件复制的 App 已在临时安装目录完成隔离启动
 - [ ] Release 页面、下载链接和安装说明可公开访问
 - [ ] GitHub Pages 部署成功且线上关键页面可访问

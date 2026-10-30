@@ -41,6 +41,38 @@ final class UpdateInformationTests: XCTestCase {
         XCTAssertFalse(notes[0].body.contains("之前的变化"))
     }
 
+    func testBundledNotesKeepPrereleaseAndStableIdentitiesSeparate() {
+        let notes = ReleaseNotesMarkdown.bundledVersions("""
+        # 更新日志
+        ## 0.16.0 - 2026-02-03
+        - 正式版说明
+        ## 0.16.0-rc.1 - 2026-02-02
+        - 候选版说明
+        ## 0.16.0-beta.1 - 2026-02-01
+        - 测试版说明
+        """, repository: "example/utility")
+        XCTAssertEqual(notes.map(\.version), ["0.16.0", "0.16.0-rc.1", "0.16.0-beta.1"])
+        XCTAssertEqual(notes[2].pageURL?.lastPathComponent, "v0.16.0-beta.1")
+        XCTAssertEqual(notes[2].highlights, ["测试版说明"])
+        XCTAssertEqual(Set(notes.map(\.id)).count, 3)
+    }
+
+    func testReleaseNotesCacheKeepsPrereleaseReadStateAndFullIdentity() throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = ReleaseNotesCache(directories: AppDirectories(root: root))
+        var state = ReleaseNotesCache.State()
+        state.releases = ["0.16.0", "0.16.0-beta.1"].map {
+            .init(version: $0, body: "说明", pageURL: URL(string: "https://github.com/example/utility/releases/tag/v\($0)"))
+        }
+        state.lastOpenedVersion = "0.16.0-beta.1"
+        state.unreadVersion = "0.16.0"
+        try cache.save(state)
+        XCTAssertEqual(cache.load().releases.map(\.version), ["0.16.0", "0.16.0-beta.1"])
+        XCTAssertEqual(cache.load().lastOpenedVersion, "0.16.0-beta.1")
+        XCTAssertEqual(cache.load().unreadVersion, "0.16.0")
+    }
+
     func testResourceRevisionReadsPackedRefsAndRejectsCredentialURLs() throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -135,6 +167,55 @@ private final class NotesURLProtocol: URLProtocol, @unchecked Sendable {
 }
 
 final class ReleaseNotesServiceTests: XCTestCase {
+    func testCurrentPrereleaseNotesUseTheExactTagWithoutRequiringAssets() async throws {
+        let version = "0.16.0-beta.1"
+        let service = try service(routes: ["/repos/example/utility/releases/tags/v\(version)": release(version, prerelease: true)])
+        let result = try await service.application(repository: "example/utility", from: version, through: version)
+        XCTAssertEqual(result.releases.map(\.version), [version])
+        XCTAssertEqual(NotesURLProtocol.state.requestedPaths(), ["/repos/example/utility/releases/tags/v\(version)"])
+    }
+
+    func testBetaToStableNotesIncludeOnlyNewerPrereleasesAndTargetStable() async throws {
+        var draft = release("0.16.0-rc.2", prerelease: true)
+        draft["draft"] = true
+        let releases = [release("0.16.0-beta.10", prerelease: true), release("0.17.0-beta.1", prerelease: true),
+                        release("0.16.0-beta.1", prerelease: true), release("0.16.0"), draft,
+                        release("0.16.0-rc.1", prerelease: true), release("0.15.10")]
+        let service = try service(routes: ["/repos/example/utility/releases": releases])
+        let result = try await service.application(repository: "example/utility", from: "0.16.0-beta.1", through: "0.16.0")
+        XCTAssertEqual(result.releases.map(\.version), ["0.16.0", "0.16.0-rc.1", "0.16.0-beta.10"])
+    }
+
+    func testStableToStableNotesExcludeSemanticPrereleasesEvenWithIncorrectFlag() async throws {
+        let releases = [release("0.16.0-beta.1"), release("0.16.0-rc.1", prerelease: true),
+                        release("0.16.0"), release("0.15.11")]
+        let service = try service(routes: ["/repos/example/utility/releases": releases])
+        let result = try await service.application(repository: "example/utility", from: "0.15.10", through: "0.16.0")
+        XCTAssertEqual(result.releases.map(\.version), ["0.16.0", "0.15.11"])
+    }
+
+    func testUpgradeNotesRequireExactIdentityForTargetVersionMetadata() async throws {
+        let target = "0.16.0-beta.1+build.1"
+        let releases = [release("0.16.0-beta.1+build.2", prerelease: true),
+                        release(target, prerelease: true), release("0.15.11")]
+        let service = try service(routes: ["/repos/example/utility/releases": releases])
+        let result = try await service.application(repository: "example/utility", from: "0.15.10", through: target)
+        XCTAssertEqual(result.releases.map(\.version), [target, "0.15.11"])
+    }
+
+    func testCurrentPrereleaseNotesRejectWrongReleaseIdentityAndDrafts() async throws {
+        let version = "0.16.0-beta.1+build.1"
+        var draft = release(version, prerelease: true)
+        draft["draft"] = true
+        for response in [release("0.16.0-beta.2", prerelease: true), release("0.16.0-beta.1+build.2", prerelease: true), draft] {
+            let service = try service(routes: ["/repos/example/utility/releases/tags/v\(version)": response])
+            do {
+                _ = try await service.application(repository: "example/utility", from: version, through: version)
+                XCTFail("发布说明必须对应所选完整版本")
+            } catch {}
+        }
+    }
+
     func testApplicationHistoryIncludesOnlyTheUpgradeRange() async throws {
         let releases = [release("1.3.0"), release("1.2.1"), release("1.2.0"), release("1.1.0"), release("1.2.2", prerelease: true)]
         let service = try service(routes: ["/repos/example/utility/releases": releases])
