@@ -98,7 +98,7 @@ extension DashboardPlanStatus.Tone {
         case .neutral: .secondary
         case .active: .maaAccent
         case .attention: .orange
-        case .success: .green
+        case .success: .secondary
         }
     }
 }

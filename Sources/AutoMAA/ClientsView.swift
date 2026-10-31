@@ -25,18 +25,16 @@ struct ClientsView: View {
                 clientList
             }
         }
-        .navigationTitle("客户端与账号")
-        .navigationSubtitle(model.configuration.clients.isEmpty ? "" : "\(model.configuration.clients.count) 个客户端 · 已启用 \(model.activeAccountCount) 个账号")
-        .toolbar {
+        .workspaceToolbar(title: "客户端与账号") {
             if !model.configuration.clients.isEmpty {
-                ToolbarItem {
-                    Button { model.entityEditor = .newClient } label: {
-                        Label("添加客户端", systemImage: "plus")
-                    }
-                    .help("添加客户端")
-                    .disabled(model.isWorkflowRunning)
+                Button { model.entityEditor = .newClient } label: {
+                    Label("添加客户端", systemImage: "plus")
                 }
+                .help("添加客户端")
+                .disabled(model.isWorkflowRunning)
             }
+        } detail: {
+            EmptyView()
         }
         .confirmationDialog("\(deletionAction)？", isPresented: Binding(get: { deletion != nil }, set: { if !$0 { deletion = nil } })) {
             Button(deletionAction, role: .destructive, action: delete)
@@ -49,6 +47,10 @@ struct ClientsView: View {
     private var clientList: some View {
         AppPage(width: PageLayout.listWidth) {
             VStack(alignment: .leading, spacing: 0) {
+                Text("\(model.configuration.clients.count) 个客户端 · 已启用 \(model.activeAccountCount) 个账号")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.bottom, 20)
                 ForEach(Array(model.configuration.clients.enumerated()), id: \.element.id) { index, client in
                     if index > 0 { Divider().padding(.vertical, 24) }
                     clientSection(client, index: index)

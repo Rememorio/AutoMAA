@@ -28,7 +28,7 @@ struct DashboardView: View {
                 .padding(.bottom, 16)
             }
         }
-        .navigationTitle("今日总览")
+        .workspaceToolbar(title: "今日总览")
     }
 
     private func header(_ snapshot: DashboardSnapshot, at date: Date) -> some View {
@@ -185,10 +185,7 @@ struct DashboardView: View {
                     if let runID = session.runID { model.showActivity(runID: runID) }
                     else { model.selection = .activity }
                 } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: ActivityRecordPresentation.symbol(session))
-                            .foregroundStyle(ActivityRecordPresentation.tint(session)).frame(width: 18)
-                            .accessibilityHidden(true)
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
                         VStack(alignment: .leading, spacing: 5) {
                             Text(ActivityRecordPresentation.title(session, plans: model.configuration.plans))
                                 .font(.callout.weight(.medium))
@@ -197,7 +194,9 @@ struct DashboardView: View {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         VStack(alignment: .trailing, spacing: 5) {
-                            Text(session.historyStatusTitle).foregroundStyle(ActivityRecordPresentation.tint(session))
+                            if session.showsOutcomeStatus {
+                                Text(session.historyStatusTitle).foregroundStyle(ActivityRecordPresentation.tint(session))
+                            }
                             Text(session.startedAt, format: .dateTime.month().day().hour().minute()).foregroundStyle(.secondary)
                         }
                         .font(.caption).fixedSize()

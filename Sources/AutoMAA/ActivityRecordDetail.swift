@@ -108,9 +108,11 @@ struct ActivityRecordHeader: View {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text(title).font(.headline).textSelection(.enabled)
                 Spacer(minLength: 8)
-                Label(session.historyStatusTitle, systemImage: ActivityRecordPresentation.symbol(session))
-                    .font(.caption).foregroundStyle(ActivityRecordPresentation.tint(session))
-                    .fixedSize()
+                if session.showsOutcomeStatus {
+                    Label(session.historyStatusTitle, systemImage: ActivityRecordPresentation.symbol(session))
+                        .font(.caption).foregroundStyle(ActivityRecordPresentation.tint(session))
+                        .fixedSize()
+                }
                 if let information = session.updateInformation {
                     ActionTextButton(title: "更新内容", symbol: "doc.text", help: "查看本次 MAA 更新内容") {
                         model.updateDetailsRequest = .maa(information)
@@ -134,8 +136,11 @@ struct ActivityRecordHeader: View {
 enum ActivityRecordSection: CaseIterable, Identifiable {
     case results, process
     var id: Self { self }
-    var title: String { self == .results ? "运行结果" : "完整过程" }
-    var symbol: String { self == .results ? "checklist" : "doc.text" }
+    var title: String { self == .results ? "运行结果" : "完整日志" }
+    var symbol: String { self == .results ? "checklist" : "list.bullet.rectangle" }
+    var help: String {
+        self == .results ? "运行结果 · 按账号查看任务结果、掉落与提醒" : "完整日志 · 按时间查看本次运行的全部日志"
+    }
 }
 
 struct ActivityRecordSectionPicker: View {
@@ -145,11 +150,14 @@ struct ActivityRecordSectionPicker: View {
         Picker("记录内容", selection: $selection) {
             ForEach(ActivityRecordSection.allCases) { section in
                 Label(section.title, systemImage: section.symbol)
-                    .accessibilityLabel(section.title).help(section.title).tag(section)
+                    .labelStyle(.iconOnly)
+                    .accessibilityLabel(section.title)
+                    .help(section.help)
+                    .tag(section)
             }
         }
-        .pickerStyle(.segmented).labelStyle(.iconOnly).labelsHidden().fixedSize()
-        .help("切换运行结果与完整过程")
+        .pickerStyle(.segmented).labelsHidden().fixedSize()
+        .accessibilityHint("切换所选记录的运行结果与完整日志")
     }
 }
 
@@ -165,7 +173,7 @@ struct ActivitySessionContents: View {
         VStack(alignment: .leading, spacing: 16) {
             if section == .process {
                 HStack {
-                    Text("完整过程").font(.subheadline.weight(.semibold))
+                    Text("完整日志").font(.subheadline.weight(.semibold))
                     Spacer(minLength: 12)
                     Toggle("只看警告与错误", isOn: $onlyAttention)
                         .toggleStyle(.checkbox).font(.caption).fixedSize()
@@ -301,7 +309,7 @@ struct ActivityEventRow: View {
                 .frame(width: 58, alignment: .leading)
             VStack(alignment: .leading, spacing: 4) {
                 Text(entry.message).font(.callout).textSelection(.enabled)
-                    .foregroundStyle(entry.level.messageColor)
+                    .foregroundStyle(entry.messageColor)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityLabel("\(entry.level.displayName)：\(entry.message)")
                 if let context {

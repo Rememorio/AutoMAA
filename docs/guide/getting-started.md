@@ -3,14 +3,14 @@
 先配置一个客户端、一个账号和一个方案，跑通后再扩展账号与定时。可以在尚未安装 MAA 时填写配置；运行前完成[MAA 运行环境安装](./installation)、游戏登录和数据下载。
 
 ::: info 文档版本
-本页对应 [v0.16.0-beta.2 预发布版](https://github.com/Rememorio/AutoMAA/releases/tag/v0.16.0-beta.2)界面。使用当前正式安装包时，请参阅 [v0.15.10 首次配置](https://github.com/Rememorio/AutoMAA/blob/v0.15.10/docs/guide/getting-started.md)。
+本页对应 [v0.16.0-beta.3 预发布版](https://github.com/Rememorio/AutoMAA/releases/tag/v0.16.0-beta.3)界面。使用当前正式安装包时，请参阅 [v0.15.10 首次配置](https://github.com/Rememorio/AutoMAA/blob/v0.15.10/docs/guide/getting-started.md)。
 :::
 
 ## 认识主窗口
 
-左侧切换今日总览、自动化方案、客户端与账号、运行记录。选择方案后，中间调整任务顺序，右侧编辑所选任务；右上角切换任务设置与运行信息，也可打开执行安排或运行方案。图标悬停时显示操作名称。
+左侧切换今日总览、自动化方案、客户端与账号、运行记录。选择方案后，中间调整任务顺序，右侧编辑所选任务；右侧顶栏切换“任务设置”与“运行概况”，中列日历图标打开执行安排，最右侧播放按钮运行方案。图标悬停时显示操作名称。
 
-标题下的“执行 N 个账号”表示方案范围，“未设定时”表示尚未开启定时。当前运行状态会单独出现在右上角。工具栏的侧栏按钮或 `Control-Command-S` 可收起、展开导航；方案增多时列表和总览可滚动。
+任务列表顶部的“执行 N 个账号”表示方案范围，“未设定时”表示尚未开启定时。当前运行状态会单独出现在右上角。工具栏的侧栏按钮或 `Control-Command-S` 可收起、展开导航；方案增多时列表和总览可滚动。
 
 今日总览顶部显示当前方案、账号范围与任务顺序，可用选择器或“我的方案”列表切换方案。运行期间自动显示实际运行的方案、阶段与进度。“需要处理”集中展示待确认结果、作战恢复、配置错误和定时异常，点击进入对应处理页面；“接下来的定时”只展示已同步生效的安排。“最近运行”保留最近三次方案记录，未记录结束的运行会显示状态未确认。
 
@@ -28,7 +28,7 @@
 
 ## 添加客户端
 
-打开侧栏“客户端与账号”，点击右上角的加号“添加客户端”；列表为空时，也可点击页面中央的同名按钮。在编辑窗口填写：
+打开侧栏“客户端与账号”，点击顶栏标题旁的加号“添加客户端”；列表为空时，也可点击页面中央的同名按钮。在编辑窗口填写：
 
 | 配置 | 如何填写 |
 | --- | --- |
@@ -40,8 +40,8 @@
 | Bundle Identifier | 与所选游戏 App 一致，用于识别和关闭该客户端 |
 
 <figure class="guide-screenshot">
-  <img class="theme-shot theme-shot-light" src="../assets/screenshots/client-editor-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="编辑客户端：服务器、游戏应用及展开的 MaaTools、Bundle ID 和 MAA Profile 连接详情" />
-  <img class="theme-shot theme-shot-dark" src="../assets/screenshots/client-editor-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="编辑客户端：服务器、游戏应用及展开的 MaaTools、Bundle ID 和 MAA Profile 连接详情" />
+  <img class="theme-shot theme-shot-light" src="../assets/screenshots/client-editor-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="添加客户端：服务器、游戏应用及展开的 MaaTools、Bundle ID 和 MAA Profile 连接详情" />
+  <img class="theme-shot theme-shot-dark" src="../assets/screenshots/client-editor-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="添加客户端：服务器、游戏应用及展开的 MaaTools、Bundle ID 和 MAA Profile 连接详情" />
   <figcaption>展开“连接详情”，设置 MaaTools 地址、Bundle ID 与独立 MAA Profile。</figcaption>
 </figure>
 

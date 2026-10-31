@@ -93,7 +93,7 @@ struct PlanActivityView: View {
                     }
                 } else {
                     ActivityEmptyState(title: "还没有运行记录", symbol: "clock.arrow.circlepath",
-                                       detail: "运行后会显示这份方案的结果与完整过程。")
+                                       detail: "运行后会显示这份方案的结果与完整日志。")
                         .frame(minHeight: 160)
                 }
                 if progress.hasStarted, !pendingItems.isEmpty {
@@ -116,8 +116,10 @@ struct PlanActivityView: View {
     private func header(_ plan: AutomationPlan) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             VStack(alignment: .leading, spacing: 7) {
-                Text(showsPlanTitle ? plan.displayName : snapshot.isCurrent ? "本次运行" : "今日状态")
-                    .font(.headline).fixedSize(horizontal: false, vertical: true)
+                if showsPlanTitle || snapshot.isCurrent {
+                    Text(showsPlanTitle ? plan.displayName : "本次运行")
+                        .font(.headline).fixedSize(horizontal: false, vertical: true)
+                }
                 if !snapshot.isCurrent, snapshot.latestSession != nil || progress.hasStarted || !progress.fightRecoveryItems.isEmpty {
                     todaySummary(plan)
                 }
@@ -153,7 +155,7 @@ struct PlanActivityView: View {
     }
 
     private func emptyHistoryDescription(_ plan: AutomationPlan) -> String {
-        let detail = "运行后会显示这份方案的结果与完整过程。"
+        let detail = "运行后会显示这份方案的结果与完整日志。"
         if model.isPlanScheduleCurrent(plan), let next = PlanScheduleFormatter.nextRunLabel(plan.schedule) {
             return "下次 \(next)\n\(detail)"
         }
@@ -223,14 +225,10 @@ struct ActivityOperationSummary: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label(model.activePhase.displayName, systemImage: model.activePhase.statusSymbol)
-                .font(.subheadline.weight(.semibold)).foregroundStyle(model.activePhase.statusTint)
             Text(model.activeStatusMessage)
                 .font(.callout).foregroundStyle(.secondary)
                 .lineLimit(3).textSelection(.enabled).help(model.activeStatusMessage)
-            if model.activePlanID != nil {
-                WorkflowProgressView(progress: model.activeProgress).frame(maxWidth: 260)
-            } else if let activity = model.maaUpdateActivity {
+            if model.activePlanID == nil, let activity = model.maaUpdateActivity {
                 Text("已用时 \(activity.startedAt, style: .timer) · 上限 \(UpdatePolicy.durationDescription(activity.timeout))")
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }

@@ -50,18 +50,12 @@ struct ActivityView: View {
         } detail: {
             selectedDetail
         }
-        .navigationTitle("运行记录")
-        .toolbar {
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .workspaceToolbar(title: "运行记录") {
+            recordActions
+        } detail: {
             if case .session = model.activitySelection {
-                ToolbarItem(placement: .primaryAction) {
-                    ActivityRecordSectionPicker(selection: $recordSection)
-                }
-            }
-            ToolbarItem(placement: .primaryAction) { recordActions }
-            if case let .plan(planID) = model.activitySelection, !model.isWorkflowRunning {
-                ToolbarItem(placement: .primaryAction) {
-                    PlanRunControl(planID: planID)
-                }
+                ActivityRecordSectionPicker(selection: $recordSection)
             }
         }
         .alert("清除全部运行记录？", isPresented: $showingClearConfirmation) {
@@ -208,9 +202,11 @@ struct ActivityView: View {
                 .disabled(model.activityEntries.isEmpty || model.isWorkflowRunning)
         } label: {
             Label("记录操作", systemImage: "ellipsis")
+                .font(.system(size: 15))
+                .frame(width: 28, height: 28)
         }
         .labelStyle(.iconOnly)
-        .menuStyle(.borderlessButton).menuIndicator(.hidden).tint(.secondary).fixedSize()
+        .menuIndicator(.hidden).fixedSize()
         .help("记录操作").accessibilityLabel("记录操作")
     }
 
@@ -254,8 +250,10 @@ struct ActivityView: View {
                 Text(session.startedAt, format: .dateTime.hour().minute())
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
-            Label(session.historyStatusTitle, systemImage: ActivityRecordPresentation.symbol(session))
-                .font(.caption).foregroundStyle(ActivityRecordPresentation.tint(session))
+            if session.showsOutcomeStatus {
+                Label(session.historyStatusTitle, systemImage: ActivityRecordPresentation.symbol(session))
+                    .font(.caption).foregroundStyle(ActivityRecordPresentation.tint(session))
+            }
             Text(ActivityRecordPresentation.summary(session))
                 .font(.caption).foregroundStyle(.secondary).lineLimit(2)
         }

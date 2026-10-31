@@ -6,6 +6,17 @@ struct ActivityNavigationRequest: Identifiable, Equatable {
     let runID: UUID
 }
 
+extension LogEntry {
+    var highlightsMilestone: Bool {
+        guard level == .success, task == nil, accountID == nil, runSummary == nil else { return false }
+        switch phase {
+        case .launching, .updating: return true
+        case .completed: return planID == nil
+        default: return false
+        }
+    }
+}
+
 enum ActivityFilter: String, CaseIterable, Identifiable {
     case all, attention, failed
 
@@ -34,6 +45,14 @@ enum ActivityFilter: String, CaseIterable, Identifiable {
 }
 
 extension ActivitySession {
+    var showsOutcomeStatus: Bool {
+        let completed = finalPhase == .completed || (finalPhase == nil && finalLevel == .success)
+        return !completed || finalLevel == .warning || finalLevel == .error
+            || runSummary?.isPartial == true
+            || (runSummary?.manuallyHandledSteps ?? 0) > 0
+            || (runSummary?.pendingWeeklyAnnihilation ?? 0) > 0
+    }
+
     var historyStatusTitle: String {
         let phase = finalPhase
         let level = finalLevel

@@ -36,7 +36,7 @@ App 应位于“应用程序”等可写目录中。直接在 DMG 中运行时�
 
 启动检查、自动下载、已下载候选恢复和手动安装共用这一开关。此设置只控制 AutoMAA 本体，MAA 引擎的稳定版与 Beta 更新仍在“MAA 环境”页单独选择。
 
-从 `0.15.x` 首次体验预发布版时，请从对应 [GitHub Release](https://github.com/Rememorio/AutoMAA/releases/tag/v0.16.0-beta.2) 下载完整安装包，按[安装指南](./installation#下载并安装-automaa)安装；旧版应用内更新仅检查正式版。
+从 `0.15.x` 首次体验预发布版时，请从对应 [GitHub Release](https://github.com/Rememorio/AutoMAA/releases/tag/v0.16.0-beta.3) 下载完整安装包，按[安装指南](./installation#下载并安装-automaa)安装；旧版应用内更新仅检查正式版。
 
 ## 自动更新 MAA
 

@@ -5,6 +5,67 @@ import Testing
 
 @Suite("Activity presentation")
 struct ActivityPresentationTests {
+    @Test("connection and maintenance milestones are emphasized without coloring routine results or failures")
+    func logMilestoneEmphasis() {
+        let plan = UUID(), client = UUID(), account = UUID()
+        let emphasized: [LogEntry] = [
+            .init(level: .success, message: "已连接", phase: .launching, planID: plan, clientID: client),
+            .init(level: .success, message: "识别数据通过校验", phase: .updating, planID: plan),
+            .init(level: .success, message: "MAA 已是最新版本", phase: .completed)
+        ]
+        for entry in emphasized { #expect(entry.highlightsMilestone) }
+
+        let ordinary: [LogEntry] = [
+            .init(level: .info, message: "正在连接", phase: .launching),
+            .init(level: .info, message: "正在同步", phase: .updating),
+            .init(level: .success, message: "账号已就绪", phase: .switchingAccount, accountID: account),
+            .init(level: .success, message: "任务已完成", phase: .runningTask, task: .recruit),
+            .init(level: .success, message: "已关闭客户端", phase: .closing),
+            .init(level: .success, message: "方案已结束", phase: .completed, planID: plan),
+            .init(level: .success, message: "较早的完成记录"),
+            .init(level: .success, message: "整轮完成", phase: .completed,
+                  runSummary: .init(completedSteps: 1, failedSteps: 0, unexecutedSteps: 0, totalSteps: 1))
+        ]
+        for entry in ordinary { #expect(!entry.highlightsMilestone) }
+        for phase in [RunnerPhase.launching, .updating, .completed] {
+            for level in [LogLevel.warning, .error] {
+                #expect(!LogEntry(level: level, message: "异常", phase: phase).highlightsMilestone)
+            }
+        }
+    }
+
+    @Test("ordinary completion omits its badge while exceptional outcomes remain explicit")
+    func outcomeStatusVisibility() {
+        let complete = LogEntry(level: .success, message: "完成", phase: .completed,
+            runSummary: .init(completedSteps: 1, failedSteps: 0, unexecutedSteps: 0, totalSteps: 1))
+        #expect(!session([complete]).showsOutcomeStatus)
+        #expect(!session([.init(level: .success, message: "较早的完成记录")]).showsOutcomeStatus)
+
+        let notices = session([.init(level: .warning, message: "重试提醒"), complete])
+        #expect(!notices.showsOutcomeStatus)
+        #expect(ActivityRecordPresentation.summary(notices).contains("1 条提醒"))
+        #expect(ActivityResultSummary(session: notices).notices.count == 1)
+
+        let exceptions: [LogEntry] = [
+            .init(level: .error, message: "失败", phase: .failed),
+            .init(level: .warning, message: "取消", phase: .cancelled),
+            .init(level: .info, message: "仍在运行", phase: .runningTask),
+            .init(level: .warning, message: "完成但需留意", phase: .completed),
+            .init(level: .success, message: "存在失败", phase: .completed,
+                  runSummary: .init(completedSteps: 1, failedSteps: 1, unexecutedSteps: 0, totalSteps: 2)),
+            .init(level: .success, message: "待确认", phase: .completed,
+                  runSummary: .init(completedSteps: 0, failedSteps: 0, unexecutedSteps: 0, totalSteps: 1,
+                                    unconfirmedSteps: 1)),
+            .init(level: .success, message: "人工处理", phase: .completed,
+                  runSummary: .init(completedSteps: 0, failedSteps: 0, unexecutedSteps: 0, totalSteps: 1,
+                                    manuallyHandledSteps: 1)),
+            .init(level: .success, message: "剿灭待补打", phase: .completed,
+                  runSummary: .init(completedSteps: 1, failedSteps: 0, unexecutedSteps: 0, totalSteps: 1,
+                                    pendingWeeklyAnnihilation: 1))
+        ]
+        for entry in exceptions { #expect(session([entry]).showsOutcomeStatus) }
+    }
+
     @Test("manually handled work is described as handled rather than automatically completed")
     func manualHandlingStatus() {
         let handled = session([.init(level: .success, message: "本轮已处理", phase: .completed,

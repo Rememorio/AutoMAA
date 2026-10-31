@@ -33,38 +33,34 @@ struct PlanEditorView: View {
                 PlanActivityView(planID: plan.id)
             }
         }
-        .navigationTitle(plan.displayName)
-        .navigationSubtitle("\(accountSummary) · \(scheduleSummary)")
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Picker("右侧内容", selection: $detailSection) {
-                    Label("任务设置", systemImage: "slider.horizontal.3")
-                        .accessibilityLabel("任务设置").help("任务设置")
-                        .tag(PlanDetailSection.settings)
-                    Label("运行信息", systemImage: "doc.text")
-                        .accessibilityLabel("运行信息").help("运行信息")
-                        .tag(PlanDetailSection.activity)
-                }
-                .pickerStyle(.segmented)
-                .labelStyle(.iconOnly)
-                .labelsHidden()
-                .fixedSize()
-                .help("切换任务设置与本方案运行信息")
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .workspaceToolbar(title: plan.displayName) {
+            Button {
+                showsArrangement = true
+            } label: {
+                Label("执行安排…", systemImage: "calendar.badge.clock")
             }
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button {
-                    showsArrangement = true
-                } label: {
-                    Label("执行安排", systemImage: "calendar.badge.clock")
-                }
-                .labelStyle(.iconOnly)
-                .help("执行安排")
+            .help("执行安排 · 设置账号、定时与运行策略")
+            .accessibilityLabel("执行安排")
 
-                planMenu
+            planMenu
+        } detail: {
+            Picker("右侧内容", selection: $detailSection) {
+                Label("任务设置", systemImage: "slider.horizontal.3")
+                    .labelStyle(.iconOnly)
+                    .help("任务设置 · 调整所选任务的参数")
+                    .accessibilityLabel("任务设置")
+                    .tag(PlanDetailSection.settings)
+                Label("运行概况", systemImage: "checklist")
+                    .labelStyle(.iconOnly)
+                    .help("运行概况 · 查看本方案今日待办、当前进度与最近结果")
+                    .accessibilityLabel("运行概况")
+                    .tag(PlanDetailSection.activity)
             }
-            ToolbarItem(placement: .primaryAction) {
-                WorkspaceRunControl()
-            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .accessibilityHint("切换所选任务的设置与本方案运行概况")
         }
         .onAppear { selectInitialTask() }
         .onChange(of: plan.id) { _, _ in selectInitialTask() }
@@ -105,10 +101,10 @@ struct PlanEditorView: View {
                 .disabled(model.isWorkflowRunning)
         } label: {
             Image(systemName: "ellipsis")
+                .font(.system(size: 15))
+                .frame(width: 28, height: 28)
         }
-        .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
-        .tint(.secondary)
         .fixedSize()
         .help("方案操作")
         .accessibilityLabel("方案操作")
@@ -116,16 +112,24 @@ struct PlanEditorView: View {
 
     private var taskList: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("执行顺序")
-                    .font(.subheadline.weight(.medium))
-                Text("\(plan.enabledTasks.count) 项已启用")
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("执行顺序")
+                        .font(.subheadline.weight(.medium))
+                    Text("\(plan.enabledTasks.count) 项已启用")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                }
+                Text("\(accountSummary) · \(scheduleSummary)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Spacer()
+                    .fixedSize(horizontal: false, vertical: true)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 18)
             .padding(.vertical, 12)
+            Divider()
 
             List(selection: $selectedTask) {
                 ForEach(plan.stepOrder) { task in
@@ -184,11 +188,6 @@ struct PlanEditorView: View {
                             .help(taskSummary(task))
                     }
                     Spacer(minLength: 0)
-                    if !plan.isEnabled(task) {
-                        Text("已停用")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
                 }
                 .contentShape(Rectangle())
             }

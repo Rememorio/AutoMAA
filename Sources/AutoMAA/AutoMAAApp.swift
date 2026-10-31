@@ -63,8 +63,15 @@ private struct AutoMAACommands: Commands {
     @ObservedObject var model: AppModel
     @Environment(\.openSettings) private var openSettings
     @FocusedValue(\.workspaceActive) private var workspaceActive
+    @FocusedValue(\.workspaceChromeController) private var workspaceChrome
 
     var body: some Commands {
+        CommandGroup(replacing: .sidebar) {
+            Button("切换边栏") { workspaceChrome?.toggleSidebar(nil) }
+                .keyboardShortcut("s", modifiers: [.command, .control])
+                .disabled(workspaceActive != true || workspaceChrome == nil || model.entityEditor != nil
+                          || model.readinessRequest != nil || model.updateDetailsRequest != nil)
+        }
         CommandGroup(replacing: .appInfo) {
             Button("关于 AutoMAA") { showSettings(.about) }
         }

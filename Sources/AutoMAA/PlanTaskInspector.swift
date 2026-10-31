@@ -15,7 +15,7 @@ struct PlanTaskInspector: View {
             VStack(alignment: .leading, spacing: 4) {
                 Label(task.title, systemImage: task.symbol)
                     .font(.headline)
-                Text("第 \((plan.stepOrder.firstIndex(of: task) ?? 0) + 1) 项 · 对 \(targetAccounts.count) 个账号分别执行")
+                Text("第 \((plan.stepOrder.firstIndex(of: task) ?? 0) + 1) 项 · \(plan.isEnabled(task) ? "对 \(targetAccounts.count) 个账号分别执行" : "已停用，参数仍保留")")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -26,10 +26,6 @@ struct PlanTaskInspector: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    if !plan.isEnabled(task) {
-                        Text("任务已停用，参数仍会保留。")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
                     if model.isWorkflowRunning {
                         Label("运行结束后可修改参数", systemImage: "lock")
                             .font(.caption).foregroundStyle(.secondary)

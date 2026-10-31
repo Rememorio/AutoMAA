@@ -163,6 +163,12 @@ struct TaskIcon: View {
     }
 }
 
+extension LogEntry {
+    var messageColor: Color {
+        highlightsMilestone ? LogMessagePalette.information : level.messageColor
+    }
+}
+
 extension LogLevel {
     var displayName: String {
         switch self {
@@ -175,8 +181,7 @@ extension LogLevel {
 
     var messageColor: Color {
         switch self {
-        case .info: .primary
-        case .success: LogMessagePalette.success
+        case .info, .success: .primary
         case .warning: LogMessagePalette.warning
         case .error: LogMessagePalette.error
         }
@@ -185,7 +190,7 @@ extension LogLevel {
     var color: Color {
         switch self {
         case .info: .secondary
-        case .success: .green
+        case .success: .secondary
         case .warning: .orange
         case .error: .red
         }
@@ -202,9 +207,10 @@ extension LogLevel {
 }
 
 private enum LogMessagePalette {
-    static let success = color(light: NSColor(srgbRed: 0.12, green: 0.43, blue: 0.22, alpha: 1), dark: .systemGreen)
+    static let information = color(light: .systemIndigo, dark: .systemMint)
     static let warning = color(light: NSColor(srgbRed: 0.60, green: 0.33, blue: 0, alpha: 1), dark: .systemOrange)
-    static let error = color(light: NSColor(srgbRed: 0.76, green: 0.12, blue: 0.12, alpha: 1), dark: .systemRed)
+    static let error = color(light: NSColor(srgbRed: 0.76, green: 0.12, blue: 0.12, alpha: 1),
+                             dark: NSColor(srgbRed: 1, green: 0.36, blue: 0.36, alpha: 1))
 
     private static func color(light: NSColor, dark: NSColor) -> Color {
         Color(nsColor: NSColor(name: nil) { appearance in
@@ -251,7 +257,7 @@ extension RunnerPhase {
         case .attention: .orange
         case .failed: .red
         case .cancelled: .secondary
-        case .completed: .green
+        case .completed: .secondary
         default: .maaAccent
         }
     }

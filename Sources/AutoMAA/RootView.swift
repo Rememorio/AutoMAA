@@ -5,24 +5,15 @@ struct RootView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openSettings) private var openSettings
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var pendingReadinessDestination: PlanReadinessDestination?
-    @State private var showsSidebar = true
+    @State private var chrome = WorkspaceChromeController()
 
     var body: some View {
-        HStack(spacing: 0) {
+        WorkspaceShell(chrome: chrome, model: model) {
             SidebarView()
-                .frame(width: 200)
-                .frame(maxHeight: .infinity)
                 .background(.regularMaterial)
-                .frame(width: showsSidebar ? 200 : 0, alignment: .leading)
-                .clipped()
-                .allowsHitTesting(showsSidebar)
-                .accessibilityHidden(!showsSidebar)
-            if showsSidebar { Divider() }
+        } content: {
             detail
-                .disclosureGroupStyle(FullWidthDisclosureStyle())
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     if let error = model.configurationSaveError {
                         ConfigurationSaveFeedback(error: error) { model.saveNow() }
@@ -31,28 +22,10 @@ struct RootView: View {
                     }
                 }
         }
-        .background(WorkspaceWindowAppearance().frame(width: 0, height: 0))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ApplicationWindowContext(feedback: model.feedback, destination: .workspace).frame(width: 0, height: 0))
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Button {
-                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
-                        showsSidebar.toggle()
-                    }
-                } label: {
-                    Label(showsSidebar ? "隐藏边栏" : "显示边栏", systemImage: "sidebar.left")
-                }
-                .help(showsSidebar ? "隐藏边栏" : "显示边栏")
-                .keyboardShortcut("s", modifiers: [.command, .control])
-            }
-            if model.isWorkflowRunning {
-                ToolbarItem(placement: .primaryAction) { WorkspaceActivityStatus() }
-            }
-            if !isPlanSelected && model.isWorkflowRunning {
-                ToolbarItem(placement: .primaryAction) { WorkspaceRunControl() }
-            }
-        }
         .focusedSceneValue(\.workspaceActive, true)
+        .focusedSceneValue(\.workspaceChromeController, chrome)
         .sheet(item: $model.entityEditor) { request in
             EntityEditorSheet(request: request).environmentObject(model)
         }
@@ -101,6 +74,7 @@ struct RootView: View {
                 PlanEditorView(plan: binding).id(binding.wrappedValue.id)
             } else {
                 ContentUnavailableView("方案不存在", systemImage: "clock.badge.exclamationmark")
+                    .workspaceToolbar(title: "自动化方案")
             }
         case let .client(id):
             ClientsView().onAppear { model.entityEditor = .client(id); model.selection = .clients }
@@ -110,11 +84,6 @@ struct RootView: View {
         case .activity:
             ActivityView()
         }
-    }
-
-    private var isPlanSelected: Bool {
-        if case .plan = model.selection { return true }
-        return false
     }
 
     private func navigateAfterReadinessDismissal() {

@@ -16,11 +16,11 @@ struct SidebarView: View {
             List(selection: $model.selection) {
                 Label("今日总览", systemImage: "square.grid.2x2")
                     .tag(SidebarSelection.overview)
-                Section {
-                    planHeader
-                        .selectionDisabled()
-                        .listRowBackground(Color.clear)
-                    ForEach(model.configuration.plans) { plan in
+                planHeader
+                    .padding(.top, 18)
+                    .selectionDisabled()
+                    .listRowBackground(Color.clear)
+                ForEach(model.configuration.plans) { plan in
                         HStack(spacing: 8) {
                             Image(systemName: "checklist").foregroundStyle(Color.maaAccent)
                                 .accessibilityHidden(true)
@@ -34,14 +34,14 @@ struct SidebarView: View {
                             }
                         }
                         .tag(SidebarSelection.plan(plan.id))
-                    }
                 }
-                Section {
-                    Label("客户端与账号", systemImage: "desktopcomputer")
-                        .tag(SidebarSelection.clients)
-                    Label("运行记录", systemImage: "clock.arrow.circlepath")
-                        .tag(SidebarSelection.activity)
-                }
+                Color.clear.frame(height: 12)
+                    .listRowInsets(EdgeInsets())
+                    .selectionDisabled().accessibilityHidden(true)
+                Label("客户端与账号", systemImage: "desktopcomputer")
+                    .tag(SidebarSelection.clients)
+                Label("运行记录", systemImage: "clock.arrow.circlepath")
+                    .tag(SidebarSelection.activity)
             }
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)

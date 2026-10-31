@@ -4,19 +4,15 @@ struct PlanRunControl: View {
     @EnvironmentObject private var model: AppModel
     let planID: UUID
     var showsTitle = false
+    var isToolbar = false
 
     var body: some View {
         switch model.planRunState(planID: planID) {
         case .ready:
             let progress = model.continuation(for: planID)
             if progress.pending > 0 {
-                if showsTitle {
-                    Button { model.runPlan(planID) } label: {
-                        Label(model.runTitle(for: planID), systemImage: "play.fill")
-                    }
-                    .buttonStyle(.borderedProminent).tint(.maaAction).controlSize(.large)
-                    .help(model.runHelp(for: planID))
-                    .accessibilityLabel(actionTitle(model.runTitle(for: planID)))
+                if showsTitle || isToolbar {
+                    titledRunButton
                 } else {
                     ActionIconButton(title: actionTitle(model.runTitle(for: planID)), symbol: "play.fill",
                                      tint: .maaAccent, help: model.runHelp(for: planID)) {
@@ -24,24 +20,20 @@ struct PlanRunControl: View {
                     }
                 }
             } else if progress.unconfirmed > 0 {
-                ActionTextButton(title: "处理结果", symbol: "exclamationmark.circle", tint: .orange,
-                                 help: actionTitle("处理待确认结果")) {
+                secondaryAction("处理结果", symbol: "exclamationmark.circle", help: actionTitle("处理待确认结果")) {
                     model.showPlanActivity(planID)
                 }
             } else {
-                status(progress.completionTitle,
-                       symbol: progress.manuallyHandled > 0 ? "checkmark.circle" : "checkmark.circle.fill",
-                       tint: progress.manuallyHandled > 0 ? .secondary : .green)
+                unavailableRunButton(progress.completionTitle)
             }
         case .running:
-            status("正在运行", symbol: "arrow.triangle.2.circlepath", tint: .maaAccent)
+            unavailableRunButton("正在运行")
         case .anotherPlanRunning:
-            status("其他方案运行中", symbol: "clock.arrow.circlepath")
+            unavailableRunButton("其他方案运行中")
         case .maintenanceRunning:
-            status("维护进行中", symbol: "wrench.and.screwdriver")
+            unavailableRunButton("维护进行中")
         case .configurationIncomplete:
-            ActionTextButton(title: "检查配置", symbol: "exclamationmark.circle", tint: .orange,
-                             help: actionTitle("检查配置")) {
+            secondaryAction("检查配置", symbol: "exclamationmark.circle", help: actionTitle("检查配置")) {
                 model.readinessRequest = PlanReadinessRequest(id: planID)
             }
         }
@@ -52,16 +44,55 @@ struct PlanRunControl: View {
         return "\(title) · \(name)"
     }
 
-    private func status(_ title: String, symbol: String, tint: Color = .secondary) -> some View {
-        Group {
-            if showsTitle {
-                Label(title, systemImage: symbol).font(.callout)
+    private var titledRunButton: some View {
+        let button = Button { model.runPlan(planID) } label: {
+            Label(model.runTitle(for: planID, readyTitle: isToolbar ? "运行" : "运行方案"), systemImage: "play.fill")
+        }
+        return Group {
+            if isToolbar {
+                button.buttonStyle(WorkspaceToolbarButtonStyle()).foregroundStyle(Color.maaAccent)
             } else {
-                Label(title, systemImage: symbol).labelStyle(.iconOnly).frame(width: 26, height: 26)
+                button.buttonStyle(.borderedProminent).tint(.maaAction).controlSize(.large)
             }
         }
-        .foregroundStyle(tint)
+        .help(isToolbar
+              ? "\(actionTitle(model.runTitle(for: planID)))\n\(model.runHelp(for: planID))"
+              : model.runHelp(for: planID))
+        .accessibilityLabel(actionTitle(model.runTitle(for: planID)))
+    }
+
+    private func unavailableRunButton(_ title: String) -> some View {
+        let button = Button {} label: {
+            Label(showsTitle && !isToolbar ? "运行方案" : title, systemImage: "play.fill")
+        }
+        return Group {
+            if isToolbar {
+                button.buttonStyle(WorkspaceToolbarButtonStyle()).foregroundStyle(.secondary)
+            } else if showsTitle {
+                button.buttonStyle(.borderedProminent).tint(.maaAction).controlSize(.large)
+            } else {
+                button.labelStyle(.iconOnly).frame(width: 26, height: 26)
+                    .buttonStyle(.borderless).foregroundStyle(.secondary)
+            }
+        }
+        .disabled(true)
         .help(actionTitle(title))
         .accessibilityLabel(actionTitle(title))
+    }
+
+    private func secondaryAction(_ title: String, symbol: String, help: String,
+                                 action: @escaping () -> Void) -> some View {
+        Group {
+            if isToolbar {
+                Button(action: action) {
+                    Label(title, systemImage: symbol)
+                }
+                .buttonStyle(WorkspaceToolbarButtonStyle())
+                .foregroundStyle(.orange)
+                .help(help).accessibilityLabel(help)
+            } else {
+                ActionTextButton(title: title, symbol: symbol, tint: .orange, help: help, action: action)
+            }
+        }
     }
 }
