@@ -143,24 +143,6 @@ enum ActivityRecordSection: CaseIterable, Identifiable {
     }
 }
 
-struct ActivityRecordSectionPicker: View {
-    @Binding var selection: ActivityRecordSection
-
-    var body: some View {
-        Picker("记录内容", selection: $selection) {
-            ForEach(ActivityRecordSection.allCases) { section in
-                Label(section.title, systemImage: section.symbol)
-                    .labelStyle(.iconOnly)
-                    .accessibilityLabel(section.title)
-                    .help(section.help)
-                    .tag(section)
-            }
-        }
-        .pickerStyle(.segmented).labelsHidden().fixedSize()
-        .accessibilityHint("切换所选记录的运行结果与完整日志")
-    }
-}
-
 struct ActivitySessionContents: View {
     @EnvironmentObject private var model: AppModel
     let session: ActivitySession
@@ -311,7 +293,7 @@ struct ActivityEventRow: View {
                 Text(entry.message).font(.callout).textSelection(.enabled)
                     .foregroundStyle(entry.messageColor)
                     .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel("\(entry.level.displayName)：\(entry.message)")
+                    .accessibilityHint(entry.level.displayName)
                 if let context {
                     Text(context).font(.caption).foregroundStyle(.secondary)
                 }

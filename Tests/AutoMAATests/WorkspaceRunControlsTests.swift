@@ -7,75 +7,209 @@ import Testing
 @MainActor
 @Suite("Workspace run controls")
 struct WorkspaceRunControlsTests {
-    @Test("starting, viewing another plan and completing a run do not reflow the toolbar host")
-    func completionDoesNotMoveTheRunControl() throws {
+    @Test("native stop and play retain their icons and actual positions through running, cancelling and completion")
+    func completionDoesNotMoveTheRunControls() throws {
         let fixture = makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let model = fixture.model
-        let (window, host) = makeHost(model)
-        defer { window.contentView = nil }
+        let (window, chrome, group) = try makeHost(model)
+        defer { window.contentViewController = nil }
+        let initialFrames = try frames(window)
+        let images = try group.subitems.map { try #require($0.image) }
         let windowFrame = window.frame
-        let hostFrame = host.frame
-        let initialSize = measure(host, model: model)
-        #expect(initialSize.width > 28)
-        #expect(initialSize.height == 28)
+        let stop = try #require(group.subitems.first)
+        let play = try #require(group.subitems.last)
+        #expect(group.subitems.count == 2)
+        #expect(!stop.isEnabled)
+        #expect(play.isEnabled)
+        try expectFixedControls(group, stop: stop, play: play, window: window, frames: initialFrames, images: images)
 
         var other = fixture.plan
         other.id = UUID()
         other.name = "当前正在查看的另一个名称很长的方案"
         model.configuration.plans.append(other)
         model.selection = .plan(other.id)
-        model.runningPlanID = fixture.plan.id
-        model.phase = .runningTask
-        model.isRunning = true
+        var lock: ProcessLock? = try ProcessLock(url: model.directories.lock)
+        let identity = WorkflowRunIdentity(runID: UUID(), planID: fixture.plan.id,
+                                          lockID: try #require(lock).identity)
+        let control = WorkflowRunControl(directories: model.directories)
+        try control.activate(identity)
+        defer { control.finish(identity); lock = nil }
         for progress in [0.0, 0.5, 1.0] {
-            model.progress = progress
-            #expect(measure(host, model: model) == initialSize)
-            #expect(host.frame == hostFrame)
+            HistoryStore(directories: model.directories).append(.init(level: .info, message: "正在处理任务",
+                runID: identity.runID, phase: .runningTask, progress: progress, planID: fixture.plan.id))
+            model.reloadActivityHistory()
+            refresh(chrome, model: model, window: window)
+            #expect(stop.isEnabled)
+            #expect(!play.isEnabled)
+            #expect(stop.toolTip?.contains(fixture.plan.name) == true)
+            try expectFixedControls(group, stop: stop, play: play, window: window, frames: initialFrames, images: images)
         }
 
+        group.selectedIndex = 0
+        let action = try #require(group.action)
+        let sent = NSApp.sendAction(action, to: group.target, from: group)
+        #expect(sent)
+        #expect(control.isStopRequested(for: identity))
+        #expect(model.isCancellingRun)
+        refresh(chrome, model: model, window: window)
+        #expect(!stop.isEnabled)
+        #expect(!play.isEnabled)
+        try expectFixedControls(group, stop: stop, play: play, window: window, frames: initialFrames, images: images)
+
+        control.finish(identity)
+        lock = nil
         var state = ExecutionState(dateKey: ExecutionStateStore.todayKey)
         state.record(.init(status: .completed, stage: "1-7", times: 1), for: fixture.step.key)
         try ExecutionStateStore(directories: model.directories).save(state)
-        model.isRunning = false
-        model.runningPlanID = nil
         model.selection = .plan(fixture.plan.id)
         model.reloadActivityHistory()
+        refresh(chrome, model: model, window: window)
         #expect(model.continuation(for: fixture.plan.id).pending == 0)
-        #expect(measure(host, model: model) == initialSize)
-        #expect(host.frame == hostFrame)
+        #expect(!stop.isEnabled)
+        #expect(!play.isEnabled)
+        try expectFixedControls(group, stop: stop, play: play, window: window, frames: initialFrames, images: images)
         #expect(window.frame == windowFrame)
     }
 
-    @Test("attention, configuration errors and unrelated pages preserve the same run control slot")
-    func attentionAndMissingContextDoNotReflowTheToolbar() throws {
+    @Test("attention and configuration errors keep native play while unrelated idle pages omit run controls")
+    func attentionAndMissingContextDoNotReplaceButtons() throws {
         let fixture = makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let model = fixture.model
-        let (window, host) = makeHost(model)
-        defer { window.contentView = nil }
-        let initialSize = measure(host, model: model)
-        let initialFrame = host.frame
+        let (window, chrome, group) = try makeHost(model)
+        defer { window.contentViewController = nil }
+        let initialFrames = try frames(window)
+        let images = try group.subitems.map { try #require($0.image) }
+        let stop = try #require(group.subitems.first)
+        let play = try #require(group.subitems.last)
+        let action = try #require(group.action)
 
         var state = ExecutionState(dateKey: ExecutionStateStore.todayKey)
         state.record(.init(status: .unconfirmed, reason: .interruptedBattle), for: fixture.step.key)
         try ExecutionStateStore(directories: model.directories).save(state)
         model.reloadActivityHistory()
+        refresh(chrome, model: model, window: window)
         #expect(model.continuation(for: fixture.plan.id).unconfirmed == 1)
-        #expect(measure(host, model: model) == initialSize)
+        #expect(play.isEnabled)
+        try expectFixedControls(group, stop: stop, play: play, window: window, frames: initialFrames, images: images)
+        group.selectedIndex = 1
+        let firstSent = NSApp.sendAction(action, to: group.target, from: group)
+        #expect(firstSent)
+        #expect(model.activitySelection == .plan(fixture.plan.id))
 
+        model.selection = .plan(fixture.plan.id)
         model.configuration.cliPath = fixture.root.appending(path: "missing-maa").path
         #expect(model.planRunState(planID: fixture.plan.id) == .configurationIncomplete)
-        #expect(measure(host, model: model) == initialSize)
+        refresh(chrome, model: model, window: window)
+        #expect(play.isEnabled)
+        try expectFixedControls(group, stop: stop, play: play, window: window, frames: initialFrames, images: images)
+        group.selectedIndex = 1
+        let secondSent = NSApp.sendAction(action, to: group.target, from: group)
+        #expect(secondSent)
+        #expect(model.readinessRequest?.id == fixture.plan.id)
 
         model.activitySelection = .session("unrelated-record")
         for selection: SidebarSelection in [.overview, .clients, .activity] {
             model.selection = selection
-            #expect(WorkspaceToolbarRunControls.isVisible(in: model))
-            #expect(measure(host, model: model) == initialSize)
-            #expect(host.frame == initialFrame)
+            refresh(chrome, model: model, window: window)
+            #expect(!chrome.toolbar.items.contains { $0.itemIdentifier == WorkspaceChromeController.runID })
+            #expect(!chrome.toolbar.items.contains { $0.itemIdentifier == WorkspaceChromeController.stopID })
         }
+        model.selection = .plan(fixture.plan.id)
+        refresh(chrome, model: model, window: window)
+        #expect(chrome.toolbar.items.contains { $0 === group })
+        try expectFixedControls(group, stop: stop, play: play, window: window, frames: initialFrames, images: images)
         #expect(!model.isWorkflowRunning)
+    }
+
+    @Test("unrelated pages show only a stop control during real activity without moving their own actions")
+    func unrelatedPagesUseAnIndependentStopControl() throws {
+        let fixture = makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let model = fixture.model
+        let (window, chrome, group) = try makeHost(model)
+        defer { window.contentViewController = nil }
+        model.selection = .clients
+        chrome.setPage(title: "客户端与账号", actions: [.init(id: "add", title: "添加客户端", symbol: "plus")])
+        refresh(chrome, model: model, window: window)
+        let add = try #require(actionElement("添加客户端", in: window))
+        let initial = add.accessibilityFrame()
+        #expect(!chrome.toolbar.items.contains { $0 === group })
+        #expect(!chrome.toolbar.items.contains { $0.itemIdentifier == WorkspaceChromeController.stopID })
+
+        var lock: ProcessLock? = try ProcessLock(url: model.directories.lock)
+        let identity = WorkflowRunIdentity(runID: UUID(), planID: fixture.plan.id,
+                                          lockID: try #require(lock).identity)
+        let control = WorkflowRunControl(directories: model.directories)
+        try control.activate(identity)
+        defer { control.finish(identity); lock = nil }
+        HistoryStore(directories: model.directories).append(.init(level: .info, message: "正在处理任务",
+            runID: identity.runID, phase: .runningTask, planID: fixture.plan.id))
+        model.reloadActivityHistory()
+        refresh(chrome, model: model, window: window)
+        let stop = try #require(chrome.toolbar.items.first { $0.itemIdentifier == WorkspaceChromeController.stopID })
+        let image = try #require(stop.image)
+        let stopFrame = try #require(actionElement("安全停止", in: window)).accessibilityFrame()
+        #expect(stop.isEnabled)
+        #expect(stop.toolTip?.contains(fixture.plan.name) == true)
+        #expect(!chrome.toolbar.items.contains { $0 === group })
+        #expect(add.accessibilityFrame() == initial)
+        #expect(!chrome.toolbar.items.contains { $0.label == "运行方案" })
+
+        let action = try #require(stop.action)
+        #expect(NSApp.sendAction(action, to: stop.target, from: stop))
+        #expect(control.isStopRequested(for: identity))
+        refresh(chrome, model: model, window: window)
+        #expect(chrome.toolbar.items.contains { $0 === stop })
+        #expect(stop.image === image)
+        #expect(!stop.isEnabled)
+        #expect(try #require(actionElement("安全停止", in: window)).accessibilityFrame() == stopFrame)
+        #expect(add.accessibilityFrame() == initial)
+
+        control.finish(identity)
+        lock = nil
+        model.reloadActivityHistory()
+        refresh(chrome, model: model, window: window)
+        #expect(!chrome.toolbar.items.contains { $0 === stop })
+        #expect(add.accessibilityFrame() == initial)
+    }
+
+    @Test("local maintenance and its cancellation preserve the same native stop and play pair")
+    func maintenanceUsesTheSameButtons() async throws {
+        let fixture = makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let model = fixture.model
+        let (window, chrome, group) = try makeHost(model)
+        defer { window.contentViewController = nil }
+        let initialFrames = try frames(window)
+        let images = try group.subitems.map { try #require($0.image) }
+        let stop = try #require(group.subitems.first)
+        let play = try #require(group.subitems.last)
+
+        model.hotUpdate()
+        #expect(model.isWorkflowRunning)
+        #expect(model.activePlanID == nil)
+        refresh(chrome, model: model, window: window)
+        #expect(stop.isEnabled)
+        #expect(!play.isEnabled)
+        #expect(stop.toolTip?.contains("取消更新") == true)
+        try expectFixedControls(group, stop: stop, play: play, window: window, frames: initialFrames, images: images)
+        group.selectedIndex = 0
+        let action = try #require(group.action)
+        let sent = NSApp.sendAction(action, to: group.target, from: group)
+        #expect(sent)
+        #expect(model.isCancellingRun)
+        refresh(chrome, model: model, window: window)
+        #expect(!stop.isEnabled)
+        #expect(!play.isEnabled)
+        try expectFixedControls(group, stop: stop, play: play, window: window, frames: initialFrames, images: images)
+
+        // Cancel before yielding so maintenance cannot invoke an executable or resource probe.
+        for _ in 0..<500 where model.isRunning { try await Task.sleep(for: .milliseconds(10)) }
+        try #require(!model.isWorkflowRunning)
+        refresh(chrome, model: model, window: window)
+        try expectFixedControls(group, stop: stop, play: play, window: window, frames: initialFrames, images: images)
     }
 
     private struct Fixture {
@@ -90,7 +224,7 @@ struct WorkspaceRunControlsTests {
         let model = AppModel(directories: AppDirectories(root: root),
             launchAgentsDirectory: root.appending(path: "LaunchAgents"), managesSystemLaunchAgents: false,
             checksForUpdatesAutomatically: false, allowsAutomaticMAAMaintenance: false,
-            runnerExecutableURL: URL(filePath: "/usr/bin/true"))
+            runnerExecutableURL: URL(filePath: "/usr/bin/true"), resourceProbeExecutable: URL(filePath: "/usr/bin/true"))
         let account = AccountConfiguration(name: "演示账号")
         let client = ClientConfiguration(name: "演示客户端", kind: .yoStarJP,
             appPath: root.appending(path: "Fixture.app").path, address: "127.0.0.1:61394",
@@ -108,19 +242,56 @@ struct WorkspaceRunControlsTests {
             step: WorkflowStep(planID: plan.id, clientID: client.id, accountID: account.id, task: .fight))
     }
 
-    private func makeHost(_ model: AppModel) -> (NSWindow, NSHostingView<AnyView>) {
+    private func makeHost(_ model: AppModel) throws -> (NSWindow, WorkspaceChromeController, NSToolbarItemGroup) {
         _ = NSApplication.shared
-        let host = NSHostingView(rootView: AnyView(WorkspaceToolbarRunControls().environmentObject(model)))
-        host.sizingOptions = [.intrinsicContentSize]
-        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 170, height: 28),
-                              styleMask: [.titled], backing: .buffered, defer: true)
-        window.contentView = host
-        return (window, host)
+        let chrome = WorkspaceChromeController()
+        let root = WorkspaceSplitController(chrome: chrome,
+            sidebar: AnyView(Text("导航").frame(maxWidth: .infinity, minHeight: 680, maxHeight: .infinity)),
+            content: AnyView(Text("正文").frame(minWidth: 680, maxWidth: .infinity, minHeight: 680, maxHeight: .infinity)))
+        chrome.setPage(title: "演示日常", actions: [])
+        chrome.setRunControls(model: model)
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 1180, height: 780),
+                              styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: true)
+        window.contentViewController = root
+        chrome.attach(to: window, splitController: root)
+        refresh(chrome, model: model, window: window)
+        let group = try #require(chrome.toolbar.items.first { $0.itemIdentifier == WorkspaceChromeController.runID }
+            as? NSToolbarItemGroup)
+        return (window, chrome, group)
     }
 
-    private func measure(_ host: NSHostingView<AnyView>, model: AppModel) -> NSSize {
-        host.rootView = AnyView(WorkspaceToolbarRunControls().environmentObject(model))
-        host.layoutSubtreeIfNeeded()
-        return host.fittingSize
+    private func refresh(_ chrome: WorkspaceChromeController, model: AppModel, window: NSWindow) {
+        chrome.setRunControls(model: model)
+        window.contentView?.superview?.layoutSubtreeIfNeeded()
+    }
+
+    private func expectFixedControls(_ group: NSToolbarItemGroup, stop: NSToolbarItem, play: NSToolbarItem,
+                                     window: NSWindow, frames initial: [NSRect], images: [NSImage]) throws {
+        #expect(group.subitems.count == 2)
+        #expect(group.subitems[0] === stop)
+        #expect(group.subitems[1] === play)
+        #expect(stop.image === images[0])
+        #expect(play.image === images[1])
+        #expect(stop.label == "安全停止")
+        #expect(play.label == "运行方案")
+        #expect(try frames(window) == initial)
+    }
+
+    private func frames(_ window: NSWindow) throws -> [NSRect] {
+        let result = try ["安全停止", "运行方案"].map { label in
+            try #require(actionElement(label, in: window)).accessibilityFrame()
+        }
+        #expect(result.allSatisfy { $0.width > 0 && $0.height > 0 })
+        #expect(result[0].maxX <= result[1].minX)
+        return result
+    }
+
+    private func actionElement(_ label: String, in element: any NSAccessibilityProtocol) -> (any NSAccessibilityProtocol)? {
+        if element.accessibilityLabel() == label { return element }
+        for child in element.accessibilityChildren() ?? [] {
+            if let child = child as? any NSAccessibilityProtocol,
+               let match = actionElement(label, in: child) { return match }
+        }
+        return nil
     }
 }

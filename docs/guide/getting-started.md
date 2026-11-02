@@ -3,21 +3,23 @@
 先配置一个客户端、一个账号和一个方案，跑通后再扩展账号与定时。可以在尚未安装 MAA 时填写配置；运行前完成[MAA 运行环境安装](./installation)、游戏登录和数据下载。
 
 ::: info 文档版本
-本页对应 [v0.16.0-beta.3 预发布版](https://github.com/Rememorio/AutoMAA/releases/tag/v0.16.0-beta.3)界面。使用当前正式安装包时，请参阅 [v0.15.10 首次配置](https://github.com/Rememorio/AutoMAA/blob/v0.15.10/docs/guide/getting-started.md)。
+本页介绍 [v0.16.0-beta.4 预发布版](https://github.com/Rememorio/AutoMAA/releases/tag/v0.16.0-beta.4)。保留的产品截图为 v0.16.0-beta.3，用于展示总览和配置表单；顶栏与客户端三栏操作以文字说明为准。使用当前正式安装包时，请参阅 [v0.15.10 首次配置](https://github.com/Rememorio/AutoMAA/blob/v0.15.10/docs/guide/getting-started.md)。
 :::
 
 ## 认识主窗口
 
-左侧切换今日总览、自动化方案、客户端与账号、运行记录。选择方案后，中间调整任务顺序，右侧编辑所选任务；右侧顶栏切换“任务设置”与“运行概况”，中列日历图标打开执行安排，最右侧播放按钮运行方案。图标悬停时显示操作名称。
+左侧切换今日总览、自动化方案、客户端与账号、运行记录。选择方案后，中间调整任务顺序，右侧编辑所选任务；右侧顶栏切换“任务设置”与“运行概况”，中列日历图标打开执行安排，详情列左侧播放按钮运行方案。图标悬停时显示操作名称。
 
-任务列表顶部的“执行 N 个账号”表示方案范围，“未设定时”表示尚未开启定时。当前运行状态会单独出现在右上角。工具栏的侧栏按钮或 `Control-Command-S` 可收起、展开导航；方案增多时列表和总览可滚动。
+任务列表顶部的“执行 N 个账号”表示方案范围，“未设定时”表示尚未开启定时。当前运行状态集中显示在侧栏底部、帮助与公告上方；方案页的停止和播放在顶栏固定成组显示，只改变可用性，不替换图标或文字；客户端与历史记录空闲时不显示运行按钮，后台操作期间提供独立停止入口。工具栏的侧栏按钮或 `Control-Command-S` 可收起、展开导航；方案增多时列表和总览可滚动。
 
-今日总览顶部显示当前方案、账号范围与任务顺序，可用选择器或“我的方案”列表切换方案。运行期间自动显示实际运行的方案、阶段与进度。“需要处理”集中展示待确认结果、作战恢复、配置错误和定时异常，点击进入对应处理页面；“接下来的定时”只展示已同步生效的安排。“最近运行”保留最近三次方案记录，未记录结束的运行会显示状态未确认。
+任务行右侧显示本任务反馈：转圈表示正在执行，绿勾表示全部目标账号均已成功，红叉表示失败，灰色斜线表示取消，橙色提醒表示有结果待处理。名称和参数摘要保持不变，具体原因可在运行概况中查看。
+
+今日总览顶部显示当前方案、账号范围与任务顺序，可用选择器或“我的方案”列表切换方案。运行期间显示实际操作名称和最新消息，总体阶段与进度集中在侧栏底部。“需要处理”集中展示待确认结果、作战恢复、配置错误和定时异常，点击进入对应处理页面；“接下来的定时”只展示已同步生效的安排。“最近运行”保留最近三次方案记录，未记录结束的运行会显示状态未确认。
 
 <figure class="guide-screenshot">
-  <img class="theme-shot theme-shot-light" src="../assets/screenshots/overview-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="今日总览：当前方案、任务顺序、待处理事项与最近运行" />
-  <img class="theme-shot theme-shot-dark" src="../assets/screenshots/overview-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="今日总览：当前方案、任务顺序、待处理事项与最近运行" />
-  <figcaption>从总览确认当前方案、执行范围与需要处理的事项。</figcaption>
+  <img class="theme-shot theme-shot-light" src="../assets/screenshots/overview-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="v0.16.0-beta.3 今日总览：当前方案、任务顺序、待处理事项与最近运行" />
+  <img class="theme-shot theme-shot-dark" src="../assets/screenshots/overview-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="v0.16.0-beta.3 今日总览：当前方案、任务顺序、待处理事项与最近运行" />
+  <figcaption>v0.16.0-beta.3：从总览确认方案、执行范围与需要处理的事项。</figcaption>
 </figure>
 
 ## 检测 MAA 环境
@@ -28,7 +30,7 @@
 
 ## 添加客户端
 
-打开侧栏“客户端与账号”，点击顶栏标题旁的加号“添加客户端”；列表为空时，也可点击页面中央的同名按钮。在编辑窗口填写：
+打开侧栏“客户端与账号”，中列按客户端分组显示账号，右侧显示所选对象详情。点击中列顶栏右侧的加号“添加客户端”。在编辑窗口填写：
 
 | 配置 | 如何填写 |
 | --- | --- |
@@ -40,16 +42,18 @@
 | Bundle Identifier | 与所选游戏 App 一致，用于识别和关闭该客户端 |
 
 <figure class="guide-screenshot">
-  <img class="theme-shot theme-shot-light" src="../assets/screenshots/client-editor-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="添加客户端：服务器、游戏应用及展开的 MaaTools、Bundle ID 和 MAA Profile 连接详情" />
-  <img class="theme-shot theme-shot-dark" src="../assets/screenshots/client-editor-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="添加客户端：服务器、游戏应用及展开的 MaaTools、Bundle ID 和 MAA Profile 连接详情" />
-  <figcaption>展开“连接详情”，设置 MaaTools 地址、Bundle ID 与独立 MAA Profile。</figcaption>
+  <img class="theme-shot theme-shot-light" src="../assets/screenshots/client-editor-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="v0.16.0-beta.3 添加客户端：服务器、游戏应用及展开的 MaaTools、Bundle ID 和 MAA Profile 连接详情" />
+  <img class="theme-shot theme-shot-dark" src="../assets/screenshots/client-editor-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="v0.16.0-beta.3 添加客户端：服务器、游戏应用及展开的 MaaTools、Bundle ID 和 MAA Profile 连接详情" />
+  <figcaption>v0.16.0-beta.3：展开“连接详情”，设置 MaaTools 地址、Bundle ID 与独立 MAA Profile。</figcaption>
 </figure>
 
-点击“添加”后回到列表。客户端按列表顺序执行；可以从列表编辑名称和连接信息。MAA Profile 是独立的配置标识，必须非空且不能重复。
+点击“添加”后选中新客户端并显示详情。客户端按列表顺序执行；选中后点击详情顶栏的铅笔图标编辑名称和连接信息。MAA Profile 是独立的配置标识，必须非空且不能重复。
 
 ## 添加账号
 
-在客户端标题行点击人物加号“添加账号”，填写便于辨认的名称及方案归属，再点击“添加”。铅笔图标编辑对应客户端或账号，更多菜单提供排序和删除。取消编辑不会创建账号。能否自动切换账号取决于服务器：
+在中列选中客户端，再点击详情顶栏的人物加号“添加账号”，填写便于辨认的名称及方案归属，再点击“添加”。保存后选中新账号；铅笔图标编辑当前对象，更多菜单或列表右键菜单提供排序和删除。取消编辑保留原选择，不会创建账号。
+
+能否自动切换账号取决于服务器：
 
 | 服务器 | 账号配置 |
 | --- | --- |
@@ -76,18 +80,12 @@
 2. **执行什么**：在任务列表中启用所需任务，直接拖动调整顺序；右键菜单也可上移、下移。任务参数属于方案，同一方案的目标账号共用这些参数。
 3. **使用哪些参数**：选择任务后，在右侧参数区选择“MAA 推荐参数”或“自定义参数”，修改自动保存。只收基建产物时，选择自定义参数中的“仅收菜”。
 
-<figure class="guide-screenshot">
-  <img class="theme-shot theme-shot-light" src="../assets/screenshots/task-settings-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="自动化方案：任务执行顺序与右侧的理智作战参数" />
-  <img class="theme-shot theme-shot-dark" src="../assets/screenshots/task-settings-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="自动化方案：任务执行顺序与右侧的理智作战参数" />
-  <figcaption>在中间调整执行顺序，选中任务后在右侧设置参数。</figcaption>
-</figure>
-
 具体选项见[任务配置](../tasks/)。先保持定时关闭，手动确认理智药、源石和购物等消耗设置。
 
 ## 运行并确认结果
 
 1. 回到“今日总览”，查看各方案的状态和问题；点击方案右侧的感叹号“检查配置”，查看分组的问题及完整原因。每项右侧标明修复去向，可直接进入 MAA 环境、客户端或对应方案。先处理“需要处理”中的错误。
-2. 确认当前方案、目标账号与任务，点击总览主区的“运行方案”，也可使用方案行或方案工具栏的运行入口。已有当日进度时，按钮会说明续跑动作；运行时主区显示当前阶段，点击“查看运行”可查看过程与结果。
+2. 确认当前方案、目标账号与任务，点击总览主区的“运行方案”，也可使用方案行或方案工具栏的运行入口。已有当日进度时，按钮会说明续跑动作；运行时主区显示实际操作名称和最新消息，点击“查看运行”可查看过程与结果。
 3. 观察首次账号切换、任务执行和客户端关闭；有多个客户端时，确认下一项在前一项关闭后才启动。
 4. 在“运行记录”查看最近一次运行。确认成功步骤、失败原因或需要手动处理的事项；作战汇总可查看实际关卡、次数和掉落。
 

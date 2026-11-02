@@ -5,37 +5,31 @@ struct ClientsView: View {
     @EnvironmentObject private var model: AppModel
     @State private var deletion: EntityEditorRequest?
 
+    private var selectedClient: ClientConfiguration? {
+        guard let selection = model.clientsSelection else { return nil }
+        return model.configuration.clients.first { $0.id == selection.clientID }
+    }
+
+    private var selectedAccount: AccountConfiguration? {
+        guard case let .account(_, accountID) = model.clientsSelection else { return nil }
+        return selectedClient?.accounts.first { $0.id == accountID }
+    }
+
     var body: some View {
-        Group {
-            if model.configuration.clients.isEmpty {
-                VStack(spacing: 10) {
-                    Image(systemName: "desktopcomputer")
-                        .font(.system(size: 28)).foregroundStyle(.secondary)
-                        .accessibilityHidden(true)
-                    Text("还没有客户端").font(.headline)
-                    Text("添加游戏应用后，再配置执行账号。")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Button("添加客户端") { model.entityEditor = .newClient }
-                        .buttonStyle(.borderedProminent).tint(.maaAction)
-                        .controlSize(.small).fixedSize()
-                        .disabled(model.isWorkflowRunning)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                clientList
-            }
-        }
-        .workspaceToolbar(title: "客户端与账号") {
-            if !model.configuration.clients.isEmpty {
-                Button { model.entityEditor = .newClient } label: {
-                    Label("添加客户端", systemImage: "plus")
-                }
-                .help("添加客户端")
-                .disabled(model.isWorkflowRunning)
-            }
+        WorkspaceColumns {
+            clientList
         } detail: {
-            EmptyView()
+            if let client = selectedClient {
+                ClientWorkspaceDetail(client: client, account: selectedAccount,
+                                      plans: model.configuration.plans)
+            } else {
+                emptyDetail
+            }
         }
+        .workspaceToolbar(title: "客户端与账号", actions: [
+            .init(id: "clients.add", title: "添加客户端", symbol: "plus", isEnabled: !model.isWorkflowRunning,
+                  handler: { openEditor(.newClient) })
+        ], detailActions: detailActions)
         .confirmationDialog("\(deletionAction)？", isPresented: Binding(get: { deletion != nil }, set: { if !$0 { deletion = nil } })) {
             Button(deletionAction, role: .destructive, action: delete)
             Button("取消", role: .cancel) { deletion = nil }
@@ -45,106 +39,157 @@ struct ClientsView: View {
     }
 
     private var clientList: some View {
-        AppPage(width: PageLayout.listWidth) {
-            VStack(alignment: .leading, spacing: 0) {
-                Text("\(model.configuration.clients.count) 个客户端 · 已启用 \(model.activeAccountCount) 个账号")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.bottom, 20)
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("客户端与账号").font(.subheadline.weight(.medium))
+                Text("\(model.configuration.clients.count) 个客户端 · \(model.activeAccountCount) 个账号已启用")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 18).padding(.vertical, 12)
+            Divider()
+            List(selection: Binding(get: { model.clientsSelection }, set: { selection in
+                if let selection { model.clientsSelection = selection }
+            })) {
                 ForEach(Array(model.configuration.clients.enumerated()), id: \.element.id) { index, client in
-                    if index > 0 { Divider().padding(.vertical, 24) }
-                    clientSection(client, index: index)
+                    Section {
+                        clientRow(client)
+                            .tag(ClientWorkspaceSelection.client(client.id))
+                            .contextMenu { clientMenu(client, index: index) }
+                        ForEach(Array(client.accounts.enumerated()), id: \.element.id) { index, account in
+                            accountRow(account, client: client)
+                                .tag(ClientWorkspaceSelection.account(clientID: client.id, accountID: account.id))
+                                .contextMenu { accountMenu(account, client: client, index: index) }
+                        }
+                    }
                 }
             }
-            .padding(.vertical, 12)
+            .listStyle(.inset)
+            .scrollContentBackground(.hidden)
+            .overlay {
+                if model.configuration.clients.isEmpty {
+                    Text("添加客户端后，账号会显示在这里。")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center).padding(18)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .padding(.top, 12).allowsHitTesting(false)
+                }
+            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func clientSection(_ client: ClientConfiguration, index: Int) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 12) {
-                Image(systemName: "desktopcomputer")
-                    .font(.system(size: 22)).foregroundStyle(.secondary)
-                    .frame(width: 28).accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(client.displayName).font(.system(size: 16, weight: .semibold))
-                        .lineLimit(2).help(client.displayName)
-                    Text("\(client.kind.title) · \(client.accounts.count) 个账号\(client.enabled ? "" : " · 已停用")")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                HStack(spacing: 4) {
-                    ActionTextButton(title: "添加账号", symbol: "person.badge.plus", help: "为「\(client.displayName)」添加账号…") {
-                        model.entityEditor = .newAccount(client.id)
-                    }
-                    ActionIconButton(title: "编辑客户端「\(client.displayName)」…", symbol: "pencil") {
-                        model.entityEditor = .client(client.id)
-                    }
-                    clientMenu(client, index: index)
-                }
+    private func clientRow(_ client: ClientConfiguration) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "desktopcomputer")
+                .foregroundStyle(client.enabled ? Color.maaAccent : .secondary)
+                .frame(width: 18).padding(.top, 2).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(client.displayName).font(.callout.weight(.semibold)).lineLimit(2)
+                Text(client.enabled ? "\(client.kind.title) · \(client.accounts.count) 个账号" : "已停用 · \(client.kind.title)")
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(2)
             }
-            VStack(alignment: .leading, spacing: 0) {
-                if client.appPath.isEmpty {
-                    Label("尚未选择游戏应用", systemImage: "exclamationmark.circle")
-                        .font(.caption).foregroundStyle(.orange)
-                        .padding(.bottom, 10)
-                }
-                if client.accounts.isEmpty {
-                    Text("还没有账号，点击“添加账号”开始配置。")
-                        .font(.callout).foregroundStyle(.secondary)
-                        .padding(.vertical, 10)
-                } else {
-                    ForEach(Array(client.accounts.enumerated()), id: \.element.id) { accountIndex, account in
-                        if accountIndex > 0 { Divider().padding(.leading, 32) }
-                        accountRow(account, client: client, index: accountIndex)
-                    }
-                }
-            }
-            .padding(.leading, 40)
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 5)
+        .help(client.displayName)
+    }
+
+    private func accountRow(_ account: AccountConfiguration, client: ClientConfiguration) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: account.enabled ? "person.crop.circle" : "person.crop.circle.badge.xmark")
+                .foregroundStyle(.secondary).frame(width: 18).accessibilityHidden(true)
+            Text(account.displayName).font(.callout).lineLimit(2)
+                .foregroundStyle(account.enabled && client.enabled ? .primary : .secondary)
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, 26).padding(.vertical, 6)
+        .help(account.displayName + (account.enabled ? "" : " · 已停用"))
+        .accessibilityLabel(account.displayName + (account.enabled ? "" : "，已停用"))
+    }
+
+    private var emptyDetail: some View {
+        ContentUnavailableView(model.configuration.clients.isEmpty ? "还没有客户端" : "选择客户端或账号",
+                               systemImage: "desktopcomputer",
+                               description: Text(model.configuration.clients.isEmpty
+                                    ? "从中列顶部添加游戏应用，再配置执行账号。" : "在中列查看客户端配置与账号信息。"))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var detailActions: [WorkspaceToolbarAction] {
+        guard let client = selectedClient,
+              let clientIndex = model.configuration.clients.firstIndex(where: { $0.id == client.id }) else { return [] }
+        let request: EntityEditorRequest = selectedAccount.map { .account(client.id, $0.id) } ?? .client(client.id)
+        let title = selectedAccount.map { "编辑账号「\($0.displayName)」…" } ?? "编辑客户端「\(client.displayName)」…"
+        let menu: [WorkspaceToolbarMenuItem]
+        if let account = selectedAccount, let index = client.accounts.firstIndex(where: { $0.id == account.id }) {
+            menu = [
+                .action("上移账号", isEnabled: !model.isWorkflowRunning && index > 0) { moveAccount(account, client: client, by: -1) },
+                .action("下移账号", isEnabled: !model.isWorkflowRunning && index < client.accounts.count - 1) { moveAccount(account, client: client, by: 1) },
+                .separator,
+                .action("删除账号…", isEnabled: !model.isWorkflowRunning) { deletion = request }
+            ]
+        } else {
+            menu = [
+                .action("上移客户端", isEnabled: !model.isWorkflowRunning && clientIndex > 0) { moveClient(client, by: -1) },
+                .action("下移客户端", isEnabled: !model.isWorkflowRunning && clientIndex < model.configuration.clients.count - 1) { moveClient(client, by: 1) },
+                .separator,
+                .action("删除客户端…", isEnabled: !model.isWorkflowRunning) { deletion = request }
+            ]
+        }
+        return [
+            .init(id: "clients.account.add", title: "为「\(client.displayName)」添加账号…", symbol: "person.badge.plus",
+                  isEnabled: !model.isWorkflowRunning, handler: { openEditor(.newAccount(client.id)) }),
+            .init(id: "clients.edit", title: title, symbol: "pencil", isEnabled: !model.isWorkflowRunning,
+                  handler: { openEditor(request) }),
+            .init(id: "clients.more", title: selectedAccount == nil ? "客户端操作" : "账号操作", symbol: "ellipsis",
+                  isEnabled: !model.isWorkflowRunning, menu: menu)
+        ]
+    }
+
+    @ViewBuilder
+    private func clientMenu(_ client: ClientConfiguration, index: Int) -> some View {
+        Group {
+            Button("添加账号…") { openEditor(.newAccount(client.id)) }
+            Button("编辑客户端…") { openEditor(.client(client.id)) }
+            Divider()
+            Button("上移客户端") { moveClient(client, by: -1) }.disabled(index == 0)
+            Button("下移客户端") { moveClient(client, by: 1) }.disabled(index == model.configuration.clients.count - 1)
+            Divider()
+            Button("删除客户端…", role: .destructive) { deletion = .client(client.id) }
         }
         .disabled(model.isWorkflowRunning)
     }
 
-    private func accountRow(_ account: AccountConfiguration, client: ClientConfiguration, index: Int) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "person.crop.circle")
-                .font(.system(size: 16)).foregroundStyle(.secondary)
-                .frame(width: 22).accessibilityHidden(true)
-            Text(account.displayName).font(.callout)
-                .lineLimit(2).help(account.displayName)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            if !account.enabled { Text("已停用").font(.caption).foregroundStyle(.secondary) }
-            HStack(spacing: 4) {
-                ActionIconButton(title: "编辑账号「\(account.displayName)」…", symbol: "pencil") {
-                    model.entityEditor = .account(client.id, account.id)
-                }
-                ActionIconMenu(title: "账号「\(account.displayName)」的更多操作") {
-                    Button("上移") { model.moveAccount(clientID: client.id, accountID: account.id, by: -1) }
-                        .disabled(index == 0)
-                    Button("下移") { model.moveAccount(clientID: client.id, accountID: account.id, by: 1) }
-                        .disabled(index == client.accounts.count - 1)
-                    Divider()
-                    Button("删除账号…", role: .destructive) { deletion = .account(client.id, account.id) }
-                }
-            }
-        }
-        .frame(minHeight: 40)
-        .padding(.vertical, 2)
-    }
-
-    private func clientMenu(_ client: ClientConfiguration, index: Int) -> some View {
-        ActionIconMenu(title: "客户端「\(client.displayName)」的更多操作") {
-            Button("上移") { model.moveClient(client.id, by: -1) }.disabled(index == 0)
-            Button("下移") { model.moveClient(client.id, by: 1) }.disabled(index == model.configuration.clients.count - 1)
+    @ViewBuilder
+    private func accountMenu(_ account: AccountConfiguration, client: ClientConfiguration, index: Int) -> some View {
+        Group {
+            Button("编辑账号…") { openEditor(.account(client.id, account.id)) }
             Divider()
-            Button("删除客户端…", role: .destructive) { deletion = .client(client.id) }
+            Button("上移账号") { moveAccount(account, client: client, by: -1) }.disabled(index == 0)
+            Button("下移账号") { moveAccount(account, client: client, by: 1) }.disabled(index == client.accounts.count - 1)
+            Divider()
+            Button("删除账号…", role: .destructive) { deletion = .account(client.id, account.id) }
         }
+        .disabled(model.isWorkflowRunning)
     }
 
-    private var deletionAction: String {
-        deletion?.isClient == true ? "删除客户端" : "删除账号"
+    private func openEditor(_ request: EntityEditorRequest) {
+        guard !model.isWorkflowRunning else { return }
+        model.entityEditor = request
     }
+
+    private func moveClient(_ client: ClientConfiguration, by offset: Int) {
+        guard !model.isWorkflowRunning else { return }
+        model.moveClient(client.id, by: offset)
+    }
+
+    private func moveAccount(_ account: AccountConfiguration, client: ClientConfiguration, by offset: Int) {
+        guard !model.isWorkflowRunning else { return }
+        model.moveAccount(clientID: client.id, accountID: account.id, by: offset)
+    }
+
+    private var deletionAction: String { deletion?.isClient == true ? "删除客户端" : "删除账号" }
 
     private var deletionMessage: String {
         switch deletion {
@@ -165,7 +210,6 @@ struct ClientsView: View {
         case let .account(clientID, accountID): model.deleteAccount(clientID: clientID, accountID: accountID)
         default: break
         }
-        model.selection = .clients
         deletion = nil
     }
 }

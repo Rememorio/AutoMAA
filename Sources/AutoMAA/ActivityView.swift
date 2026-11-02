@@ -51,13 +51,7 @@ struct ActivityView: View {
             selectedDetail
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .workspaceToolbar(title: "运行记录") {
-            recordActions
-        } detail: {
-            if case .session = model.activitySelection {
-                ActivityRecordSectionPicker(selection: $recordSection)
-            }
-        }
+        .workspaceToolbar(title: "运行记录", actions: recordActions, modes: recordModes)
         .alert("清除全部运行记录？", isPresented: $showingClearConfirmation) {
             Button("取消", role: .cancel) {}
             Button("清除", role: .destructive) {
@@ -189,37 +183,39 @@ struct ActivityView: View {
         }
     }
 
-    private var recordActions: some View {
-        Menu {
-            Button {
+    private var recordActions: [WorkspaceToolbarAction] {
+        [.init(id: "records.more", title: "记录操作", symbol: "ellipsis", menu: [
+            .action("在 Finder 中显示诊断日志") {
                 try? model.directories.prepare()
                 NSWorkspace.shared.open(model.directories.logs)
-            } label: {
-                Label("在 Finder 中显示诊断日志", systemImage: "folder")
+            },
+            .separator,
+            .action("清除运行记录…", isEnabled: !model.activityEntries.isEmpty && !model.isWorkflowRunning) {
+                showingClearConfirmation = true
             }
-            Divider()
-            Button("清除运行记录…", role: .destructive) { showingClearConfirmation = true }
-                .disabled(model.activityEntries.isEmpty || model.isWorkflowRunning)
-        } label: {
-            Label("记录操作", systemImage: "ellipsis")
-                .font(.system(size: 15))
-                .frame(width: 28, height: 28)
+        ])]
+    }
+
+    private var recordModes: WorkspaceToolbarModes? {
+        guard case .session = model.activitySelection else { return nil }
+        let sections = ActivityRecordSection.allCases
+        return WorkspaceToolbarModes(options: sections.map {
+            .init(title: $0.title, symbol: $0.symbol, help: $0.help)
+        }, selectedIndex: sections.firstIndex(of: recordSection) ?? 0) { index in
+            recordSection = sections[index]
         }
-        .labelStyle(.iconOnly)
-        .menuIndicator(.hidden).fixedSize()
-        .help("记录操作").accessibilityLabel("记录操作")
     }
 
     private func planRow(_ plan: AutomationPlan, isCurrent: Bool) -> some View {
         let progress = model.continuation(for: plan.id)
         let needsRecovery = !progress.fightRecoveryItems.isEmpty
         return HStack(alignment: .top, spacing: 8) {
-            Image(systemName: isCurrent ? model.activePhase.statusSymbol : needsRecovery ? "exclamationmark.circle" : "calendar")
-                .foregroundStyle(isCurrent ? model.activePhase.statusTint : needsRecovery ? .orange : .secondary)
+            Image(systemName: needsRecovery ? "exclamationmark.circle" : "calendar")
+                .foregroundStyle(needsRecovery ? .orange : .secondary)
                 .frame(width: 18).padding(.top, 2).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text(plan.displayName).font(.callout.weight(.medium)).lineLimit(2)
-                Text(isCurrent ? model.activePhase.displayName : ActivityRecordPresentation.todaySummary(progress))
+                Text(isCurrent ? "本次运行" : ActivityRecordPresentation.todaySummary(progress))
                     .font(.caption).foregroundStyle(.secondary)
                     .lineLimit(2)
             }
@@ -232,10 +228,10 @@ struct ActivityView: View {
     private var currentMaintenanceRow: some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "wrench.and.screwdriver")
-                .foregroundStyle(model.activePhase.statusTint).frame(width: 18).padding(.top, 2)
+                .foregroundStyle(.secondary).frame(width: 18).padding(.top, 2)
             VStack(alignment: .leading, spacing: 4) {
                 Text(model.activePlanID == nil ? "MAA 维护" : "当前运行").font(.callout.weight(.medium))
-                Text(model.activePhase.displayName).font(.caption).foregroundStyle(.secondary)
+                Text("维护日志").font(.caption).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
         }

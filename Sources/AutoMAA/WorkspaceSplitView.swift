@@ -31,10 +31,9 @@ struct WorkspaceShell<Sidebar: View, Content: View>: NSViewControllerRepresentab
     }
 
     func updateNSViewController(_ controller: WorkspaceSplitController, context: Context) {
+        chrome.setRunControls(model: model)
         controller.sidebarHost.rootView = hostedWorkspace(sidebar(), model: model, chrome: chrome)
         controller.contentHost.rootView = hostedWorkspace(content(), model: model, chrome: chrome)
-        chrome.setRunControls(hostedWorkspace(WorkspaceToolbarRunControls(), model: model, chrome: chrome),
-                              visible: WorkspaceToolbarRunControls.isVisible(in: model))
     }
 }
 
@@ -108,6 +107,7 @@ final class WorkspaceDetailSplitController: NSSplitViewController {
     weak var chrome: WorkspaceChromeController?
     let contentHost: NSHostingController<AnyView>
     let detailHost: NSHostingController<AnyView>
+    private var hasRestoredColumnWidth = false
 
     init(chrome: WorkspaceChromeController?, content: AnyView, detail: AnyView) {
         self.chrome = chrome
@@ -128,9 +128,19 @@ final class WorkspaceDetailSplitController: NSSplitViewController {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    override func viewDidAppear() {
-        super.viewDidAppear()
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        guard !hasRestoredColumnWidth, view.window != nil, splitView.bounds.width >= 680 else { return }
+        splitView.setPosition(chrome?.middleColumnWidth ?? 280, ofDividerAt: 0)
+        hasRestoredColumnWidth = true
         chrome?.setDetailSplit(splitView)
+    }
+
+    override func splitViewDidResizeSubviews(_ notification: Notification) {
+        super.splitViewDidResizeSubviews(notification)
+        guard hasRestoredColumnWidth, view.window != nil,
+              let width = splitView.subviews.first?.frame.width else { return }
+        chrome?.rememberMiddleColumnWidth(width, for: splitView)
     }
 
     override func toggleSidebar(_ sender: Any?) { chrome?.toggleSidebar(sender) }

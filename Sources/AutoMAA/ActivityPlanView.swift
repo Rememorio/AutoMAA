@@ -60,8 +60,6 @@ struct PlanActivityView: View {
 
     private var liveContent: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ActivityOperationSummary()
-                .padding(.horizontal, 20).padding(.vertical, 14)
             if !progress.fightRecoveryItems.isEmpty || (progress.hasStarted && !pendingItems.isEmpty) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {

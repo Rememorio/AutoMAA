@@ -4,14 +4,13 @@ struct PlanRunControl: View {
     @EnvironmentObject private var model: AppModel
     let planID: UUID
     var showsTitle = false
-    var isToolbar = false
 
     var body: some View {
         switch model.planRunState(planID: planID) {
         case .ready:
             let progress = model.continuation(for: planID)
             if progress.pending > 0 {
-                if showsTitle || isToolbar {
+                if showsTitle {
                     titledRunButton
                 } else {
                     ActionIconButton(title: actionTitle(model.runTitle(for: planID)), symbol: "play.fill",
@@ -46,29 +45,19 @@ struct PlanRunControl: View {
 
     private var titledRunButton: some View {
         let button = Button { model.runPlan(planID) } label: {
-            Label(model.runTitle(for: planID, readyTitle: isToolbar ? "运行" : "运行方案"), systemImage: "play.fill")
+            Label(model.runTitle(for: planID, readyTitle: "运行方案"), systemImage: "play.fill")
         }
-        return Group {
-            if isToolbar {
-                button.buttonStyle(WorkspaceToolbarButtonStyle()).foregroundStyle(Color.maaAccent)
-            } else {
-                button.buttonStyle(.borderedProminent).tint(.maaAction).controlSize(.large)
-            }
-        }
-        .help(isToolbar
-              ? "\(actionTitle(model.runTitle(for: planID)))\n\(model.runHelp(for: planID))"
-              : model.runHelp(for: planID))
-        .accessibilityLabel(actionTitle(model.runTitle(for: planID)))
+        return button.buttonStyle(.borderedProminent).tint(.maaAction).controlSize(.large)
+            .help(model.runHelp(for: planID))
+            .accessibilityLabel(actionTitle(model.runTitle(for: planID)))
     }
 
     private func unavailableRunButton(_ title: String) -> some View {
         let button = Button {} label: {
-            Label(showsTitle && !isToolbar ? "运行方案" : title, systemImage: "play.fill")
+            Label(showsTitle ? "运行方案" : title, systemImage: "play.fill")
         }
         return Group {
-            if isToolbar {
-                button.buttonStyle(WorkspaceToolbarButtonStyle()).foregroundStyle(.secondary)
-            } else if showsTitle {
+            if showsTitle {
                 button.buttonStyle(.borderedProminent).tint(.maaAction).controlSize(.large)
             } else {
                 button.labelStyle(.iconOnly).frame(width: 26, height: 26)
@@ -82,17 +71,6 @@ struct PlanRunControl: View {
 
     private func secondaryAction(_ title: String, symbol: String, help: String,
                                  action: @escaping () -> Void) -> some View {
-        Group {
-            if isToolbar {
-                Button(action: action) {
-                    Label(title, systemImage: symbol)
-                }
-                .buttonStyle(WorkspaceToolbarButtonStyle())
-                .foregroundStyle(.orange)
-                .help(help).accessibilityLabel(help)
-            } else {
-                ActionTextButton(title: title, symbol: symbol, tint: .orange, help: help, action: action)
-            }
-        }
+        ActionTextButton(title: title, symbol: symbol, tint: .orange, help: help, action: action)
     }
 }

@@ -101,6 +101,7 @@ struct ContextNavigationTests {
             model.showConfigurationRepair(try #require(problem.repairTarget))
             #expect(model.selection == .clients)
             #expect(model.entityEditor == .client(client.id))
+            #expect(model.clientsSelection == .client(client.id))
             #expect(model.currentPlanID == plan.id)
         }
         for suffix in ["name-empty", "selector-empty"] {
@@ -110,8 +111,13 @@ struct ContextNavigationTests {
             model.showConfigurationRepair(try #require(problem.repairTarget))
             #expect(model.selection == .clients)
             #expect(model.entityEditor == .account(client.id, account.id))
+            #expect(model.clientsSelection == .account(clientID: client.id, accountID: account.id))
             #expect(model.currentPlanID == plan.id)
         }
+        model.showConfigurationRepair(.account(clientID: client.id, accountID: UUID()))
+        #expect(model.clientsSelection == .client(client.id))
+        model.showConfigurationRepair(.client(UUID()))
+        #expect(model.clientsSelection == .client(client.id))
         let planProblem = ConfigurationProblem(id: "plan-problem", severity: .error,
                                                 message: "方案参数错误", scope: .plan(plan.id))
         model.showConfigurationRepair(try #require(planProblem.repairTarget))

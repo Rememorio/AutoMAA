@@ -58,30 +58,15 @@ struct DashboardFocusView: View {
 
     private var running: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("当前运行").font(.caption).foregroundStyle(.secondary)
-                    Text(summary?.plan.displayName ?? (model.isExternalRunActive ? "后台任务" : "MAA 维护"))
-                        .font(.title3.weight(.semibold)).accessibilityAddTraits(.isHeader)
-                }
-                Spacer(minLength: 8)
-                Label(model.activePhase.displayName, systemImage: model.activePhase.statusSymbol)
-                    .font(.callout).foregroundStyle(model.activePhase.statusTint)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("当前运行").font(.caption).foregroundStyle(.secondary)
+                Text(summary?.plan.displayName ?? (model.isExternalRunActive ? "后台任务" : "MAA 维护"))
+                    .font(.title3.weight(.semibold)).accessibilityAddTraits(.isHeader)
             }
             Text(model.activeStatusMessage).font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            if model.activePlanID != nil {
-                WorkflowProgressView(progress: model.activeProgress)
-            } else if let activity = model.maaUpdateActivity, !activity.isFinished {
-                Text("已用时 \(activity.startedAt, style: .timer) · 上限 \(UpdatePolicy.durationDescription(activity.timeout))")
-                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-            }
-            HStack(spacing: 12) {
-                OperationStopControl(showsTitle: true).controlSize(.large)
-                Spacer()
-                ActionTextButton(title: "查看运行", symbol: "arrow.right", help: "查看当前运行的过程与结果") {
-                    model.showCurrentActivity()
-                }
+            ActionTextButton(title: "查看运行", symbol: "arrow.right", help: "查看当前运行的过程与结果") {
+                model.showCurrentActivity()
             }
         }
     }

@@ -4,11 +4,22 @@ set -euo pipefail
 PROJECT_DIR="${0:A:h:h}"
 cd "$PROJECT_DIR"
 
-swift build -c release --product AutoMAA
-swift build -c release --product AutoMAARunner
-swift build -c release --product AutoMAAResourceProbe
-swift build -c release --product AutoMAAUpdater
-BIN_DIR="$(swift build -c release --show-bin-path)"
+SDK_PATH="$(/usr/bin/xcrun --sdk macosx --show-sdk-path)"
+SDK_VERSION="$(/usr/bin/xcrun --sdk macosx --show-sdk-version)"
+# Use the selected SDK for native window chrome and verify the linked metadata before packaging.
+BUILD_ARGUMENTS=(-c release --build-system native --sdk "$SDK_PATH" --scratch-path "$PROJECT_DIR/.build/app-build")
+swift build "${BUILD_ARGUMENTS[@]}" --product AutoMAA
+swift build "${BUILD_ARGUMENTS[@]}" --product AutoMAARunner
+swift build "${BUILD_ARGUMENTS[@]}" --product AutoMAAResourceProbe
+swift build "${BUILD_ARGUMENTS[@]}" --product AutoMAAUpdater
+BIN_DIR="$(swift build "${BUILD_ARGUMENTS[@]}" --show-bin-path)"
+for EXECUTABLE in AutoMAA AutoMAARunner AutoMAAResourceProbe AutoMAAUpdater; do
+    BUILT_SDK="$(/usr/bin/xcrun vtool -show-build "$BIN_DIR/$EXECUTABLE" | /usr/bin/awk '$1 == "sdk" { print $2; exit }')"
+    if [[ "${BUILT_SDK%.0}" != "${SDK_VERSION%.0}" ]]; then
+        print -u2 "$EXECUTABLE was linked with SDK $BUILT_SDK; expected the selected SDK $SDK_VERSION"
+        exit 2
+    fi
+done
 APP_DIR="$PROJECT_DIR/.build/AutoMAA.app"
 BUILD_VERSION="$(/bin/date -u +%Y%m%d%H%M%S)"
 BUNDLE_IDENTIFIER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PROJECT_DIR/scripts/Info.plist")"

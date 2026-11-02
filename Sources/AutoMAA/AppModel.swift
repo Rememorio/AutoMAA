@@ -90,6 +90,9 @@ final class AppModel: ObservableObject {
     @Published var configuration: AppConfiguration {
         didSet {
             if configuration.cliPath != oldValue.cliPath { invalidateMAAEnvironment() }
+            let resolved = ClientWorkspaceSelectionResolver.resolved(clientsSelection,
+                clients: configuration.clients, previousClients: oldValue.clients)
+            if clientsSelection != resolved { clientsSelection = resolved }
         }
     }
     @Published var selection: SidebarSelection = .overview {
@@ -106,6 +109,12 @@ final class AppModel: ObservableObject {
     @Published var activitySearch = ""
     @Published var activityFilter: ActivityFilter = .all
     @Published var activitySelection: ActivityWorkspaceSelection?
+    @Published var clientsSelection: ClientWorkspaceSelection? {
+        didSet {
+            let resolved = ClientWorkspaceSelectionResolver.resolved(clientsSelection, clients: configuration.clients)
+            if clientsSelection != resolved { clientsSelection = resolved }
+        }
+    }
     @Published private(set) var activityNavigationRequest: ActivityNavigationRequest?
     @Published var phase: RunnerPhase = .idle
     @Published var statusMessage = "等待开始"
@@ -266,6 +275,7 @@ final class AppModel: ObservableObject {
         activityEntries = historyStore.load()
         installedPlanIDs = launchAgentManager.installedPlanIDs
         currentPlanID = configuration.plans.first?.id
+        clientsSelection = ClientWorkspaceSelectionResolver.resolved(nil, clients: configuration.clients)
         if !ProcessLock.isHeld(at: directories.lock) {
             try? MAAConfigurationWriter(directories: directories).prepare(
                 configuration,
@@ -1512,9 +1522,11 @@ final class AppModel: ObservableObject {
         case .settings: showSettings(.environment)
         case let .plan(id): selection = .plan(id)
         case let .client(id):
+            clientsSelection = .client(id)
             selection = .clients
             entityEditor = .client(id)
         case let .account(clientID, accountID):
+            clientsSelection = .account(clientID: clientID, accountID: accountID)
             selection = .clients
             entityEditor = .account(clientID, accountID)
         }
@@ -1615,7 +1627,9 @@ final class AppModel: ObservableObject {
         )
         let account = AccountConfiguration(name: name)
         configuration.clients[index].accounts.append(account)
-        selection = .account(clientID, account.id)
+        clientsSelection = .account(clientID: clientID, accountID: account.id)
+        selection = .clients
+        entityEditor = .account(clientID, account.id)
     }
 
     func newClientDraft() -> ClientConfiguration {
@@ -1649,7 +1663,9 @@ final class AppModel: ObservableObject {
             client.accounts = candidate.clients[index].accounts
             candidate.clients[index] = client
         }
-        return persistEditorCandidate(candidate)
+        let error = persistEditorCandidate(candidate)
+        if error == nil { clientsSelection = .client(client.id) }
+        return error
     }
 
     func saveAccountDraft(_ draft: AccountConfiguration, clientID: UUID, isNew: Bool, planIDs: Set<UUID>) -> String? {
@@ -1674,7 +1690,9 @@ final class AppModel: ObservableObject {
                 candidate.plans[planIndex].accountIDs.remove(account.id)
             }
         }
-        return persistEditorCandidate(candidate)
+        let error = persistEditorCandidate(candidate)
+        if error == nil { clientsSelection = .account(clientID: clientID, accountID: account.id) }
+        return error
     }
 
     private func persistEditorCandidate(_ candidate: AppConfiguration) -> String? {
@@ -1735,7 +1753,9 @@ final class AppModel: ObservableObject {
             accounts: []
         )
         configuration.clients.append(client)
-        selection = .client(client.id)
+        clientsSelection = .client(client.id)
+        selection = .clients
+        entityEditor = .client(client.id)
     }
 
     func deleteClient(_ clientID: UUID) {
@@ -1744,7 +1764,7 @@ final class AppModel: ObservableObject {
         for index in configuration.plans.indices {
             configuration.plans[index].accountIDs.subtract(accountIDs)
         }
-        selection = .overview
+        selection = .clients
         saveNow(showConfirmation: false)
     }
 
@@ -1770,7 +1790,7 @@ final class AppModel: ObservableObject {
         for planIndex in configuration.plans.indices {
             configuration.plans[planIndex].accountIDs.remove(accountID)
         }
-        selection = .client(clientID)
+        selection = .clients
     }
 
     func setPlanScheduleEnabled(_ planID: UUID, _ enabled: Bool) {

@@ -1,103 +1,80 @@
-import SwiftUI
+import AutoMAAKit
+import Foundation
 
-struct WorkspaceToolbarRunControls: View {
-    @EnvironmentObject private var model: AppModel
+@MainActor
+struct WorkspaceRunControlState {
+    enum StartAction { case unavailable, run(UUID), readiness(UUID), activity(UUID) }
+    enum Presentation { case hidden, plan, stop }
+    let presentation: Presentation
+    let startAction: StartAction
+    let startHelp: String
+    let canStop: Bool
+    let stopHelp: String
 
-    @MainActor
-    static func isVisible(in _: AppModel) -> Bool { true }
+    var canStart: Bool {
+        if case .unavailable = startAction { return false }
+        return true
+    }
 
-    var body: some View {
-        HStack(spacing: 10) {
-            if model.isWorkflowRunning {
-                runningStatus
-            } else {
-                Color.clear.frame(width: 132, height: 28).accessibilityHidden(true)
-            }
-            Group {
-                if model.isWorkflowRunning {
-                    stopButton
-                } else if let planID = Self.planID(in: model) {
-                    PlanRunControl(planID: planID, isToolbar: true)
-                } else {
-                    Button {} label: {
-                        Label("选择方案后运行", systemImage: "play.fill")
-                    }
-                    .buttonStyle(WorkspaceToolbarButtonStyle())
-                    .foregroundStyle(.secondary).disabled(true)
-                    .help("选择方案后运行")
-                    .accessibilityLabel("选择方案后运行")
-                }
-            }
-            .frame(width: 28, height: 28)
+    init(model: AppModel) {
+        let identity = model.activePlanID.flatMap { id in
+            model.configuration.plans.first { $0.id == id }?.displayName
+        } ?? (model.isExternalRunActive ? "后台任务" : "MAA 维护")
+        canStop = model.isWorkflowRunning && model.canCancelRun && !model.isCancellingRun
+        if model.isCancellingRun {
+            stopHelp = "正在停止并清理 · \(identity)"
+        } else if model.isWorkflowRunning {
+            stopHelp = "\(model.activePlanID == nil && !model.isExternalRunActive ? "取消更新" : "安全停止") · \(identity)"
+        } else {
+            stopHelp = "没有正在运行的操作"
         }
-        .frame(width: 170, height: 28, alignment: .trailing)
-        .fixedSize()
-    }
-
-    private var runningStatus: some View {
-        Button { model.showCurrentActivity() } label: {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(runningIdentity)
-                    .font(.callout.weight(.medium))
-                    .lineLimit(1).truncationMode(.tail)
-                HStack(spacing: 5) {
-                    Text(model.activePhase.displayName).foregroundStyle(model.activePhase.statusTint)
-                    if model.activeProgress.isFinite, model.activeProgress > 0 {
-                        Text(min(model.activeProgress, 1), format: .percent.precision(.fractionLength(0)))
-                            .monospacedDigit()
-                    }
-                }
-                .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-            }
-            .frame(width: 132, height: 28, alignment: .leading)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help("\(runningIdentity) · \(model.activeStatusMessage) · 查看运行记录")
-        .accessibilityLabel("当前运行：\(runningIdentity)，\(model.activePhase.displayName)，查看运行记录")
-        .accessibilityValue(progressDescription)
-    }
-
-    private var stopButton: some View {
-        Button { model.cancelCurrentOperation() } label: {
-            Label(stopTitle, systemImage: model.isCancellingRun ? "hourglass" : "stop.fill")
-        }
-        .buttonStyle(WorkspaceToolbarButtonStyle())
-        .disabled(!model.canCancelRun || model.isCancellingRun)
-        .help(stopHelp)
-        .accessibilityLabel("\(stopTitle) · \(runningIdentity)")
-    }
-
-    private var runningIdentity: String {
-        if let planID = model.activePlanID {
-            return model.configuration.plans.first { $0.id == planID }?.displayName ?? "运行中的方案"
-        }
-        return model.isExternalRunActive ? "后台任务" : "MAA 维护"
-    }
-
-    private var stopTitle: String {
-        if model.isCancellingRun { return "正在停止" }
-        return model.activePlanID == nil && !model.isExternalRunActive ? "取消更新" : "安全停止"
-    }
-
-    private var stopHelp: String {
-        if model.isCancellingRun { return "等待当前操作停止并清理连接" }
-        guard model.canCancelRun else { return "当前操作未提供可用的停止控制" }
-        return "\(stopTitle) · \(runningIdentity)"
-    }
-
-    private var progressDescription: String {
-        guard model.activeProgress.isFinite, model.activeProgress > 0 else { return "" }
-        return min(model.activeProgress, 1).formatted(.percent.precision(.fractionLength(0)))
-    }
-
-    @MainActor
-    private static func planID(in model: AppModel) -> UUID? {
+        let planID: UUID?
         switch model.selection {
-        case let .plan(id): id
+        case let .plan(id): planID = id
         case .activity:
-            if case let .plan(id) = model.activitySelection { id } else { nil }
-        default: nil
+            if case let .plan(id) = model.activitySelection { planID = id } else { planID = nil }
+        default: planID = nil
+        }
+        let selectedPlan = planID.flatMap { id in model.configuration.plans.first { $0.id == id } }
+        presentation = selectedPlan != nil ? .plan : (model.isWorkflowRunning ? .stop : .hidden)
+        guard !model.isWorkflowRunning else {
+            startAction = .unavailable
+            startHelp = "运行结束后可开始其他任务"
+            return
+        }
+        guard let planID, let plan = selectedPlan else {
+            startAction = .unavailable
+            startHelp = "选择方案后运行"
+            return
+        }
+        switch model.planRunState(planID: planID) {
+        case .ready:
+            let progress = model.continuation(for: planID)
+            if progress.pending > 0 {
+                startAction = .run(planID)
+                startHelp = "\(model.runTitle(for: planID)) · \(plan.displayName)\n\(model.runHelp(for: planID))"
+            } else if progress.unconfirmed > 0 {
+                startAction = .activity(planID)
+                startHelp = "处理待确认结果 · \(plan.displayName)"
+            } else {
+                startAction = .unavailable
+                startHelp = "\(progress.completionTitle) · \(plan.displayName)"
+            }
+        case .configurationIncomplete:
+            startAction = .readiness(planID)
+            startHelp = "检查配置 · \(plan.displayName)"
+        default:
+            startAction = .unavailable
+            startHelp = "当前无法运行 · \(plan.displayName)"
+        }
+    }
+
+    func start(in model: AppModel) {
+        switch startAction {
+        case .unavailable: break
+        case let .run(id): model.runPlan(id)
+        case let .readiness(id): model.readinessRequest = PlanReadinessRequest(id: id)
+        case let .activity(id): model.showPlanActivity(id)
         }
     }
 }

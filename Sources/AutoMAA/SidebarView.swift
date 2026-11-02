@@ -80,6 +80,7 @@ struct SidebarView: View {
 
     private var footer: some View {
         VStack(alignment: .leading, spacing: 2) {
+            SidebarOperationStatus()
             Divider().padding(.horizontal, 8).padding(.bottom, 6)
             footerButton("帮助与公告", symbol: "questionmark.circle") {
                 NSWorkspace.shared.open(model.documentationURL)

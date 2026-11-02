@@ -34,36 +34,20 @@ struct PlanEditorView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .workspaceToolbar(title: plan.displayName) {
-            Button {
-                showsArrangement = true
-            } label: {
-                Label("执行安排…", systemImage: "calendar.badge.clock")
-            }
-            .help("执行安排 · 设置账号、定时与运行策略")
-            .accessibilityLabel("执行安排")
-
-            planMenu
-        } detail: {
-            Picker("右侧内容", selection: $detailSection) {
-                Label("任务设置", systemImage: "slider.horizontal.3")
-                    .labelStyle(.iconOnly)
-                    .help("任务设置 · 调整所选任务的参数")
-                    .accessibilityLabel("任务设置")
-                    .tag(PlanDetailSection.settings)
-                Label("运行概况", systemImage: "checklist")
-                    .labelStyle(.iconOnly)
-                    .help("运行概况 · 查看本方案今日待办、当前进度与最近结果")
-                    .accessibilityLabel("运行概况")
-                    .tag(PlanDetailSection.activity)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
-            .accessibilityHint("切换所选任务的设置与本方案运行概况")
-        }
+        .workspaceToolbar(title: plan.displayName, actions: toolbarActions,
+            modes: WorkspaceToolbarModes(options: [
+                .init(title: "任务设置", symbol: "slider.horizontal.3", help: "任务设置 · 调整所选任务的参数"),
+                .init(title: "运行概况", symbol: "checklist", help: "运行概况 · 查看本方案今日待办、当前进度与最近结果")
+            ], selectedIndex: detailSection == .settings ? 0 : 1) { index in
+                detailSection = index == 0 ? .settings : .activity
+            })
         .onAppear { selectInitialTask() }
-        .onChange(of: plan.id) { _, _ in selectInitialTask() }
+        .onChange(of: plan.id) { _, _ in
+            showsArrangement = false
+            showsRename = false
+            confirmsDelete = false
+            selectInitialTask()
+        }
         .onChange(of: isCurrentPlanRunning) { _, running in
             if running { detailSection = .activity }
         }
@@ -87,31 +71,25 @@ struct PlanEditorView: View {
         }
     }
 
-    private var planMenu: some View {
-        Menu {
-            Button("重命名方案…") { showsRename = true }
-                .disabled(model.isWorkflowRunning)
-            Button("复制方案") {
-                guard !model.isWorkflowRunning else { return }
-                model.duplicatePlan(plan.id)
-            }
-            .disabled(model.isWorkflowRunning)
-            Divider()
-            Button("删除方案…", role: .destructive) { confirmsDelete = true }
-                .disabled(model.isWorkflowRunning)
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 15))
-                .frame(width: 28, height: 28)
-        }
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("方案操作")
-        .accessibilityLabel("方案操作")
+    private var toolbarActions: [WorkspaceToolbarAction] {
+        [
+            .init(id: "plan.arrangement", title: "执行安排 · 设置账号、定时与运行策略", symbol: "calendar.badge.clock",
+                  handler: { showsArrangement = true }),
+            .init(id: "plan.more", title: "方案操作", symbol: "ellipsis", menu: [
+                .action("重命名方案…", isEnabled: !model.isWorkflowRunning) { showsRename = true },
+                .action("复制方案", isEnabled: !model.isWorkflowRunning) {
+                    guard !model.isWorkflowRunning else { return }
+                    model.duplicatePlan(plan.id)
+                },
+                .separator,
+                .action("删除方案…", isEnabled: !model.isWorkflowRunning) { confirmsDelete = true }
+            ])
+        ]
     }
 
     private var taskList: some View {
-        VStack(spacing: 0) {
+        let statuses = taskStatuses
+        return VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     Text("执行顺序")
@@ -131,9 +109,9 @@ struct PlanEditorView: View {
             .padding(.vertical, 12)
             Divider()
 
-            List(selection: $selectedTask) {
+            List(selection: taskSelection) {
                 ForEach(plan.stepOrder) { task in
-                    taskRow(task)
+                    taskRow(task, status: statuses.status(for: task))
                         .tag(task)
                         .moveDisabled(model.isWorkflowRunning)
                         .listRowInsets(EdgeInsets(top: 7, leading: 10, bottom: 7, trailing: 10))
@@ -146,9 +124,6 @@ struct PlanEditorView: View {
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
-            .onChange(of: selectedTask) { _, task in
-                if task != nil { detailSection = .settings }
-            }
 
             Text(model.isWorkflowRunning ? "运行结束后可调整任务与参数" : "拖动或使用右键菜单调整顺序")
                 .font(.caption)
@@ -160,7 +135,7 @@ struct PlanEditorView: View {
         }
     }
 
-    private func taskRow(_ task: TaskKind) -> some View {
+    private func taskRow(_ task: TaskKind, status: PlanTaskStatus) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "line.3.horizontal")
                 .font(.system(size: 10))
@@ -188,12 +163,13 @@ struct PlanEditorView: View {
                             .help(taskSummary(task))
                     }
                     Spacer(minLength: 0)
+                    PlanTaskFeedback(status: status)
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("\(model.isWorkflowRunning ? "查看" : "编辑")\(task.title)参数")
-            .accessibilityValue(taskSummary(task))
+            .accessibilityValue([taskSummary(task), status.description].filter { !$0.isEmpty }.joined(separator: "，"))
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())
@@ -236,6 +212,22 @@ struct PlanEditorView: View {
 
     private var isCurrentPlanRunning: Bool {
         model.isWorkflowRunning && model.activePlanID == plan.id
+    }
+
+    private var taskSelection: Binding<TaskKind?> {
+        Binding(get: { selectedTask }, set: { task in
+            selectedTask = task
+            if task != nil { detailSection = .settings }
+        })
+    }
+
+    private var taskStatuses: PlanTaskStatusSnapshot {
+        PlanTaskStatusSnapshot(plan: plan, clients: model.configuration.clients,
+            state: model.executionState, entries: model.activityEntries,
+            weeklyAnnihilation: model.weeklyAnnihilation,
+            activeRun: model.isWorkflowRunning ? .init(planID: model.activePlanID, runID: model.activeRunID,
+                phase: model.activePhase, isCancelling: model.isCancellingRun) : nil,
+            now: model.currentDate)
     }
 
     private func selectInitialTask() {
@@ -293,6 +285,40 @@ struct PlanEditorView: View {
             guard plan.award.usesCustomSettings else { return "日常与周常奖励" }
             let count = [plan.award.dailyWeekly, plan.award.mail, plan.award.freeRecruit, plan.award.orundum, plan.award.mining, plan.award.specialAccess].filter { $0 }.count
             return "\(count) 项奖励"
+        }
+    }
+}
+
+private struct PlanTaskFeedback: View {
+    let status: PlanTaskStatus
+
+    var body: some View {
+        Group {
+            switch status {
+            case .none: Color.clear
+            case .running: ProgressView().controlSize(.small)
+            case .success: Image(systemName: "checkmark.circle").foregroundStyle(.green)
+            case .failure: Image(systemName: "xmark.circle").foregroundStyle(.red)
+            case .cancelled: Image(systemName: "slash.circle").foregroundStyle(.secondary)
+            case .attention: Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
+            }
+        }
+        .font(.system(size: 14))
+        .frame(width: 18, height: 18)
+        .help(status.description)
+        .accessibilityHidden(true)
+    }
+}
+
+private extension PlanTaskStatus {
+    var description: String {
+        switch self {
+        case .none: ""
+        case .running: "正在执行当前账号的任务"
+        case .success: "所有目标账号均已完成"
+        case .failure: "有任务执行失败，查看运行概况了解原因"
+        case .cancelled: "任务已取消，尚未完成的部分可继续运行"
+        case .attention: "有结果需要处理，查看运行概况"
         }
     }
 }

@@ -233,6 +233,7 @@ struct WorkspaceCompatibilityTests {
         let original = model.configuration
         let originalData = try Data(contentsOf: model.directories.configuration)
         let clientID = original.clients[0].id
+        model.clientsSelection = .client(clientID)
         var clientDraft = model.newClientDraft()
         clientDraft.name = "未提交客户端"
         var accountDraft = model.newAccountDraft(clientID: clientID)
@@ -247,6 +248,7 @@ struct WorkspaceCompatibilityTests {
         #expect(model.saveAccountDraft(accountDraft, clientID: clientID, isNew: true,
                                       planIDs: [original.plans[0].id]) != nil)
         #expect(model.configuration == original)
+        #expect(model.clientsSelection == .client(clientID))
 
         try FileManager.default.removeItem(at: model.directories.configuration)
         try originalData.write(to: model.directories.configuration, options: .atomic)
@@ -255,6 +257,7 @@ struct WorkspaceCompatibilityTests {
         #expect(model.configuration.clients[0].accounts.last == accountDraft)
         #expect(model.configuration.plans[0].accountIDs == [accountDraft.id])
         #expect(model.configuration.plans[1].accountIDs == original.plans[1].accountIDs)
+        #expect(model.clientsSelection == .account(clientID: clientID, accountID: accountDraft.id))
         #expect(try ConfigurationStore(directories: model.directories).load() == model.configuration)
     }
 
@@ -275,7 +278,42 @@ struct WorkspaceCompatibilityTests {
 
         #expect(model.configuration.clients[0].name == draft.name)
         #expect(model.configuration.clients[0].accounts == currentAccounts)
+        #expect(model.clientsSelection == .client(draft.id))
         #expect(try ConfigurationStore(directories: model.directories).load() == model.configuration)
+    }
+
+    @Test("removing client objects preserves the client workspace and synchronously selects a valid neighbor")
+    @MainActor
+    func clientRemovalKeepsWorkspaceSelection() throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = makeModel(root: root)
+        configureReadyClient(model, root: root)
+        let first = model.configuration.clients[0]
+        let second = ClientConfiguration(name: "第二个客户端", kind: .official, appPath: "",
+                                         profileName: "second-test", accounts: [])
+        let third = ClientConfiguration(name: "第三个客户端", kind: .official, appPath: "",
+                                        profileName: "third-test", accounts: [])
+        model.configuration.clients += [second, third]
+        model.selection = .clients
+        let accountID = try #require(first.accounts.first?.id)
+        model.clientsSelection = .account(clientID: first.id, accountID: accountID)
+
+        model.deleteAccount(clientID: first.id, accountID: accountID)
+        #expect(model.clientsSelection == .client(first.id))
+        #expect(model.selection == .clients)
+        #expect(model.entityEditor == nil)
+
+        model.clientsSelection = .client(second.id)
+        model.deleteClient(second.id)
+        #expect(model.clientsSelection == .client(third.id))
+        #expect(model.selection == .clients)
+        model.deleteClient(first.id)
+        #expect(model.clientsSelection == .client(third.id))
+        model.deleteClient(third.id)
+        #expect(model.clientsSelection == nil)
+        #expect(model.selection == .clients)
+        #expect(model.entityEditor == nil)
     }
 
     @Test("entity saves detect a background run that started after the editor opened", arguments: [false, true])

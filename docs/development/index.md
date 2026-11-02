@@ -12,7 +12,7 @@ swift test --parallel
 open .build/AutoMAA.app --args --data-directory /tmp/automaa-development
 ```
 
-构建产物位于 `.build/AutoMAA.app`。上面的启动命令使用独立数据目录，同时隔离配置、日志和 LaunchAgent，并关闭系统 LaunchAgent 集成与自动更新检查。界面测试始终使用这一入口，不读取或覆盖日常使用的配置。
+构建产物位于 `.build/AutoMAA.app`。构建脚本使用当前 Xcode 选定的 macOS SDK，并在打包前校验四个可执行文件的链接 SDK 版本，保留 macOS 14 部署目标。上面的启动命令使用独立数据目录，同时隔离配置、日志和 LaunchAgent，并关闭系统 LaunchAgent 集成与自动更新检查。界面测试始终使用这一入口，不读取或覆盖日常使用的配置。
 
 ## 上游协议范围
 

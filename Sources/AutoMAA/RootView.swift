@@ -71,18 +71,31 @@ struct RootView: View {
             DashboardView()
         case let .plan(id):
             if let binding = model.planBinding(id) {
-                PlanEditorView(plan: binding).id(binding.wrappedValue.id)
+                PlanEditorView(plan: binding)
             } else {
                 ContentUnavailableView("方案不存在", systemImage: "clock.badge.exclamationmark")
                     .workspaceToolbar(title: "自动化方案")
             }
-        case let .client(id):
-            ClientsView().onAppear { model.entityEditor = .client(id); model.selection = .clients }
-        case let .account(clientID, accountID):
-            ClientsView().onAppear { model.entityEditor = .account(clientID, accountID); model.selection = .clients }
-        case .clients: ClientsView()
+        case .client, .account, .clients:
+            ClientsView().onChange(of: model.selection, initial: true) { _, selection in
+                openRequestedClientEditor(selection)
+            }
         case .activity:
             ActivityView()
+        }
+    }
+
+    private func openRequestedClientEditor(_ selection: SidebarSelection) {
+        switch selection {
+        case let .client(id):
+            model.clientsSelection = .client(id)
+            model.entityEditor = .client(id)
+            model.selection = .clients
+        case let .account(clientID, accountID):
+            model.clientsSelection = .account(clientID: clientID, accountID: accountID)
+            model.entityEditor = .account(clientID, accountID)
+            model.selection = .clients
+        default: break
         }
     }
 
