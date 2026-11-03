@@ -194,8 +194,8 @@ struct DashboardView: View {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         VStack(alignment: .trailing, spacing: 5) {
-                            if session.showsOutcomeStatus {
-                                Text(session.historyStatusTitle).foregroundStyle(ActivityRecordPresentation.tint(session))
+                            if session.outcome != .completed {
+                                Text(session.outcome.title).foregroundStyle(.secondary)
                             }
                             Text(session.startedAt, format: .dateTime.month().day().hour().minute()).foregroundStyle(.secondary)
                         }

@@ -211,7 +211,7 @@ struct ActivityView: View {
         let needsRecovery = !progress.fightRecoveryItems.isEmpty
         return HStack(alignment: .top, spacing: 8) {
             Image(systemName: needsRecovery ? "exclamationmark.circle" : "calendar")
-                .foregroundStyle(needsRecovery ? .orange : .secondary)
+                .foregroundStyle(.secondary)
                 .frame(width: 18).padding(.top, 2).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text(plan.displayName).font(.callout.weight(.medium)).lineLimit(2)
@@ -246,12 +246,18 @@ struct ActivityView: View {
                 Text(session.startedAt, format: .dateTime.hour().minute())
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
-            if session.showsOutcomeStatus {
-                Label(session.historyStatusTitle, systemImage: ActivityRecordPresentation.symbol(session))
-                    .font(.caption).foregroundStyle(ActivityRecordPresentation.tint(session))
+            HStack(spacing: 5) {
+                Image(systemName: session.outcome.symbol)
+                    .foregroundStyle(session.outcome == .failed ? Color.red : Color.secondary)
+                    .frame(width: 15)
+                    .accessibilityHidden(true)
+                Text(session.outcome.title).fixedSize()
+                Text("·").accessibilityHidden(true)
+                Text(ActivityRecordPresentation.listSummary(session))
+                    .lineLimit(1)
             }
-            Text(ActivityRecordPresentation.summary(session))
-                .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            .font(.caption).foregroundStyle(.secondary)
+            .accessibilityElement(children: .combine)
         }
         .padding(.vertical, 5)
         .help(title(for: session))
@@ -261,13 +267,14 @@ struct ActivityView: View {
     private var selectedDetail: some View {
         switch model.activitySelection {
         case let .plan(planID):
-            PlanActivityView(planID: planID, showsPlanTitle: true, showsHistoryLink: false)
+            PlanActivityView(planID: planID, isTodayDetail: true)
                 .id(planID)
         case .maintenance:
             ActivityCurrentRunView()
         case let .session(id):
             if let session = sessions.first(where: { $0.id == id }) {
-                ActivityRecordDetail(session: session, title: title(for: session), section: recordSection)
+                ActivityRecordDetail(session: session, title: title(for: session), section: recordSection,
+                                     showToday: todayAction(for: session))
                     .id(session.id)
             } else {
                 ActivityEmptyState(title: "该记录已被清除", symbol: "clock.arrow.circlepath", detail: "从左侧选择其他记录。")
@@ -276,6 +283,14 @@ struct ActivityView: View {
             ActivityEmptyState(title: hasActiveFilters ? "没有匹配的记录" : "选择运行记录",
                                symbol: "list.bullet.rectangle", detail: "从左侧查看今日状态或历史结果。")
         }
+    }
+
+    private func todayAction(for session: ActivitySession) -> (() -> Void)? {
+        guard let planID = session.planID, currentPlan?.id != planID,
+              model.configuration.plans.contains(where: { $0.id == planID }) else { return nil }
+        let progress = model.continuation(for: planID)
+        guard (progress.hasStarted && progress.pending > 0) || !progress.fightRecoveryItems.isEmpty else { return nil }
+        return { model.activitySelection = .plan(planID) }
     }
 
     private func restoreSelection() {

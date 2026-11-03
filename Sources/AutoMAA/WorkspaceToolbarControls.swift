@@ -29,12 +29,7 @@ struct WorkspaceRunControlState {
             stopHelp = "没有正在运行的操作"
         }
         let planID: UUID?
-        switch model.selection {
-        case let .plan(id): planID = id
-        case .activity:
-            if case let .plan(id) = model.activitySelection { planID = id } else { planID = nil }
-        default: planID = nil
-        }
+        if case let .plan(id) = model.selection { planID = id } else { planID = nil }
         let selectedPlan = planID.flatMap { id in model.configuration.plans.first { $0.id == id } }
         presentation = selectedPlan != nil ? .plan : (model.isWorkflowRunning ? .stop : .hidden)
         guard !model.isWorkflowRunning else {

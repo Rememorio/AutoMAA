@@ -44,34 +44,65 @@ enum ActivityFilter: String, CaseIterable, Identifiable {
     }
 }
 
-extension ActivitySession {
-    var showsOutcomeStatus: Bool {
-        let completed = finalPhase == .completed || (finalPhase == nil && finalLevel == .success)
-        return !completed || finalLevel == .warning || finalLevel == .error
-            || runSummary?.isPartial == true
-            || (runSummary?.manuallyHandledSteps ?? 0) > 0
-            || (runSummary?.pendingWeeklyAnnihilation ?? 0) > 0
+enum ActivityOutcome {
+    case completed, handled, partial, partiallyHandled, incomplete, awaitingReview, weeklyPending
+    case failed, cancelled, unfinished, recorded
+
+    var title: String {
+        switch self {
+        case .completed: "已完成"
+        case .handled: "已处理"
+        case .partial: "部分完成"
+        case .partiallyHandled: "部分处理"
+        case .incomplete: "未完成"
+        case .awaitingReview: "待核实"
+        case .weeklyPending: "本轮结束"
+        case .failed: "失败"
+        case .cancelled: "已停止"
+        case .unfinished: "未记录结束"
+        case .recorded: "运行记录"
+        }
     }
 
-    var historyStatusTitle: String {
-        let phase = finalPhase
-        let level = finalLevel
-        if hasUnfinishedActivity { return "未记录结束" }
-        if phase == .failed { return "失败" }
-        if phase == .cancelled { return "已取消" }
-        if let summary = runSummary, summary.isPartial {
-            if summary.manuallyHandledSteps > 0 { return "部分处理" }
-            return summary.completedSteps + summary.unnecessarySteps > 0 ? "部分完成" : "未完成"
+    var symbol: String {
+        switch self {
+        case .completed: "checkmark.circle"
+        case .handled: "person.crop.circle"
+        case .partial, .partiallyHandled: "circle.lefthalf.filled"
+        case .incomplete: "circle.dashed"
+        case .awaitingReview: "exclamationmark.circle"
+        case .weeklyPending: "calendar.badge.clock"
+        case .failed: "xmark.circle"
+        case .cancelled: "stop.circle"
+        case .unfinished: "questionmark.circle"
+        case .recorded: "clock"
         }
-        if phase == .completed, (runSummary?.manuallyHandledSteps ?? 0) > 0 { return "已处理" }
-        if phase == .completed, level == .warning { return "完成 · 提醒" }
-        if phase == .completed, (runSummary?.pendingWeeklyAnnihilation ?? 0) > 0 { return "本轮结束" }
-        if let phase { return phase.displayName }
-        return switch level {
-        case .info: "运行记录"
-        case .success: "已完成"
-        case .warning: "需要留意"
-        case .error: "发生错误"
+    }
+}
+
+extension ActivitySession {
+    var outcome: ActivityOutcome {
+        if hasUnfinishedActivity { return .unfinished }
+        if finalPhase == .failed { return .failed }
+        if finalPhase == .cancelled { return .cancelled }
+        if let summary = runSummary, summary.isPartial {
+            if summary.manuallyHandledSteps > 0 { return .partiallyHandled }
+            if summary.completedSteps + summary.unnecessarySteps > 0 { return .partial }
+            if summary.failedSteps > 0 { return .failed }
+            return .incomplete
+        }
+        if finalLevel == .error { return .failed }
+        if (runSummary?.pendingWeeklyAnnihilation ?? 0) > 0 { return .weeklyPending }
+        if (runSummary?.manuallyHandledSteps ?? 0) > 0 { return .handled }
+        if finalPhase == .attention { return .awaitingReview }
+        if finalPhase == .completed {
+            return finalLevel == .warning && runSummary == nil ? .awaitingReview : .completed
+        }
+        return switch finalLevel {
+        case .info: .recorded
+        case .success: .completed
+        case .warning: .awaitingReview
+        case .error: .failed
         }
     }
 

@@ -34,36 +34,35 @@ struct ActivityPresentationTests {
         }
     }
 
-    @Test("ordinary completion omits its badge while exceptional outcomes remain explicit")
-    func outcomeStatusVisibility() {
+    @Test("history derives a consistent outcome from terminal phases and structured results")
+    func historyOutcome() {
         let complete = LogEntry(level: .success, message: "完成", phase: .completed,
             runSummary: .init(completedSteps: 1, failedSteps: 0, unexecutedSteps: 0, totalSteps: 1))
-        #expect(!session([complete]).showsOutcomeStatus)
-        #expect(!session([.init(level: .success, message: "较早的完成记录")]).showsOutcomeStatus)
+        #expect(session([complete]).outcome == .completed)
+        #expect(session([.init(level: .success, message: "较早的完成记录")]).outcome == .completed)
 
         let notices = session([.init(level: .warning, message: "重试提醒"), complete])
-        #expect(!notices.showsOutcomeStatus)
+        #expect(notices.outcome == .completed)
         #expect(ActivityRecordPresentation.summary(notices).contains("1 条提醒"))
         #expect(ActivityResultSummary(session: notices).notices.count == 1)
 
-        let exceptions: [LogEntry] = [
-            .init(level: .error, message: "失败", phase: .failed),
-            .init(level: .warning, message: "取消", phase: .cancelled),
-            .init(level: .info, message: "仍在运行", phase: .runningTask),
-            .init(level: .warning, message: "完成但需留意", phase: .completed),
-            .init(level: .success, message: "存在失败", phase: .completed,
-                  runSummary: .init(completedSteps: 1, failedSteps: 1, unexecutedSteps: 0, totalSteps: 2)),
-            .init(level: .success, message: "待确认", phase: .completed,
-                  runSummary: .init(completedSteps: 0, failedSteps: 0, unexecutedSteps: 0, totalSteps: 1,
-                                    unconfirmedSteps: 1)),
-            .init(level: .success, message: "人工处理", phase: .completed,
-                  runSummary: .init(completedSteps: 0, failedSteps: 0, unexecutedSteps: 0, totalSteps: 1,
-                                    manuallyHandledSteps: 1)),
-            .init(level: .success, message: "剿灭待补打", phase: .completed,
-                  runSummary: .init(completedSteps: 1, failedSteps: 0, unexecutedSteps: 0, totalSteps: 1,
-                                    pendingWeeklyAnnihilation: 1))
+        let cases: [(LogEntry, ActivityOutcome)] = [
+            (.init(level: .error, message: "失败", phase: .failed), .failed),
+            (.init(level: .warning, message: "取消", phase: .cancelled), .cancelled),
+            (.init(level: .info, message: "仍在运行", phase: .runningTask), .unfinished),
+            (.init(level: .warning, message: "结果待核实", phase: .completed), .awaitingReview),
+            (.init(level: .warning, message: "存在失败", phase: .completed,
+                   runSummary: .init(completedSteps: 1, failedSteps: 1, unexecutedSteps: 0, totalSteps: 2)), .partial),
+            (.init(level: .warning, message: "全部失败", phase: .completed,
+                   runSummary: .init(completedSteps: 0, failedSteps: 1, unexecutedSteps: 0, totalSteps: 1)), .failed),
+            (.init(level: .success, message: "待确认", phase: .completed,
+                   runSummary: .init(completedSteps: 0, failedSteps: 0, unexecutedSteps: 0, totalSteps: 1,
+                                     unconfirmedSteps: 1)), .incomplete),
+            (.init(level: .success, message: "剿灭待补打", phase: .completed,
+                   runSummary: .init(completedSteps: 1, failedSteps: 0, unexecutedSteps: 0, totalSteps: 1,
+                                     pendingWeeklyAnnihilation: 1)), .weeklyPending)
         ]
-        for entry in exceptions { #expect(session([entry]).showsOutcomeStatus) }
+        for (entry, outcome) in cases { #expect(session([entry]).outcome == outcome) }
     }
 
     @Test("manually handled work is described as handled rather than automatically completed")
@@ -71,12 +70,12 @@ struct ActivityPresentationTests {
         let handled = session([.init(level: .success, message: "本轮已处理", phase: .completed,
             runSummary: .init(completedSteps: 0, failedSteps: 0, unexecutedSteps: 0, totalSteps: 1,
                               manuallyHandledSteps: 1))])
-        #expect(handled.historyStatusTitle == "已处理")
+        #expect(handled.outcome == .handled)
         #expect(!ActivityFilter.failed.includes(handled))
         let partial = session([.init(level: .warning, message: "仍有任务未执行", phase: .completed,
             runSummary: .init(completedSteps: 0, failedSteps: 0, unexecutedSteps: 1, totalSteps: 2,
                               manuallyHandledSteps: 1))])
-        #expect(partial.historyStatusTitle == "部分处理")
+        #expect(partial.outcome == .partiallyHandled)
         #expect(ActivityFilter.attention.includes(partial))
     }
 
@@ -100,7 +99,7 @@ struct ActivityPresentationTests {
         #expect(!ActivityFilter.failed.includes(pending))
         let unfinished = session([.init(level: .info, message: "开始作战", phase: .runningTask)])
         #expect(unfinished.hasUnfinishedActivity)
-        #expect(unfinished.historyStatusTitle == "未记录结束")
+        #expect(unfinished.outcome == .unfinished)
         #expect(ActivityFilter.attention.includes(unfinished))
         #expect(!ActivityFilter.failed.includes(unfinished))
     }

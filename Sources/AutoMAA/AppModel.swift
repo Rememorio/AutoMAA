@@ -580,6 +580,16 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func retryFight(_ item: FightRecoveryItem) {
+        reloadActivityHistory()
+        guard !isFightRecoveryBusy,
+              continuation(for: item.step.planID).fightRecoveryItems.contains(item) else {
+            showFeedback("作战状态已变化或仍在运行，请重新核实结果")
+            return
+        }
+        runPlan(item.step.planID, retryStep: item.step)
+    }
+
     func fightRetryHint(_ step: WorkflowStep) -> String {
         if continuation(for: step.planID).fightRecoveryItems.first(where: { $0.step == step })?.retryStage == "Annihilation" {
             if executionState.fightProgress?[step.key]?.regular?.status == .unconfirmed {

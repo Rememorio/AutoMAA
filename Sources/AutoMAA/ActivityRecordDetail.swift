@@ -31,6 +31,27 @@ enum ActivityRecordPresentation {
             + (progress.unconfirmed > 0 ? " · \(progress.unconfirmed) 项待确认" : "")
     }
 
+    static func listSummary(_ session: ActivitySession) -> String {
+        var parts: [String] = []
+        if let summary = session.runSummary {
+            let resolved = summary.completedSteps + summary.unnecessarySteps + summary.manuallyHandledSteps
+            parts.append("\(resolved)/\(summary.totalSteps) 项")
+            if summary.failedSteps > 0 { parts.append("\(summary.failedSteps) 项失败") }
+            else if summary.unconfirmedSteps > 0 { parts.append("\(summary.unconfirmedSteps) 项待确认") }
+            else if summary.pendingWeeklyAnnihilation > 0 { parts.append("剿灭待补打") }
+        } else {
+            parts.append("\(session.entries.count) 条记录")
+        }
+        if parts.count == 1 {
+            let notices = session.warningCount + session.errorCount
+            if notices > 0, session.outcome == .completed { parts.append("\(notices) 条提醒") }
+            else if session.endedAt > session.startedAt {
+                parts.append(duration(from: session.startedAt, to: session.endedAt))
+            }
+        }
+        return parts.joined(separator: " · ")
+    }
+
     static func summary(_ session: ActivitySession) -> String {
         var parts: [String] = []
         if let summary = session.runSummary {
@@ -48,18 +69,6 @@ enum ActivityRecordPresentation {
         if session.errorCount > 0, (session.runSummary?.failedSteps ?? 0) == 0 { parts.append("\(session.errorCount) 条错误") }
         if session.endedAt > session.startedAt { parts.append(duration(from: session.startedAt, to: session.endedAt)) }
         return parts.joined(separator: " · ")
-    }
-
-    static func symbol(_ session: ActivitySession) -> String {
-        if session.hasUnfinishedActivity { return "questionmark.circle" }
-        if session.finalPhase == .completed, session.finalLevel == .warning { return "exclamationmark.circle.fill" }
-        return session.finalPhase?.statusSymbol ?? session.finalLevel.symbol
-    }
-
-    static func tint(_ session: ActivitySession) -> Color {
-        if session.hasUnfinishedActivity { return .secondary }
-        if session.finalPhase == .completed, session.finalLevel == .warning { return .orange }
-        return session.finalPhase?.statusTint ?? session.finalLevel.color
     }
 
     static func dayTitle(_ date: Date) -> String {
@@ -81,11 +90,19 @@ struct ActivityRecordDetail: View {
     let session: ActivitySession
     let title: String
     let section: ActivityRecordSection
+    var showToday: (() -> Void)? = nil
 
     var body: some View {
         VStack(spacing: 0) {
-            ActivityRecordHeader(session: session, title: title)
-                .padding(20)
+            VStack(alignment: .leading, spacing: 10) {
+                ActivityRecordHeader(session: session, title: title)
+                if let showToday {
+                    Button("查看今日待办", action: showToday)
+                        .controlSize(.small)
+                        .tint(.primary)
+                }
+            }
+            .padding(20)
             Divider()
             ScrollView {
                 ActivitySessionContents(session: session, section: section)
@@ -108,11 +125,6 @@ struct ActivityRecordHeader: View {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text(title).font(.headline).textSelection(.enabled)
                 Spacer(minLength: 8)
-                if session.showsOutcomeStatus {
-                    Label(session.historyStatusTitle, systemImage: ActivityRecordPresentation.symbol(session))
-                        .font(.caption).foregroundStyle(ActivityRecordPresentation.tint(session))
-                        .fixedSize()
-                }
                 if let information = session.updateInformation {
                     ActionTextButton(title: "更新内容", symbol: "doc.text", help: "查看本次 MAA 更新内容") {
                         model.updateDetailsRequest = .maa(information)

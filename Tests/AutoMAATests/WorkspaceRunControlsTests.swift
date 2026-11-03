@@ -109,7 +109,7 @@ struct WorkspaceRunControlsTests {
         #expect(secondSent)
         #expect(model.readinessRequest?.id == fixture.plan.id)
 
-        model.activitySelection = .session("unrelated-record")
+        model.activitySelection = .plan(fixture.plan.id)
         for selection: SidebarSelection in [.overview, .clients, .activity] {
             model.selection = selection
             refresh(chrome, model: model, window: window)
@@ -154,6 +154,13 @@ struct WorkspaceRunControlsTests {
         #expect(stop.isEnabled)
         #expect(stop.toolTip?.contains(fixture.plan.name) == true)
         #expect(!chrome.toolbar.items.contains { $0 === group })
+        model.selection = .activity
+        model.activitySelection = .plan(fixture.plan.id)
+        refresh(chrome, model: model, window: window)
+        #expect(chrome.toolbar.items.contains { $0 === stop })
+        #expect(!chrome.toolbar.items.contains { $0 === group })
+        model.selection = .clients
+        refresh(chrome, model: model, window: window)
         #expect(add.accessibilityFrame() == initial)
         #expect(!chrome.toolbar.items.contains { $0.label == "运行方案" })
 

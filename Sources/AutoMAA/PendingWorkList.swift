@@ -24,7 +24,8 @@ struct PendingWorkList: View {
                         ForEach(remaining) { item in
                             VStack(alignment: .leading, spacing: 4) {
                                 Label(item.title, systemImage: item.step.task.symbol).font(.callout)
-                                if let detail = item.detail {
+                                if item.reason != nil || item.lastFailure != nil || item.targets == [.weeklyAnnihilation],
+                                   let detail = item.detail {
                                     Text(detail).font(.caption).foregroundStyle(.secondary)
                                 }
                             }

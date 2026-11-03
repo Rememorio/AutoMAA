@@ -23,8 +23,7 @@ struct ActivityPlanSnapshot {
 struct PlanActivityView: View {
     @EnvironmentObject private var model: AppModel
     let planID: UUID
-    var showsPlanTitle = false
-    var showsHistoryLink = true
+    var isTodayDetail = false
 
     private var plan: AutomationPlan? { model.configuration.plans.first { $0.id == planID } }
     private var progress: PlanContinuation { model.continuation(for: planID) }
@@ -40,6 +39,10 @@ struct PlanActivityView: View {
         return progress.pendingItems.filter { !recoveryIDs.contains($0.id) }
     }
 
+    private var showsPendingWork: Bool {
+        !progress.fightRecoveryItems.isEmpty || (progress.hasStarted && progress.pending > 0)
+    }
+
     var body: some View {
         if let plan {
             VStack(spacing: 0) {
@@ -50,7 +53,7 @@ struct PlanActivityView: View {
                 else if snapshot.latestSession == nil, !progress.hasStarted, progress.fightRecoveryItems.isEmpty {
                     ActivityEmptyState(title: "今日尚未运行", symbol: "clock.arrow.circlepath",
                                        detail: emptyHistoryDescription(plan))
-                } else { idleContent(plan) }
+                } else { idleContent }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
@@ -60,14 +63,11 @@ struct PlanActivityView: View {
 
     private var liveContent: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if !progress.fightRecoveryItems.isEmpty || (progress.hasStarted && !pendingItems.isEmpty) {
+            if showsPendingWork {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        if !progress.fightRecoveryItems.isEmpty { recovery }
-                        if progress.hasStarted, !pendingItems.isEmpty { pendingWork }
-                    }
-                    .padding(.horizontal, 20).padding(.bottom, 12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    pendingWork(showContinuation: false)
+                        .padding(.horizontal, 20).padding(.vertical, 12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .frame(height: 150)
                 Divider()
@@ -79,14 +79,17 @@ struct PlanActivityView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    private func idleContent(_ plan: AutomationPlan) -> some View {
+    private var idleContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                if !progress.fightRecoveryItems.isEmpty { recovery }
+                if showsPendingWork {
+                    pendingWork(showContinuation: isTodayDetail && progress.hasStarted && progress.pending > 0)
+                    Divider()
+                }
                 if let session = snapshot.latestSession {
                     VStack(alignment: .leading, spacing: 16) {
                         ActivityRecordHeader(session: session, title: "最近运行",
-                                             showFullHistory: showsHistoryLink ? nil : { showFullHistory() })
+                                             showFullHistory: isTodayDetail ? { showFullHistory() } : nil)
                         ActivitySessionContents(session: session).id(session.id)
                     }
                 } else {
@@ -94,36 +97,71 @@ struct PlanActivityView: View {
                                        detail: "运行后会显示这份方案的结果与完整日志。")
                         .frame(minHeight: 160)
                 }
-                if progress.hasStarted, !pendingItems.isEmpty {
-                    Divider()
-                    pendingWork
-                }
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
-    private var pendingWork: some View {
+    private func pendingWork(showContinuation: Bool) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("今日待办").font(.subheadline.weight(.semibold))
-            PendingWorkList(items: pendingItems)
+            if showContinuation { runAction("继续待办", showsRemaining: true) }
+            if !progress.fightRecoveryItems.isEmpty { recovery }
+            if progress.hasStarted, !pendingItems.isEmpty { PendingWorkList(items: pendingItems) }
+        }
+    }
+
+    private func runAction(_ title: String, showsRemaining: Bool = false) -> some View {
+        let state = model.planRunState(planID: planID)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Button(state == .configurationIncomplete ? "检查配置" : title) {
+                    if state == .configurationIncomplete {
+                        model.readinessRequest = PlanReadinessRequest(id: planID)
+                    } else {
+                        model.runPlan(planID)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .tint(.primary)
+                .disabled(state != .ready && state != .configurationIncomplete)
+                if showsRemaining {
+                    Text("\(progress.pending) 项可继续" + (progress.unconfirmed > 0 ? " · \(progress.unconfirmed) 项待核实" : ""))
+                        .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                }
+            }
+            if showsRemaining, progress.unconfirmed > 0 {
+                Text("本次会跳过待核实的作战。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if state == .configurationIncomplete {
+                Text("修正配置后即可运行待办。")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if state != .ready {
+                Text("运行或更新结束后可继续。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
 
     private func header(_ plan: AutomationPlan) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             VStack(alignment: .leading, spacing: 7) {
-                if showsPlanTitle || snapshot.isCurrent {
-                    Text(showsPlanTitle ? plan.displayName : "本次运行")
+                if isTodayDetail || snapshot.isCurrent {
+                    Text(isTodayDetail ? plan.displayName : "本次运行")
                         .font(.headline).fixedSize(horizontal: false, vertical: true)
                 }
                 if !snapshot.isCurrent, snapshot.latestSession != nil || progress.hasStarted || !progress.fightRecoveryItems.isEmpty {
-                    todaySummary(plan)
+                    todaySummary(plan, summarizesPendingWork: !isTodayDetail || !showsPendingWork)
+                }
+                if isTodayDetail, !snapshot.isCurrent, !progress.hasStarted,
+                   progress.pending > 0 || model.planRunState(planID: planID) == .configurationIncomplete {
+                    runAction("运行方案")
                 }
             }
             Spacer(minLength: 8)
-            if showsHistoryLink { historyButton }
+            if !isTodayDetail { historyButton }
         }
     }
 
@@ -132,15 +170,17 @@ struct PlanActivityView: View {
                          action: showFullHistory)
     }
 
-    private func todaySummary(_ plan: AutomationPlan) -> some View {
+    private func todaySummary(_ plan: AutomationPlan, summarizesPendingWork: Bool) -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(ActivityRecordPresentation.todaySummary(progress))
-                .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+            if summarizesPendingWork {
+                Text(ActivityRecordPresentation.todaySummary(progress))
+                    .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+            }
             if progress.manuallyHandled > 0 {
                 Text("\(progress.manuallyHandled) 项作战已人工处理，今天不再重试")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            if progress.unconfirmed > 0 {
+            if summarizesPendingWork, progress.unconfirmed > 0 {
                 Text("继续其他任务会保留待确认作战。请先核实结果，再决定是否重新尝试。")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -162,11 +202,10 @@ struct PlanActivityView: View {
 
     private var recovery: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("需要处理", systemImage: "exclamationmark.circle")
-                .font(.subheadline.weight(.semibold)).foregroundStyle(.orange)
             ForEach(progress.fightRecoveryItems) { item in
                 FightRecoveryRow(item: item, context: model.pendingWorkContext(item.step),
-                    pendingTitle: progress.pendingItems.first { $0.id == item.id }?.title)
+                    pendingTitle: progress.pendingItems.first { $0.id == item.id }?.title,
+                    presentsReview: isTodayDetail)
                 if item.id != progress.fightRecoveryItems.last?.id { Divider() }
             }
         }

@@ -63,7 +63,8 @@ struct ActivityHistoryRefreshTests {
         model.reloadActivityHistory()
         #expect(model.activityEntries.isEmpty)
         #expect(model.runTitle(for: plan.id) == "继续其他任务")
-        #expect(model.continuation(for: plan.id).fightRecoveryItems.first?.canConfirmWeeklyCompletion == true)
+        let reviewedItem = try #require(model.continuation(for: plan.id).fightRecoveryItems.first)
+        #expect(reviewedItem.canConfirmWeeklyCompletion)
         var lock: ProcessLock? = try ProcessLock(url: directories.lock)
         #expect(lock != nil)
         model.reloadActivityHistory()
@@ -79,6 +80,10 @@ struct ActivityHistoryRefreshTests {
         #expect(model.continuation(for: plan.id).fightRecoveryItems.isEmpty)
         #expect(model.continuation(for: plan.id).pending == 2)
         #expect(try store.load().status(for: plan.fight.weeklyAnnihilation, client: client, accountID: account.id) == .completed)
+
+        model.retryFight(reviewedItem)
+        #expect(!model.isWorkflowRunning)
+        #expect(model.feedback.notice?.message.contains("请重新核实结果") == true)
     }
 
     @Test("reloads activity written by the background runner")
