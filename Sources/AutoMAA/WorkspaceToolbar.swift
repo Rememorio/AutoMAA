@@ -205,8 +205,10 @@ final class WorkspaceChromeController: NSObject, NSToolbarDelegate {
         if detailSplit != nil { ids.append(Self.detailDividerID) }
         if detailSplit != nil { ids += detailActions.map { pageID($0.id) } }
         if runPresentation == .plan { ids.append(Self.runID) }
-        if detailSplit != nil, modesGroup != nil { ids.append(Self.detailID) }
-        if runPresentation == .stop {
+        if detailSplit != nil, modesGroup != nil {
+            if runPresentation == .stop { ids += [Self.stopID, .space] }
+            ids.append(Self.detailID)
+        } else if runPresentation == .stop {
             ids += [.space, Self.stopID]
         }
         ids.append(.flexibleSpace)

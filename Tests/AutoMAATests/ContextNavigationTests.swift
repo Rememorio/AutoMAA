@@ -142,6 +142,51 @@ struct ContextNavigationTests {
                 == .account(clientID: client.id, accountID: first.id))
     }
 
+    @Test("stage settings navigation requires a current failure recorded before combat")
+    @MainActor
+    func fightStageSettingsNavigation() throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = makeModel(root: root)
+        let account = AccountConfiguration(name: "测试账号")
+        let client = ClientConfiguration(name: "测试客户端", kind: .yoStarJP,
+                                         appPath: root.appending(path: "Missing.app").path,
+                                         address: "127.0.0.1:65514", profileName: "navigation-test",
+                                         bundleIdentifier: "dev.automaa.tests.navigation", accounts: [account])
+        let plan = AutomationPlan.lightRoutine
+        model.configuration = AppConfiguration(cliPath: "/usr/bin/true", clients: [client], plans: [plan])
+        model.selection = .activity
+        let step = WorkflowStep(planID: plan.id, clientID: client.id, accountID: account.id, task: .fight)
+        let store = ExecutionStateStore(directories: model.directories)
+        var state = ExecutionState(dateKey: ExecutionStateStore.todayKey)
+        var progress = FightProgress(regularStage: "1-7")
+        let failure = FightResult(status: .failed, stage: "1-7", reason: .stageUnavailable)
+        progress.regular = failure
+        state.record(failure, for: step.key)
+        state.fightProgress = [step.key: progress]
+        try store.save(state)
+        model.reloadActivityHistory()
+        #expect(model.canOpenFightStageSettings(for: step))
+
+        let interrupted = FightResult(status: .unconfirmed, stage: "1-7", times: 1, reason: .interruptedBattle)
+        progress.regular = interrupted
+        state.record(interrupted, for: step.key)
+        state.fightProgress = [step.key: progress]
+        try store.save(state)
+        model.openFightStageSettings(for: step)
+        #expect(model.selection == .activity)
+        #expect(model.fightSettingsPlanID == nil)
+        #expect(!model.canOpenFightStageSettings(for: step))
+
+        progress.regular = failure
+        state.record(failure, for: step.key)
+        state.fightProgress = [step.key: progress]
+        try store.save(state)
+        model.openFightStageSettings(for: step)
+        #expect(model.selection == .plan(plan.id))
+        #expect(model.fightSettingsPlanID == plan.id)
+    }
+
     private func temporaryRoot() -> URL {
         FileManager.default.temporaryDirectory.appending(path: "automaa-navigation-\(UUID())")
     }

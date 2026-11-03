@@ -29,7 +29,18 @@ struct WorkspaceRunControlState {
             stopHelp = "没有正在运行的操作"
         }
         let planID: UUID?
-        if case let .plan(id) = model.selection { planID = id } else { planID = nil }
+        let isToday: Bool
+        switch (model.selection, model.activitySelection) {
+        case let (.plan(id), _):
+            planID = id
+            isToday = false
+        case let (.activity, .plan(id)):
+            planID = id
+            isToday = true
+        default:
+            planID = nil
+            isToday = false
+        }
         let selectedPlan = planID.flatMap { id in model.configuration.plans.first { $0.id == id } }
         presentation = selectedPlan != nil ? .plan : (model.isWorkflowRunning ? .stop : .hidden)
         guard !model.isWorkflowRunning else {
@@ -42,12 +53,20 @@ struct WorkspaceRunControlState {
             startHelp = "选择方案后运行"
             return
         }
+        let progress = model.continuation(for: planID)
+        if isToday, progress.pending == 0, progress.unconfirmed > 0 {
+            startAction = .unavailable
+            startHelp = "请先核实今日待办中的作战结果 · \(plan.displayName)"
+            return
+        }
         switch model.planRunState(planID: planID) {
         case .ready:
-            let progress = model.continuation(for: planID)
             if progress.pending > 0 {
                 startAction = .run(planID)
-                startHelp = "\(model.runTitle(for: planID)) · \(plan.displayName)\n\(model.runHelp(for: planID))"
+                let help = isToday && progress.unconfirmed > 0
+                    ? "继续 \(progress.pending) 项待办，跳过 \(progress.unconfirmed) 项待核实作战"
+                    : model.runHelp(for: planID)
+                startHelp = "\(model.runTitle(for: planID)) · \(plan.displayName)\n\(help)"
             } else if progress.unconfirmed > 0 {
                 startAction = .activity(planID)
                 startHelp = "处理待确认结果 · \(plan.displayName)"

@@ -97,6 +97,10 @@ struct WorkspaceRunControlsTests {
         let firstSent = NSApp.sendAction(action, to: group.target, from: group)
         #expect(firstSent)
         #expect(model.activitySelection == .plan(fixture.plan.id))
+        refresh(chrome, model: model, window: window)
+        #expect(chrome.toolbar.items.contains { $0 === group })
+        #expect(!play.isEnabled)
+        #expect(play.toolTip?.contains("核实") == true)
 
         model.selection = .plan(fixture.plan.id)
         model.configuration.cliPath = fixture.root.appending(path: "missing-maa").path
@@ -109,7 +113,7 @@ struct WorkspaceRunControlsTests {
         #expect(secondSent)
         #expect(model.readinessRequest?.id == fixture.plan.id)
 
-        model.activitySelection = .plan(fixture.plan.id)
+        model.activitySelection = .session("historical-record")
         for selection: SidebarSelection in [.overview, .clients, .activity] {
             model.selection = selection
             refresh(chrome, model: model, window: window)
@@ -157,6 +161,13 @@ struct WorkspaceRunControlsTests {
         model.selection = .activity
         model.activitySelection = .plan(fixture.plan.id)
         refresh(chrome, model: model, window: window)
+        #expect(!chrome.toolbar.items.contains { $0 === stop })
+        #expect(chrome.toolbar.items.contains { $0 === group })
+        #expect(group.subitems.first?.isEnabled == true)
+        #expect(group.subitems.last?.isEnabled == false)
+
+        model.activitySelection = .session("historical-record")
+        refresh(chrome, model: model, window: window)
         #expect(chrome.toolbar.items.contains { $0 === stop })
         #expect(!chrome.toolbar.items.contains { $0 === group })
         model.selection = .clients
@@ -180,6 +191,33 @@ struct WorkspaceRunControlsTests {
         refresh(chrome, model: model, window: window)
         #expect(!chrome.toolbar.items.contains { $0 === stop })
         #expect(add.accessibilityFrame() == initial)
+    }
+
+    @Test("history puts the active stop before the log switcher and omits play")
+    func historyStopPrecedesLogModes() throws {
+        let fixture = makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let model = fixture.model
+        let lock = try ProcessLock(url: model.directories.lock)
+        defer { withExtendedLifetime(lock) {} }
+        model.reloadActivityHistory()
+        model.selection = .activity
+        model.activitySelection = .session("historical-record")
+
+        let chrome = WorkspaceChromeController()
+        chrome.setRunControls(model: model)
+        let detail = WorkspaceDetailSplitController(chrome: chrome, content: AnyView(Text("记录")), detail: AnyView(Text("日志")))
+        chrome.setDetailSplit(detail.splitView)
+        chrome.setPage(title: "运行记录", actions: [], modes: .init(options: [
+            .init(title: "运行结果", symbol: "checklist", help: "查看结果"),
+            .init(title: "完整日志", symbol: "list.bullet.rectangle", help: "查看日志")
+        ], selectedIndex: 1, select: { _ in }))
+
+        let ids = chrome.itemIdentifiers
+        let stop = try #require(ids.firstIndex(of: WorkspaceChromeController.stopID))
+        let modes = try #require(ids.firstIndex(of: WorkspaceChromeController.detailID))
+        #expect(stop < modes)
+        #expect(!ids.contains(WorkspaceChromeController.runID))
     }
 
     @Test("local maintenance and its cancellation preserve the same native stop and play pair")

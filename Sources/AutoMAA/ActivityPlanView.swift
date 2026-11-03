@@ -65,7 +65,7 @@ struct PlanActivityView: View {
         VStack(alignment: .leading, spacing: 0) {
             if showsPendingWork {
                 ScrollView {
-                    pendingWork(showContinuation: false)
+                    pendingWork
                         .padding(.horizontal, 20).padding(.vertical, 12)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -83,7 +83,7 @@ struct PlanActivityView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 if showsPendingWork {
-                    pendingWork(showContinuation: isTodayDetail && progress.hasStarted && progress.pending > 0)
+                    pendingWork
                     Divider()
                 }
                 if let session = snapshot.latestSession {
@@ -103,44 +103,22 @@ struct PlanActivityView: View {
         }
     }
 
-    private func pendingWork(showContinuation: Bool) -> some View {
+    private var pendingWork: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("今日待办").font(.subheadline.weight(.semibold))
-            if showContinuation { runAction("继续待办", showsRemaining: true) }
-            if !progress.fightRecoveryItems.isEmpty { recovery }
-            if progress.hasStarted, !pendingItems.isEmpty { PendingWorkList(items: pendingItems) }
-        }
-    }
-
-    private func runAction(_ title: String, showsRemaining: Bool = false) -> some View {
-        let state = model.planRunState(planID: planID)
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 10) {
-                Button(state == .configurationIncomplete ? "检查配置" : title) {
-                    if state == .configurationIncomplete {
-                        model.readinessRequest = PlanReadinessRequest(id: planID)
-                    } else {
-                        model.runPlan(planID)
-                    }
-                }
-                .buttonStyle(.bordered)
-                .tint(.primary)
-                .disabled(state != .ready && state != .configurationIncomplete)
-                if showsRemaining {
-                    Text("\(progress.pending) 项可继续" + (progress.unconfirmed > 0 ? " · \(progress.unconfirmed) 项待核实" : ""))
+            if isTodayDetail, !snapshot.isCurrent {
+                let counts = [
+                    progress.hasStarted && progress.pending > 0 ? "\(progress.pending) 项可继续" : nil,
+                    progress.unconfirmed > 0 ? "\(progress.unconfirmed) 项待核实" : nil
+                ].compactMap { $0 }
+                if !counts.isEmpty {
+                    Text(counts.joined(separator: " · "))
                         .font(.caption).foregroundStyle(.secondary).monospacedDigit()
                 }
             }
-            if showsRemaining, progress.unconfirmed > 0 {
-                Text("本次会跳过待核实的作战。")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            if state == .configurationIncomplete {
-                Text("修正配置后即可运行待办。")
-                    .font(.caption).foregroundStyle(.secondary)
-            } else if state != .ready {
-                Text("运行或更新结束后可继续。")
-                    .font(.caption).foregroundStyle(.secondary)
+            if !progress.fightRecoveryItems.isEmpty { recovery }
+            if progress.hasStarted, !pendingItems.isEmpty {
+                PendingWorkList(items: pendingItems, showsStageSettings: isTodayDetail)
             }
         }
     }
@@ -154,10 +132,6 @@ struct PlanActivityView: View {
                 }
                 if !snapshot.isCurrent, snapshot.latestSession != nil || progress.hasStarted || !progress.fightRecoveryItems.isEmpty {
                     todaySummary(plan, summarizesPendingWork: !isTodayDetail || !showsPendingWork)
-                }
-                if isTodayDetail, !snapshot.isCurrent, !progress.hasStarted,
-                   progress.pending > 0 || model.planRunState(planID: planID) == .configurationIncomplete {
-                    runAction("运行方案")
                 }
             }
             Spacer(minLength: 8)

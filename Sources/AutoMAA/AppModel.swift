@@ -109,6 +109,7 @@ final class AppModel: ObservableObject {
     @Published var activitySearch = ""
     @Published var activityFilter: ActivityFilter = .all
     @Published var activitySelection: ActivityWorkspaceSelection?
+    @Published var fightSettingsPlanID: UUID?
     @Published var clientsSelection: ClientWorkspaceSelection? {
         didSet {
             let resolved = ClientWorkspaceSelectionResolver.resolved(clientsSelection, clients: configuration.clients)
@@ -1489,6 +1490,28 @@ final class AppModel: ObservableObject {
         } catch {
             showFeedback("清理活动记录失败：\(error.localizedDescription)", tone: .error)
         }
+    }
+
+    func canOpenFightStageSettings(for step: WorkflowStep) -> Bool {
+        guard step.task == .fight, !isWorkflowRunning,
+              executionState.dateKey == ExecutionStateStore.dateKey(for: currentDate),
+              !executionState.isResolved(step.key), !executionState.needsFightConfirmation(step.key),
+              executionState.fightProgress?[step.key]?.canReselectRegularStage == true,
+              let plan = configuration.plans.first(where: { $0.id == step.planID && $0.isEnabled(.fight) }),
+              let client = configuration.clients.first(where: { $0.id == step.clientID && $0.enabled }),
+              client.accounts.contains(where: { $0.id == step.accountID && plan.includes($0) })
+        else { return false }
+        return true
+    }
+
+    func openFightStageSettings(for step: WorkflowStep) {
+        reloadActivityHistory()
+        guard canOpenFightStageSettings(for: step) else {
+            showFeedback("作战状态已变化，请查看最新待办")
+            return
+        }
+        fightSettingsPlanID = step.planID
+        selection = .plan(step.planID)
     }
 
     func showPlanActivity(_ planID: UUID) {

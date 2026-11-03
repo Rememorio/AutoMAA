@@ -98,6 +98,12 @@ struct FightRecoveryRow: View {
             Text(reason)
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            if presentsReview, model.canOpenFightStageSettings(for: item.step) {
+                Button("前往关卡设置") { model.openFightStageSettings(for: item.step) }
+                    .buttonStyle(.link)
+                    .font(.caption)
+                    .help("在自定义参数中调整关卡策略和兜底关卡")
+            }
             if presentsReview {
                 Button("核实结果…") { showsReview = true }
                     .buttonStyle(.bordered)

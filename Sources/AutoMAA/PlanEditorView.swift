@@ -42,6 +42,7 @@ struct PlanEditorView: View {
                 detailSection = index == 0 ? .settings : .activity
             })
         .onAppear { selectInitialTask() }
+        .onChange(of: model.fightSettingsPlanID) { _, _ in applyFightSettingsRequest() }
         .onChange(of: plan.id) { _, _ in
             showsArrangement = false
             showsRename = false
@@ -233,6 +234,13 @@ struct PlanEditorView: View {
     private func selectInitialTask() {
         selectedTask = plan.stepOrder.first
         detailSection = isCurrentPlanRunning ? .activity : .settings
+        applyFightSettingsRequest()
+    }
+
+    private func applyFightSettingsRequest() {
+        guard model.fightSettingsPlanID == plan.id else { return }
+        model.fightSettingsPlanID = nil
+        selectTask(.fight)
     }
 
     private func selectTask(_ task: TaskKind) {
