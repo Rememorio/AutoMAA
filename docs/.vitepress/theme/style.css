@@ -219,13 +219,6 @@ html {
   gap: 12px;
 }
 
-.home-shell .home-version-note {
-  margin: 10px 0 0;
-  color: var(--vp-c-text-2);
-  font-size: 13px;
-  line-height: 1.8;
-}
-
 .home-shell .home-preview a,
 .home-shell .home-capabilities a,
 .home-shell .home-resources a {

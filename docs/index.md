@@ -21,14 +21,13 @@ description: macOS 上的 MAA 工作流编排器。配置客户端、账号与�
   </section>
 
   <figure class="home-preview">
-    <img class="theme-shot theme-shot-light" src="./assets/screenshots/overview-light.webp" width="2360" height="1560" decoding="async" alt="v0.16.0-beta.3 今日总览：当前方案、任务顺序、待处理事项与最近运行" />
-    <img class="theme-shot theme-shot-dark" src="./assets/screenshots/overview-dark.webp" width="2360" height="1560" decoding="async" alt="v0.16.0-beta.3 今日总览：当前方案、任务顺序、待处理事项与最近运行" />
+    <img class="theme-shot theme-shot-light" src="./assets/screenshots/overview-light.webp" width="2360" height="1560" decoding="async" alt="今日总览：当前方案、任务顺序、待处理事项与最近运行" />
+    <img class="theme-shot theme-shot-dark" src="./assets/screenshots/overview-dark.webp" width="2360" height="1560" decoding="async" alt="今日总览：当前方案、任务顺序、待处理事项与最近运行" />
     <figcaption>
       <div class="home-preview-summary">
-        <span>今日总览<span class="home-caption-detail"> · 方案、进度与待办，一处查看</span></span>
+        <span>今日总览界面示意<span class="home-caption-detail"> · 方案、进度与待办，一处查看</span></span>
         <a href="./guide/getting-started#认识主窗口">认识主窗口<span aria-hidden="true"> →</span></a>
       </div>
-      <p class="home-version-note">以上截图为 <a href="https://github.com/Rememorio/AutoMAA/releases/tag/v0.16.0-beta.3">v0.16.0-beta.3</a> 界面；当前说明对应 <a href="https://github.com/Rememorio/AutoMAA/releases/tag/v0.16.0-beta.6">v0.16.0-beta.6 预发布版</a>，顶栏、客户端三栏与运行记录操作以文字说明为准。使用正式安装包时，请参阅 <a href="https://github.com/Rememorio/AutoMAA/tree/v0.15.10/docs">v0.15.10 文档</a>。</p>
     </figcaption>
   </figure>
 

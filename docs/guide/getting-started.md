@@ -3,7 +3,6 @@
 先配置一个客户端、一个账号和一个方案，跑通后再扩展账号与定时。可以在尚未安装 MAA 时填写配置；运行前完成[MAA 运行环境安装](./installation)、游戏登录和数据下载。
 
 ::: info 文档版本
-本页介绍 [v0.16.0-beta.6 预发布版](https://github.com/Rememorio/AutoMAA/releases/tag/v0.16.0-beta.6)。保留的产品截图为 v0.16.0-beta.3，用于展示总览和配置表单；顶栏、客户端三栏与运行记录操作以文字说明为准。使用当前正式安装包时，请参阅 [v0.15.10 首次配置](https://github.com/Rememorio/AutoMAA/blob/v0.15.10/docs/guide/getting-started.md)。
 :::
 
 ## 认识主窗口
@@ -17,9 +16,9 @@
 今日总览顶部显示当前方案、账号范围与任务顺序，可用选择器或“我的方案”列表切换方案。运行期间显示实际操作名称和最新消息，总体阶段与进度集中在侧栏底部。“需要处理”集中展示待确认结果、作战恢复、配置错误和定时异常，点击进入对应处理页面；“接下来的定时”只展示已同步生效的安排。“最近运行”保留最近三次方案记录，未记录结束的运行会显示状态未确认。
 
 <figure class="guide-screenshot">
-  <img class="theme-shot theme-shot-light" src="../assets/screenshots/overview-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="v0.16.0-beta.3 今日总览：当前方案、任务顺序、待处理事项与最近运行" />
-  <img class="theme-shot theme-shot-dark" src="../assets/screenshots/overview-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="v0.16.0-beta.3 今日总览：当前方案、任务顺序、待处理事项与最近运行" />
-  <figcaption>v0.16.0-beta.3：从总览确认方案、执行范围与需要处理的事项。</figcaption>
+  <img class="theme-shot theme-shot-light" src="../assets/screenshots/overview-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="今日总览：当前方案、任务顺序、待处理事项与最近运行" />
+  <img class="theme-shot theme-shot-dark" src="../assets/screenshots/overview-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="今日总览：当前方案、任务顺序、待处理事项与最近运行" />
+  <figcaption>今日总览界面示意。从总览确认方案、执行范围与需要处理的事项。</figcaption>
 </figure>
 
 ## 检测 MAA 环境
@@ -42,9 +41,9 @@
 | Bundle Identifier | 与所选游戏 App 一致，用于识别和关闭该客户端 |
 
 <figure class="guide-screenshot">
-  <img class="theme-shot theme-shot-light" src="../assets/screenshots/client-editor-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="v0.16.0-beta.3 添加客户端：服务器、游戏应用及展开的 MaaTools、Bundle ID 和 MAA Profile 连接详情" />
-  <img class="theme-shot theme-shot-dark" src="../assets/screenshots/client-editor-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="v0.16.0-beta.3 添加客户端：服务器、游戏应用及展开的 MaaTools、Bundle ID 和 MAA Profile 连接详情" />
-  <figcaption>v0.16.0-beta.3：展开“连接详情”，设置 MaaTools 地址、Bundle ID 与独立 MAA Profile。</figcaption>
+  <img class="theme-shot theme-shot-light" src="../assets/screenshots/client-editor-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="添加客户端：服务器、游戏应用及展开的 MaaTools、Bundle ID 和 MAA Profile 连接详情" />
+  <img class="theme-shot theme-shot-dark" src="../assets/screenshots/client-editor-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="添加客户端：服务器、游戏应用及展开的 MaaTools、Bundle ID 和 MAA Profile 连接详情" />
+  <figcaption>配置表单示意。展开“连接详情”，设置 MaaTools 地址、Bundle ID 与独立 MAA Profile。</figcaption>
 </figure>
 
 点击“添加”后选中新客户端并显示详情。客户端按列表顺序执行；选中后点击详情顶栏的铅笔图标编辑名称和连接信息。MAA Profile 是独立的配置标识，必须非空且不能重复。

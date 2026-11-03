@@ -1,29 +1,33 @@
 <div align="center">
 
-<img src="./Assets/AutoMAA-logo.png" width="128" height="128" alt="AutoMAA Logo">
+<img src="./Assets/AutoMAA-logo.png" width="96" height="96" alt="AutoMAA Logo">
 
 # AutoMAA
 
-把多客户端、多账号的 MAA 日常，变成一次运行。
+**直到日常变成一次运行。**
 
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-000000?logo=apple)](https://www.apple.com/macos/)
 [![GitHub Release](https://img.shields.io/github/v/release/Rememorio/AutoMAA)](https://github.com/Rememorio/AutoMAA/releases/latest)
 [![Continuous integration](https://github.com/Rememorio/AutoMAA/actions/workflows/ci.yml/badge.svg)](https://github.com/Rememorio/AutoMAA/actions/workflows/ci.yml)
 
-**[下载](https://github.com/Rememorio/AutoMAA/releases/latest) · [使用文档](https://rememorio.github.io/AutoMAA/) · [问题反馈](https://github.com/Rememorio/AutoMAA/issues/new/choose)**
+**[下载 AutoMAA](https://github.com/Rememorio/AutoMAA/releases/latest) · [首次配置](https://rememorio.github.io/AutoMAA/guide/getting-started) · [使用文档](https://rememorio.github.io/AutoMAA/)**
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/screenshots/overview-dark.webp">
+  <img src="./docs/assets/screenshots/overview-light.webp" width="940" alt="AutoMAA 今日总览，集中查看日常方案、待办和运行结果">
+</picture>
+
+<sub>今日总览界面示意</sub>
 
 </div>
 
 AutoMAA 是原生 macOS 的 [MAA](https://github.com/MaaAssistantArknights/MaaAssistantArknights) 工作流编排器。把客户端、账号和任务配置好后，它会依次启动游戏、执行日常、关闭客户端，再处理下一项；画面识别和游戏操作由 `maa-cli` 与 MaaCore 完成。
 
-> 本文档跟随 `main`，使用说明对应 [v0.16.0-beta.6 预发布版](https://github.com/Rememorio/AutoMAA/releases/tag/v0.16.0-beta.6)。站内产品截图保留自 v0.16.0-beta.3，顶栏、客户端三栏与运行记录操作以文字说明为准。当前正式版的使用说明见 [v0.15.10 文档](https://github.com/Rememorio/AutoMAA/tree/v0.15.10/docs)。
-
 ## 能做什么
 
 - **一份账号配置，多套日常方案。** 为同一批账号安排轻量收菜或完整换班，分别选择任务、参数和执行对象。方案可从指定游戏日起优先剿灭，跨方案共享本周完成状态。
-- **按结果续跑。** 一键补跑未完成任务，保留已完成步骤；理智不足的剿灭留待后续运行补打，作战中断或战果不明时等待确认。
+- **按结果续跑。** 一键补跑未完成任务，保留已完成步骤；理智不足的剿灭留待后续补打，战果不明时等待确认。运行记录保留结果和失败原因。
 - **按顺序处理客户端与账号。** 当前客户端关闭、连接释放后，才启动下一个；支持自动切换账号的服务器可配置账号队列。
-- **失败后接着跑。** 成功步骤按方案和日期记录，再次运行会跳过已完成内容；运行记录可查看结果与失败原因。
 - **手动运行，也能按周定时。** 每个方案独立设置星期和时间；主 App 退出后仍可由后台 Runner 执行，需要处理时可发送系统通知。
 
 支持[理智作战、公开招募、基建、信用购物和奖励领取](https://rememorio.github.io/AutoMAA/tasks/)。任务可使用 MAA 推荐参数，也可在界面中自定义；基建提供仅收菜、完整换班和自定义排班。
