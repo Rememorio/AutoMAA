@@ -479,7 +479,7 @@ public final class WorkflowRunner {
         if let issue = compatibilityIssue {
             report.fatalError = issue.guidance
             report.unexecutedSteps = totalSteps
-            emit(.failed, issue.guidance, 0, .error)
+            emit(.failed, issue.guidance, 0, .error, details: issue.details)
             return report
         }
 
@@ -1854,7 +1854,12 @@ public final class WorkflowRunner {
             environment: environment
         )
         guard result.exitCode == 0, !result.timedOut, !result.cancelled else {
-            return shortOutput(result)
+            let diagnostics = MAACommandDiagnostics.read(from: userDirectory, sensitiveValues: currentSensitiveValues)
+            return [
+                shortOutput(result),
+                diagnostics.firstIssue,
+                diagnostics.lastError == diagnostics.firstIssue ? nil : diagnostics.lastError,
+            ].compactMap { $0 }.joined(separator: "\n")
         }
         return nil
     }
@@ -1884,7 +1889,8 @@ public final class WorkflowRunner {
                                   account: AccountConfiguration) async throws -> FightStageInspection {
         let root = FileManager.default.temporaryDirectory.appending(path: "automaa-stage-inspection-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
-        try FightStageInspection.prepare(at: root, client: client)
+        let resourceDirectory = await maaDirectory(cliPath: configuration.cliPath, name: "resource")
+        try FightStageInspection.prepare(at: root, client: client, resourceDirectory: resourceDirectory)
         emit(.runningTask, "\(accountText(account))：正在识别当前/上次关卡（不开始作战）", 0, .info,
              client: client, account: account, task: .fight)
         try await requireConnection(client)
@@ -1933,6 +1939,14 @@ public final class WorkflowRunner {
         }
         if inspect {
             let observed = try await inspectFightStage(configuration: configuration, client: client, account: account)
+            if observed == .pageUnrecognized {
+                return TaskRunOutcome(
+                    succeeded: false,
+                    recoveredAfterRetry: false,
+                    notices: [],
+                    failureDetails: "无法识别开战前的关卡页面，未开始作战；请检查游戏页面或改用固定关卡"
+                )
+            }
             if case let .regular(current) = observed,
                memory.entry(clientID: client.id, accountID: account.id)?.temporaryStage != current {
                 stage = current
@@ -1943,7 +1957,7 @@ public final class WorkflowRunner {
                 let reason = switch observed {
                 case .annihilation: "当前/上次是剿灭"
                 case .unknown: "未识别到常规关卡编号"
-                case .unavailable: "无法从上次作战入口进入关卡"
+                case .unavailable, .pageUnrecognized: "无法从上次作战入口进入关卡"
                 case .regular: "当前/上次是临时兜底"
                 }
                 emit(.runningTask, "\(accountText(account))：\(reason)，\(remembered.map { "恢复常规目标 \($0)" } ?? "没有常规目标记录")",

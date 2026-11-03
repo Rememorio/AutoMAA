@@ -5,6 +5,7 @@ enum FightStageInspection: Equatable, Sendable {
     case regular(String)
     case annihilation
     case unavailable
+    case pageUnrecognized
     case unknown
 
     static let taskName = "automaa-stage-inspection"
@@ -32,13 +33,14 @@ enum FightStageInspection: Equatable, Sendable {
                 observation = FightStagePolicy.regularStage(from: text, times: 1).map(Self.regular) ?? .unknown
             case "AutoMAAInspectUnknown": observation = .unknown
             case "AutoMAAInspectUnavailable": observation = .unavailable
+            case "AutoMAAInspectPageUnrecognized": observation = .pageUnrecognized
             default: break
             }
         }
         return completed && !failed ? observation : nil
     }
 
-    static func prepare(at root: URL, client: ClientConfiguration) throws {
+    static func prepare(at root: URL, client: ClientConfiguration, resourceDirectory: URL? = nil) throws {
         let manager = FileManager.default
         for path in ["profiles", "tasks", "resource/tasks"] {
             try manager.createDirectory(at: root.appending(path: path), withIntermediateDirectories: true)
@@ -53,20 +55,28 @@ enum FightStageInspection: Equatable, Sendable {
             "tasks": [["type": "Custom", "params": ["task_names": ["AutoMAAInspect"]]]],
         ]
         for (path, object) in [("profiles/\(taskName).json", profile), ("tasks/\(taskName).json", task),
-                               ("resource/tasks/automaa-inspection.json", resourceTasks)] {
+                               ("resource/tasks/automaa-inspection.json", resourceTasks(resourceDirectory: resourceDirectory))] {
             try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
                 .write(to: root.appending(path: path), options: .atomic)
         }
     }
 
-    static var resourceTasks: [String: Any] {
+    static func resourceTasks(resourceDirectory: URL? = nil) -> [String: Any] {
         func node(_ base: String, next: [String] = []) -> [String: Any] {
             ["baseTask": base, "action": "DoNothing", "sub": [], "next": next,
              "onErrorNext": [], "exceededNext": [], "reduceOtherTimes": [], "maxTimes": 3]
         }
         let entry = "AutoMAAInspect"
         var home = node("Fight", next: [entry])
-        home["template"] = "SwitchTheme@ToggleSettingsMenu.png"
+        // MaaCore defaults a derived task's template to its own name instead of inheriting Fight's.
+        let updatedTemplate = "SwitchTheme@ToggleSettingsMenu-v2.png"
+        var homeTemplates = ["SwitchTheme@ToggleSettingsMenu.png"]
+        if let resourceDirectory, FileManager.default.isReadableFile(
+            atPath: resourceDirectory.appending(path: "template/UiTheme/SwitchTheme/\(updatedTemplate)").path
+        ) {
+            homeTemplates.append(updatedTemplate)
+        }
+        home["template"] = homeTemplates
         home["sub"] = ["Terminal-Entry"]
         var last = node("GoLastBattle", next: [entry])
         last["action"] = "ClickSelf"
@@ -79,7 +89,11 @@ enum FightStageInspection: Equatable, Sendable {
         var annihilationActive = node("UsePrts-AnnihilationSuccess")
         annihilationActive["template"] = "UsePrts-AnnihilationSuccess.png"
         return [
-            entry: ["algorithm": "JustReturn", "next": ["AutoMAAInspectReady", "AutoMAAInspectLast", "AutoMAAInspectHome"]],
+            entry: [
+                "algorithm": "JustReturn",
+                "next": ["AutoMAAInspectReady", "AutoMAAInspectLast", "AutoMAAInspectHome"],
+                "onErrorNext": ["AutoMAAInspectPageUnrecognized"],
+            ],
             "AutoMAAInspectHome": home,
             "AutoMAAInspectLast": last,
             "AutoMAAInspectReady": node("StartButton1", next: ["AutoMAAInspectAnnihilation", "AutoMAAInspectAnnihilationActive", "AutoMAAInspectStage", "AutoMAAInspectUnknown"]),
@@ -88,6 +102,7 @@ enum FightStageInspection: Equatable, Sendable {
             "AutoMAAInspectStage": stage,
             "AutoMAAInspectUnknown": ["algorithm": "JustReturn", "action": "DoNothing"],
             "AutoMAAInspectUnavailable": ["algorithm": "JustReturn", "action": "DoNothing"],
+            "AutoMAAInspectPageUnrecognized": ["algorithm": "JustReturn", "action": "DoNothing"],
         ]
     }
 }

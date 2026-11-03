@@ -20,6 +20,10 @@ enum AutoMAAResourceProbeMain {
                 }
             )
             exit(EXIT_SUCCESS)
+        } catch let MAACoreResourceProbeError.resourceRejected(index) {
+            let root = arguments[index + 1]
+            fputs("AutoMAA 资源验证失败：MaaCore 无法加载第 \(index) 层资源（\(root)/resource）\n", stderr)
+            exit(EXIT_FAILURE)
         } catch {
             fputs("AutoMAA 资源验证失败：\(error.localizedDescription)\n", stderr)
             exit(EXIT_FAILURE)

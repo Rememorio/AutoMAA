@@ -640,6 +640,24 @@ final class FightWorkflowTests: XCTestCase {
         }
     }
 
+    func testUnrecognizedInspectionPageContinuesOtherTasksWithoutDispatchingFight() async throws {
+        let fixture = try FightFixture(priority: true, award: true)
+        defer { fixture.cleanup() }
+        fixture.plan.fight.stageStrategy = .rememberedRegular
+        fixture.plan.fight.fallbackStage = "1-7"
+        fixture.plan.policy.continueAfterStepFailure = true
+        fixture.inspection = .pageUnrecognized
+
+        let (report, calls) = await fixture.run([])
+        XCTAssertEqual(report.failedSteps, 1)
+        XCTAssertEqual(report.succeededSteps, 1)
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertTrue(String(decoding: try XCTUnwrap(calls.first).taskJSON, as: UTF8.self).contains("Award"))
+        XCTAssertFalse(fixture.state.isResolved(fixture.step.key))
+        XCTAssertFalse(fixture.state.needsFightConfirmation(fixture.step.key))
+        XCTAssertFalse(fixture.runtime.running)
+    }
+
     func testUnconfirmedObservedStageRetryUsesFrozenStageInsteadOfInspectingAgain() async throws {
         let fixture = try FightFixture()
         defer { fixture.cleanup() }

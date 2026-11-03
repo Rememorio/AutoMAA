@@ -10,6 +10,7 @@ func inspectionCallbacks(_ observation: FightStageInspection) -> String {
     case .annihilation: task = "AutoMAAInspectAnnihilation"; text = ""
     case .unknown: task = "AutoMAAInspectUnknown"; text = ""
     case .unavailable: task = "AutoMAAInspectUnavailable"; text = ""
+    case .pageUnrecognized: task = "AutoMAAInspectPageUnrecognized"; text = ""
     }
     let event: [String: Any] = ["taskchain": "Custom", "subtask": "ProcessTask",
                               "details": ["task": task, "action": "DoNothing", "result": ["text": text]]]
@@ -28,7 +29,7 @@ final class FightStageInspectionTests: XCTestCase {
     let success = CommandResult(exitCode: 0, standardOutput: "", standardError: "", timedOut: false)
 
     func testOnlyCompletedNonConsumingObservationsResolveAStage() {
-        for observation in [FightStageInspection.regular("PA-8"), .annihilation, .unknown, .unavailable] {
+        for observation in [FightStageInspection.regular("PA-8"), .annihilation, .unknown, .unavailable, .pageUnrecognized] {
             let callbacks = inspectionCallbacks(observation)
             XCTAssertEqual(FightStageInspection.read(callbacks, command: success), observation)
             XCTAssertNil(FightStageInspection.read(callbacks.replacingOccurrences(of: "TaskChainCompleted", with: "TaskChainStopped"), command: success))
@@ -41,9 +42,11 @@ final class FightStageInspectionTests: XCTestCase {
     }
 
     func testProbeGraphCannotStartBattleEnableDelegationOrSpendSanity() throws {
-        let graph = try XCTUnwrap(FightStageInspection.resourceTasks as? [String: [String: Any]])
+        let graph = try XCTUnwrap(FightStageInspection.resourceTasks() as? [String: [String: Any]])
         let permittedBases = Set(["Fight", "GoLastBattle", "StartButton1", "UsePrts-Annihilation", "UsePrts-AnnihilationSuccess", "ClickedCorrectStage"])
-        XCTAssertEqual(graph["AutoMAAInspectHome"]?["template"] as? String, "SwitchTheme@ToggleSettingsMenu.png")
+        XCTAssertEqual(graph["AutoMAAInspectHome"]?["baseTask"] as? String, "Fight")
+        XCTAssertEqual(graph["AutoMAAInspectHome"]?["template"] as? [String], ["SwitchTheme@ToggleSettingsMenu.png"])
+        XCTAssertEqual(graph["AutoMAAInspect"]?["onErrorNext"] as? [String], ["AutoMAAInspectPageUnrecognized"])
         XCTAssertEqual(graph["AutoMAAInspectAnnihilation"]?["template"] as? String, "UsePrts-Annihilation.png")
         XCTAssertEqual(graph["AutoMAAInspectAnnihilationActive"]?["template"] as? String, "UsePrts-AnnihilationSuccess.png")
         for (name, node) in graph {
@@ -57,6 +60,20 @@ final class FightStageInspectionTests: XCTestCase {
             }
             for next in node["next"] as? [String] ?? [] { XCTAssertNotNil(graph[next]) }
         }
+    }
+
+    func testHomeProbeUsesBothTemplatesWhenUpdatedAssetIsInstalled() throws {
+        let resources = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: resources) }
+        let templates = resources.appending(path: "template/UiTheme/SwitchTheme")
+        try FileManager.default.createDirectory(at: templates, withIntermediateDirectories: true)
+        try Data().write(to: templates.appending(path: "SwitchTheme@ToggleSettingsMenu-v2.png"))
+
+        let tasks = FightStageInspection.resourceTasks(resourceDirectory: resources)
+        let home = try XCTUnwrap(tasks["AutoMAAInspectHome"] as? [String: Any])
+        XCTAssertEqual(home["template"] as? [String], [
+            "SwitchTheme@ToggleSettingsMenu.png", "SwitchTheme@ToggleSettingsMenu-v2.png",
+        ])
     }
 
     func testProbeOwnsOnlyItsTemporaryProfileResourceAndCustomTask() throws {
