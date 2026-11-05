@@ -5,6 +5,63 @@ import Testing
 
 @Suite("Continuation presentation")
 struct ContinuationPresentationTests {
+    @Test("today summaries distinguish runnable work from review, blocked and empty states")
+    func summaryGuidanceRespectsScope() {
+        var progress = PlanContinuation(configuration: .defaults, planID: UUID(),
+            state: .init(dateKey: "2000-01-01"), history: [])
+        let empty = PlanTodaySummaryPresentation(progress: progress, runState: .ready)
+        #expect(empty.title == "暂无可执行任务")
+        #expect(!empty.needsAttention)
+        #expect(empty.guidance == nil)
+
+        progress.pending = 15
+        let fresh = PlanTodaySummaryPresentation(progress: progress, runState: .ready)
+        #expect(fresh.title == "今日尚未运行")
+        #expect(fresh.guidance == nil)
+
+        progress.hasStarted = true
+        progress.pending = 5
+        progress.resolved = 10
+        let partial = PlanTodaySummaryPresentation(progress: progress, runState: .ready)
+        #expect(partial.title == "部分完成")
+        #expect(partial.scope == "已处理 10/15 项")
+        #expect(partial.remaining == "剩余 5 项")
+        #expect(partial.needsAttention)
+        #expect(partial.guidance?.contains("顶部播放按钮") == true)
+
+        progress.pending = 4
+        progress.unconfirmed = 1
+        let review = PlanTodaySummaryPresentation(progress: progress, runState: .ready)
+        #expect(review.scope == partial.scope)
+        #expect(review.remaining == "剩余 4 项")
+        #expect(review.review == "1 项待核实")
+        #expect(review.guidance?.contains("待核实作战会保留") == true)
+        for state in [PlanRunState.configurationIncomplete, .anotherPlanRunning, .maintenanceRunning, .running] {
+            #expect(PlanTodaySummaryPresentation(progress: progress, runState: state).guidance == nil)
+        }
+        progress.pending = 0
+        let onlyReview = PlanTodaySummaryPresentation(progress: progress, runState: .ready)
+        #expect(onlyReview.title == "结果待核实")
+        #expect(onlyReview.remaining == nil)
+        #expect(onlyReview.guidance == nil)
+    }
+
+    @Test("today summaries retain manual handling instead of describing it as automatic completion")
+    func summaryManualHandling() {
+        var progress = PlanContinuation(configuration: .defaults, planID: UUID(),
+            state: .init(dateKey: "2000-01-01"), history: [])
+        progress.hasStarted = true
+        progress.resolved = 1
+        progress.manuallyHandled = 1
+        progress.pending = 1
+        #expect(PlanTodaySummaryPresentation(progress: progress, runState: .ready).title == "部分处理")
+        progress.pending = 0
+        let handled = PlanTodaySummaryPresentation(progress: progress, runState: .ready)
+        #expect(handled.title == "今日已处理")
+        #expect(!handled.needsAttention)
+        #expect(handled.guidance == nil)
+    }
+
     @Test("continuation lists the exact remaining scope independently of history")
     @MainActor
     func weeklyOnlyContinuation() throws {

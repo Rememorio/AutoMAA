@@ -23,11 +23,17 @@ struct PlanEditorView: View {
         } detail: {
             switch detailSection {
             case .settings:
-                if let selectedTask {
-                    PlanTaskInspector(plan: $plan, task: selectedTask)
-                } else {
-                    ContentUnavailableView("选择任务", systemImage: "slider.horizontal.3",
-                                           description: Text("在执行顺序中选择要设置的任务。"))
+                VStack(spacing: 0) {
+                    PlanTodaySummary(progress: model.continuation(for: plan.id),
+                                     runState: model.planRunState(planID: plan.id))
+                        .padding(.horizontal, 20).padding(.vertical, 14)
+                    Divider()
+                    if let selectedTask {
+                        PlanTaskInspector(plan: $plan, task: selectedTask)
+                    } else {
+                        ContentUnavailableView("选择任务", systemImage: "slider.horizontal.3",
+                                               description: Text("在执行顺序中选择要设置的任务。"))
+                    }
                 }
             case .activity:
                 PlanActivityView(planID: plan.id)

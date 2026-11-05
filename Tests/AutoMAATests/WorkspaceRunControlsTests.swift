@@ -7,6 +7,29 @@ import Testing
 @MainActor
 @Suite("Workspace run controls")
 struct WorkspaceRunControlsTests {
+    @Test("settings and today's records describe the same runnable and review scope")
+    func continuationHelpMatchesAcrossPages() throws {
+        let fixture = makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let model = fixture.model
+        model.configuration.plans[0].award.enabled = true
+        var state = ExecutionState(dateKey: ExecutionStateStore.todayKey)
+        state.record(.init(status: .unconfirmed, reason: .interruptedBattle), for: fixture.step.key)
+        try ExecutionStateStore(directories: model.directories).save(state)
+        model.reloadActivityHistory()
+        model.selection = .plan(fixture.plan.id)
+        let settings = WorkspaceRunControlState(model: model)
+        model.selection = .activity
+        model.activitySelection = .plan(fixture.plan.id)
+        let today = WorkspaceRunControlState(model: model)
+        #expect(settings.canStart)
+        #expect(today.canStart)
+        #expect(settings.startHelp == today.startHelp)
+        #expect(today.startHelp.contains(fixture.plan.name))
+        #expect(today.startHelp.contains("1 项待办"))
+        #expect(today.startHelp.contains("1 项待核实"))
+    }
+
     @Test("native stop and play retain their icons and actual positions through running, cancelling and completion")
     func completionDoesNotMoveTheRunControls() throws {
         let fixture = makeFixture()

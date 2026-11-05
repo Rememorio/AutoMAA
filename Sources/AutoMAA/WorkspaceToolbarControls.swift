@@ -63,10 +63,7 @@ struct WorkspaceRunControlState {
         case .ready:
             if progress.pending > 0 {
                 startAction = .run(planID)
-                let help = isToday && progress.unconfirmed > 0
-                    ? "继续 \(progress.pending) 项待办，跳过 \(progress.unconfirmed) 项待核实作战"
-                    : model.runHelp(for: planID)
-                startHelp = "\(model.runTitle(for: planID)) · \(plan.displayName)\n\(help)"
+                startHelp = "\(model.runTitle(for: planID)) · \(plan.displayName) · \(progress.pending) 项待办\n\(model.runHelp(for: planID))"
             } else if progress.unconfirmed > 0 {
                 startAction = .activity(planID)
                 startHelp = "处理待确认结果 · \(plan.displayName)"

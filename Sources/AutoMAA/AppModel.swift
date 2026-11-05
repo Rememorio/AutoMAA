@@ -533,8 +533,11 @@ final class AppModel: ObservableObject {
 
     func runHelp(for planID: UUID) -> String {
         let progress = continuation(for: planID)
-        if progress.unconfirmed > 0 { return "未确认的作战不会自动补跑；请在活动记录中处理" }
-        return "保留今日已处理的任务，只执行当前待办中的步骤"
+        let scope = "执行 \(progress.pending) 项待办，已处理的任务会自动跳过"
+        if progress.unconfirmed > 0 {
+            return "\(scope)；另有 \(progress.unconfirmed) 项待核实作战会保留，请在今日待办中核实"
+        }
+        return scope
     }
 
     var isFightRecoveryBusy: Bool { isWorkflowRunning || applicationUpdateState.blocksWorkflow }

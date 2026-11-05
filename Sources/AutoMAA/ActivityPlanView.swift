@@ -51,8 +51,8 @@ struct PlanActivityView: View {
                 Divider()
                 if snapshot.isCurrent { liveContent }
                 else if snapshot.latestSession == nil, !progress.hasStarted, progress.fightRecoveryItems.isEmpty {
-                    ActivityEmptyState(title: "今日尚未运行", symbol: "clock.arrow.circlepath",
-                                       detail: emptyHistoryDescription(plan))
+                    ActivityEmptyState(title: "还没有运行记录", symbol: "clock.arrow.circlepath",
+                                       detail: "运行后会显示这份方案的结果与完整日志。")
                 } else { idleContent }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -106,16 +106,6 @@ struct PlanActivityView: View {
     private var pendingWork: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("今日待办").font(.subheadline.weight(.semibold))
-            if isTodayDetail, !snapshot.isCurrent {
-                let counts = [
-                    progress.hasStarted && progress.pending > 0 ? "\(progress.pending) 项可继续" : nil,
-                    progress.unconfirmed > 0 ? "\(progress.unconfirmed) 项待核实" : nil
-                ].compactMap { $0 }
-                if !counts.isEmpty {
-                    Text(counts.joined(separator: " · "))
-                        .font(.caption).foregroundStyle(.secondary).monospacedDigit()
-                }
-            }
             if !progress.fightRecoveryItems.isEmpty { recovery }
             if progress.hasStarted, !pendingItems.isEmpty {
                 PendingWorkList(items: pendingItems, showsStageSettings: isTodayDetail)
@@ -130,8 +120,8 @@ struct PlanActivityView: View {
                     Text(isTodayDetail ? plan.displayName : "本次运行")
                         .font(.headline).fixedSize(horizontal: false, vertical: true)
                 }
-                if !snapshot.isCurrent, snapshot.latestSession != nil || progress.hasStarted || !progress.fightRecoveryItems.isEmpty {
-                    todaySummary(plan, summarizesPendingWork: !isTodayDetail || !showsPendingWork)
+                if !snapshot.isCurrent {
+                    todaySummary(plan)
                 }
             }
             Spacer(minLength: 8)
@@ -144,18 +134,11 @@ struct PlanActivityView: View {
                          action: showFullHistory)
     }
 
-    private func todaySummary(_ plan: AutomationPlan, summarizesPendingWork: Bool) -> some View {
+    private func todaySummary(_ plan: AutomationPlan) -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            if summarizesPendingWork {
-                Text(ActivityRecordPresentation.todaySummary(progress))
-                    .font(.caption).foregroundStyle(.secondary).monospacedDigit()
-            }
+            PlanTodaySummary(progress: progress, runState: model.planRunState(planID: planID))
             if progress.manuallyHandled > 0 {
                 Text("\(progress.manuallyHandled) 项作战已人工处理，今天不再重试")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            if summarizesPendingWork, progress.unconfirmed > 0 {
-                Text("继续其他任务会保留待确认作战。请先核实结果，再决定是否重新尝试。")
                     .font(.caption).foregroundStyle(.secondary)
             }
             if !progress.hasStarted, model.isPlanScheduleCurrent(plan),
@@ -164,14 +147,6 @@ struct PlanActivityView: View {
             }
         }
         .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private func emptyHistoryDescription(_ plan: AutomationPlan) -> String {
-        let detail = "运行后会显示这份方案的结果与完整日志。"
-        if model.isPlanScheduleCurrent(plan), let next = PlanScheduleFormatter.nextRunLabel(plan.schedule) {
-            return "下次 \(next)\n\(detail)"
-        }
-        return detail
     }
 
     private var recovery: some View {
