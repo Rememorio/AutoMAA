@@ -12,12 +12,9 @@
 
 **[下载 AutoMAA](https://github.com/Rememorio/AutoMAA/releases/latest) · [首次配置](https://rememorio.github.io/AutoMAA/guide/getting-started) · [使用文档](https://rememorio.github.io/AutoMAA/)**
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/screenshots/overview-dark.webp">
-  <img src="./docs/assets/screenshots/overview-light.webp" width="940" alt="AutoMAA 今日总览，集中查看日常方案、待办和运行结果">
-</picture>
+<img src="./docs/assets/screenshots/overview-light.webp" width="940" alt="AutoMAA 今日总览，集中查看当前方案、待处理事项和最近三次运行结果">
 
-<sub>今日总览界面示意</sub>
+<sub>AutoMAA v0.16.1 今日总览</sub>
 
 </div>
 

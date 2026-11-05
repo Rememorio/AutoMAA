@@ -18,7 +18,7 @@
 <figure class="guide-screenshot">
   <img class="theme-shot theme-shot-light" src="../assets/screenshots/overview-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="今日总览：当前方案、任务顺序、待处理事项与最近运行" />
   <img class="theme-shot theme-shot-dark" src="../assets/screenshots/overview-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="今日总览：当前方案、任务顺序、待处理事项与最近运行" />
-  <figcaption>今日总览界面示意。从总览确认方案、执行范围与需要处理的事项。</figcaption>
+  <figcaption>AutoMAA v0.16.1 今日总览。确认当前方案与待处理事项，从结果卡片回看最近运行。</figcaption>
 </figure>
 
 ## 检测 MAA 环境
