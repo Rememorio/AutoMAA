@@ -2649,11 +2649,13 @@ public final class WorkflowRunner {
                 output = ""
             } else {
                 let secrets = currentSensitiveValues
+                let stoppedByTimeout = result.timedOut && !result.cancelled && result.stopReason == nil
                 let (evidence, navigationFailed, waitingForUpdate) = await Task.detached(priority: .utility) {
                     let log = MAACoreLog.read(from: root)
                     return (MAACommandDiagnostics(log: log, sensitiveValues: secrets),
                             startupScreenshotPolicy != nil && StartupNavigationObservation.failedInSettings(log),
-                            startupScreenshotPolicy != nil && StartupUpdateObservation.isWaitingForDownload(log))
+                            startupScreenshotPolicy != nil
+                                && StartupUpdateObservation.isWaitingForDownload(log, stoppedByTimeout: stoppedByTimeout))
                 }.value
                 result.startupNavigationFailed = navigationFailed
                 result.startupWaitingForUpdate = waitingForUpdate

@@ -4,15 +4,17 @@ import Testing
 
 @Suite("Command failure diagnostics")
 struct CommandDiagnosticsTests {
-    @Test("a game resource update timeout skips the client without restarting or writing checkpoints")
+    @Test("a game resource update timeout skips the client without restarting or writing checkpoints",
+          arguments: [false, true])
     @MainActor
-    func updateTimeoutSkipsClient() async throws {
+    func updateTimeoutSkipsClient(stopped: Bool) async throws {
         let fixture = try DiagnosticFixture(accountCount: 2)
         defer { fixture.remove() }
         let timeout = CommandResult(exitCode: 9, standardOutput: "", standardError: "", timedOut: true)
         let log = callback("SubTaskStart", task: "GameStartUpdateOCR", chain: "StartUp")
             + callback("SubTaskCompleted", task: "GameStartUpdateOCR", chain: "StartUp")
             + callback("SubTaskStart", task: "GameStartUpdateOCR", chain: "StartUp")
+            + (stopped ? "Assistant::append_callback | TaskChainStopped {\"taskchain\":\"StartUp\",\"taskid\":1}\n" : "")
         let commands = DiagnosticCommands(startups: [.init(result: timeout, log: log), .init(result: timeout, log: log)])
         let report = await fixture.run(commands)
         #expect(!report.isSuccess)
@@ -34,7 +36,8 @@ struct CommandDiagnosticsTests {
         defer { fixture.remove() }
         let update = DiagnosticCommands.Reply(
             result: .init(exitCode: 9, standardOutput: "", standardError: "", timedOut: true),
-            log: callback("SubTaskStart", task: "GameStartUpdateOCR", chain: "StartUp"))
+            log: callback("SubTaskStart", task: "GameStartUpdateOCR", chain: "StartUp")
+                + "Assistant::append_callback | TaskChainStopped {\"taskchain\":\"StartUp\",\"taskid\":1}\n")
         let commands = DiagnosticCommands(startups: reverse ? [.init(), update] : [update, .init()])
         let report = await fixture.run(commands)
         #expect(report.succeededSteps == 1)
@@ -58,7 +61,8 @@ struct CommandDiagnosticsTests {
         fixture.runtime.closes = cancelled
         let result = CommandResult(exitCode: 9, standardOutput: "", standardError: "", timedOut: !cancelled, cancelled: cancelled)
         let commands = DiagnosticCommands(startups: [.init(result: result,
-            log: callback("SubTaskStart", task: "GameStartUpdateOCR", chain: "StartUp"))])
+            log: callback("SubTaskStart", task: "GameStartUpdateOCR", chain: "StartUp")
+                + "Assistant::append_callback | TaskChainStopped {\"taskchain\":\"StartUp\",\"taskid\":1}\n")])
         let report = await fixture.run(commands)
         #expect(report.cancelled == cancelled)
         #expect((report.fatalError != nil) == !cancelled)

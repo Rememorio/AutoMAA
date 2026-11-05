@@ -18,6 +18,28 @@ struct StartupUpdateTests {
         }
     }
 
+    @Test("a timeout stop preserves only the current complete startup download evidence")
+    func timeoutStopRetainsCurrentDownload() {
+        let update = callback("SubTaskStart", task: "GameStartUpdateOCR")
+        let stopped = "Assistant::append_callback | TaskChainStopped {\"taskchain\":\"StartUp\",\"taskid\":1}"
+        #expect(StartupUpdateObservation.isWaitingForDownload(.init(lines: [update, stopped]), stoppedByTimeout: true))
+        #expect(!StartupUpdateObservation.isWaitingForDownload(.init(lines: [update, stopped])))
+        #expect(!StartupUpdateObservation.isWaitingForDownload(.init(lines: [stopped]), stoppedByTimeout: true))
+        #expect(!StartupUpdateObservation.isWaitingForDownload(
+            .init(lines: [update, stopped], notes: ["日志不完整"]), stoppedByTimeout: true))
+        let contradictions = ["TaskChainStart", "TaskChainCompleted", "TaskChainError", "SubTaskError", "AllTasksCompleted"]
+            .map { callback($0, task: "GameStartUpdateOCR") }
+            + [callback("SubTaskStart", task: "StartToWakeUp"),
+               stopped.replacingOccurrences(of: "StartUp", with: "Mall"),
+               "Assistant::append_callback | ConnectionInfo {\"what\":\"Disconnect\"}",
+               "Assistant::append_callback | SubTaskStart {broken}", "[ERR] screenshot unavailable"]
+        for contradiction in contradictions {
+            for lines in [[update, contradiction, stopped], [update, stopped, contradiction]] {
+                #expect(!StartupUpdateObservation.isWaitingForDownload(.init(lines: lines), stoppedByTimeout: true))
+            }
+        }
+    }
+
     @Test("unrelated, incomplete or contradictory evidence cannot classify an update")
     func uncertainEvidence() {
         let line = callback("SubTaskStart", task: "GameStartUpdateOCR")

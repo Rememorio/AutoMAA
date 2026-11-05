@@ -1,7 +1,7 @@
 import Foundation
 
 enum StartupUpdateObservation {
-    static func isWaitingForDownload(_ log: MAACoreLog) -> Bool {
+    static func isWaitingForDownload(_ log: MAACoreLog, stoppedByTimeout: Bool = false) -> Bool {
         guard log.isComplete else { return false }
         var waiting = false
         for line in log.lines {
@@ -24,7 +24,9 @@ enum StartupUpdateObservation {
                 waiting = event["taskchain"] as? String == "StartUp"
                     && event["subtask"] as? String == "ProcessTask"
                     && (task == "GameStartUpdateOCR" || task == "StartUp@GameStartUpdateOCR")
-            case "TaskChainStart", "TaskChainCompleted", "TaskChainStopped", "TaskChainError",
+            case "TaskChainStopped":
+                if !stoppedByTimeout || event["taskchain"] as? String != "StartUp" { waiting = false }
+            case "TaskChainStart", "TaskChainCompleted", "TaskChainError",
                  "SubTaskError", "AllTasksCompleted":
                 waiting = false
             default: break
