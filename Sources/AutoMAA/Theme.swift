@@ -146,6 +146,18 @@ extension LogEntry {
     }
 }
 
+extension ActivityOutcome {
+    var color: Color {
+        switch self {
+        case .completed: .green
+        case .partial, .partiallyHandled, .incomplete, .awaitingReview, .weeklyPending, .unfinished:
+            LogMessagePalette.warning
+        case .failed: LogMessagePalette.error
+        case .handled, .cancelled, .recorded: .secondary
+        }
+    }
+}
+
 extension LogLevel {
     var displayName: String {
         switch self {

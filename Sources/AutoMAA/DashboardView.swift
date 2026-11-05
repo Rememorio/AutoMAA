@@ -194,9 +194,7 @@ struct DashboardView: View {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         VStack(alignment: .trailing, spacing: 5) {
-                            if session.outcome != .completed {
-                                Text(session.outcome.title).foregroundStyle(.secondary)
-                            }
+                            ActivityOutcomeLabel(outcome: session.outcome)
                             Text(session.startedAt, format: .dateTime.month().day().hour().minute()).foregroundStyle(.secondary)
                         }
                         .font(.caption).fixedSize()

@@ -302,10 +302,17 @@ struct ActivityEventRow: View {
                 .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 .frame(width: 58, alignment: .leading)
             VStack(alignment: .leading, spacing: 4) {
-                Text(entry.message).font(.callout).textSelection(.enabled)
-                    .foregroundStyle(entry.messageColor)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityHint(entry.level.displayName)
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    if let outcome = entry.terminalOutcome {
+                        Image(systemName: outcome.symbol)
+                            .foregroundStyle(outcome.color)
+                            .accessibilityHidden(true)
+                    }
+                    Text(entry.message).font(.callout).textSelection(.enabled)
+                        .foregroundStyle(entry.messageColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityHint(entry.level.displayName)
+                }
                 if let context {
                     Text(context).font(.caption).foregroundStyle(.secondary)
                 }

@@ -5,6 +5,30 @@ import Testing
 
 @Suite("Activity presentation")
 struct ActivityPresentationTests {
+    @Test("terminal log markers reflect structured whole-run results and exclude routine events")
+    func terminalLogOutcomes() {
+        let partial = LogEntry(level: .warning, message: "部分完成", phase: .completed,
+            runSummary: .init(completedSteps: 10, failedSteps: 0, unexecutedSteps: 5, totalSteps: 15))
+        #expect(partial.terminalOutcome == .partial)
+        let handled = LogEntry(level: .success, message: "已处理", phase: .completed,
+            runSummary: .init(completedSteps: 0, failedSteps: 0, unexecutedSteps: 0, totalSteps: 1,
+                              manuallyHandledSteps: 1))
+        #expect(handled.terminalOutcome == .handled)
+        #expect(LogEntry(level: .success, message: "已完成", phase: .completed).terminalOutcome == .completed)
+        #expect(LogEntry(level: .error, message: "失败", phase: .failed).terminalOutcome == .failed)
+        #expect(LogEntry(level: .info, message: "已停止", phase: .cancelled).terminalOutcome == .cancelled)
+        for entry in [LogEntry(level: .success, message: "已连接", phase: .launching),
+                      .init(level: .success, message: "资源通过校验", phase: .updating),
+                      .init(level: .success, message: "任务完成", phase: .runningTask, task: .mall),
+                      .init(level: .success, message: "客户端已关闭", phase: .completed, clientID: UUID()),
+                      .init(level: .success, message: "账号已完成", phase: .completed, accountID: UUID()),
+                      .init(level: .error, message: "任务失败", phase: .failed, task: .mall),
+                      .init(level: .warning, message: "需要处理", phase: .attention),
+                      .init(level: .success, message: "较早的记录")] {
+            #expect(entry.terminalOutcome == nil)
+        }
+    }
+
     @Test("connection and maintenance milestones are emphasized without coloring routine results or failures")
     func logMilestoneEmphasis() {
         let plan = UUID(), client = UUID(), account = UUID()

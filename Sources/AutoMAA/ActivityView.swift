@@ -247,11 +247,7 @@ struct ActivityView: View {
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
             HStack(spacing: 5) {
-                Image(systemName: session.outcome.symbol)
-                    .foregroundStyle(session.outcome == .failed ? Color.red : Color.secondary)
-                    .frame(width: 15)
-                    .accessibilityHidden(true)
-                Text(session.outcome.title).fixedSize()
+                ActivityOutcomeLabel(outcome: session.outcome, isSelected: model.activitySelection == .session(session.id))
                 Text("·").accessibilityHidden(true)
                 Text(ActivityRecordPresentation.listSummary(session))
                     .lineLimit(1)

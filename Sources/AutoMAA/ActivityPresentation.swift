@@ -7,6 +7,12 @@ struct ActivityNavigationRequest: Identifiable, Equatable {
 }
 
 extension LogEntry {
+    var terminalOutcome: ActivityOutcome? {
+        guard task == nil, clientID == nil, accountID == nil,
+              phase == .completed || phase == .failed || phase == .cancelled else { return nil }
+        return ActivitySession(id: id.uuidString, runID: runID, entries: [self]).outcome
+    }
+
     var highlightsMilestone: Bool {
         guard level == .success, task == nil, accountID == nil, runSummary == nil else { return false }
         switch phase {
