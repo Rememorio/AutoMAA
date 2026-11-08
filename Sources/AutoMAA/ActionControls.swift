@@ -7,11 +7,12 @@ struct ActionTextButton: View {
     var tint: Color = .secondary
     var help: String? = nil
     var reservedTitles: [String] = []
+    var symbolAfterTitle = false
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            ActionTextLabel(title: title, symbol: symbol, reservedTitles: reservedTitles, tint: tint)
+            ActionTextLabel(title: title, symbol: symbol, reservedTitles: reservedTitles, tint: tint, symbolAfterTitle: symbolAfterTitle)
         }
         .buttonStyle(.borderless)
         .help(help ?? title)
@@ -47,6 +48,7 @@ struct ActionTextLabel: View {
     var reservedTitles: [String] = []
     var tint: Color = .secondary
     var symbolTint: Color? = nil
+    var symbolAfterTitle = false
 
     var body: some View {
         ZStack(alignment: .trailing) {
@@ -63,11 +65,16 @@ struct ActionTextLabel: View {
 
     private func label(_ title: String, symbol: String) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: symbol).frame(width: 14)
-                .foregroundStyle(symbolTint ?? tint)
-                .accessibilityHidden(true)
+            if !symbolAfterTitle { icon(symbol) }
             Text(title).foregroundStyle(tint)
+            if symbolAfterTitle { icon(symbol) }
         }
+    }
+
+    private func icon(_ symbol: String) -> some View {
+        Image(systemName: symbol).frame(width: 14)
+            .foregroundStyle(symbolTint ?? tint)
+            .accessibilityHidden(true)
     }
 }
 

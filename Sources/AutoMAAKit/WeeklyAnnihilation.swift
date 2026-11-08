@@ -15,14 +15,7 @@ public struct GameWeek: Equatable, Sendable {
     public let weekday: ScheduleWeekday
 
     public init(client: ClientKind, at date: Date) {
-        // maa-cli server_time_zone includes the 04:00 game-day boundary.
-        let offset = switch client {
-        case .official, .bilibili, .txwy: 4
-        case .yoStarJP, .yoStarKR: 5
-        case .yoStarEN: -11
-        }
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(secondsFromGMT: offset * 3600)!
+        let calendar = GameDay.calendar(for: client)
         let day = (calendar.component(.weekday, from: date) + 5) % 7
         weekday = ScheduleWeekday.allCases[day]
         start = calendar.date(byAdding: .day, value: -day, to: calendar.startOfDay(for: date))!
@@ -170,7 +163,8 @@ extension ExecutionState {
                     fightProgress?[key]?.annihilation = entry.result
                     // Both targets survive if a separate regular attempt also needs confirmation.
                     let regular = fightProgress?[key]?.regular
-                    record(regular?.status == .unconfirmed && fightProgress?[key]?.isRegularManuallyHandled != true ? regular! : entry.result, for: key)
+                    record(regular?.status == .unconfirmed && fightProgress?[key]?.isRegularManuallyHandled != true ? regular! : entry.result,
+                           for: key, at: date)
                 } else if status == .pending {
                     let progress = fightProgress?[key]
                     if progress?.annihilation?.isResolved == true, progress?.isRegularHandled != true { continue }
@@ -182,8 +176,8 @@ extension ExecutionState {
                 } else if status == .completed,
                           fightProgress?[key]?.annihilation?.status == .unconfirmed || fightProgress?[key]?.isRegularHandled == true {
                     fightProgress?[key]?.annihilation = weekly.entry(clientID: client.id, accountID: account.id)?.result
-                    if let handled = fightProgress?[key]?.handledRegularResult { record(handled, for: key) }
-                    else if let regular = fightProgress?[key]?.regular { record(regular, for: key) }
+                    if let handled = fightProgress?[key]?.handledRegularResult { record(handled, for: key, at: date) }
+                    else if let regular = fightProgress?[key]?.regular { record(regular, for: key, at: date) }
                     else { fightResults?.removeValue(forKey: key) }
                 }
             }

@@ -286,7 +286,7 @@ public struct ExecutionStateStore: Sendable {
         self.directories = directories
     }
 
-    public func loadForToday() -> ExecutionState {
+    public func loadSnapshot() -> ExecutionState {
         (try? loadForExecution()) ?? ExecutionState(dateKey: Self.todayKey)
     }
 
@@ -295,8 +295,7 @@ public struct ExecutionStateStore: Sendable {
             return ExecutionState(dateKey: Self.todayKey)
         }
         let data = try Data(contentsOf: directories.executionState)
-        let state = try Self.decoder.decode(ExecutionState.self, from: data)
-        return state.dateKey == Self.todayKey ? state : ExecutionState(dateKey: Self.todayKey)
+        return try Self.decoder.decode(ExecutionState.self, from: data)
     }
 
     public func save(_ state: ExecutionState) throws {

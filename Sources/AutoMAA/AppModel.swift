@@ -108,7 +108,14 @@ final class AppModel: ObservableObject {
     @Published var activityEntries: [LogEntry]
     @Published var activitySearch = ""
     @Published var activityFilter: ActivityFilter = .all
-    @Published var activitySelection: ActivityWorkspaceSelection?
+    @Published var activitySelection: ActivityWorkspaceSelection? {
+        didSet {
+            if let activityPendingSource, activitySelection != .plan(activityPendingSource.planID) {
+                self.activityPendingSource = nil
+            }
+        }
+    }
+    @Published private(set) var activityPendingSource: ActivityPendingSource?
     @Published var fightSettingsPlanID: UUID?
     @Published var clientsSelection: ClientWorkspaceSelection? {
         didSet {
@@ -221,7 +228,7 @@ final class AppModel: ObservableObject {
         configurationStore = ConfigurationStore(directories: directories)
         historyStore = HistoryStore(directories: directories)
         executionStateStore = ExecutionStateStore(directories: directories)
-        executionState = ExecutionStateStore(directories: directories).loadForToday()
+        executionState = ExecutionStateStore(directories: directories).loadSnapshot()
         fightStageMemoryStore = FightStageMemoryStore(directories: directories)
         weeklyAnnihilationStore = WeeklyAnnihilationStore(directories: directories)
         let applicationBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
@@ -513,13 +520,19 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func continuation(for planID: UUID, at date: Date? = nil) -> PlanContinuation {
+    func continuation(for planID: UUID, at date: Date? = nil, continuingFrom: Date? = nil) -> PlanContinuation {
         PlanContinuation(configuration: configuration, planID: planID, state: executionState, history: activityEntries,
-                         weeklyAnnihilation: weeklyAnnihilation, now: date ?? currentDate)
+                         weeklyAnnihilation: weeklyAnnihilation, now: date ?? currentDate, continuingFrom: continuingFrom)
     }
 
-    func runTitle(for planID: UUID, readyTitle: String = "运行方案") -> String {
-        let state = continuation(for: planID)
+    func activityContinuationDate(for planID: UUID) -> Date? {
+        guard selection == .activity, activitySelection == .plan(planID),
+              activityPendingSource?.planID == planID else { return nil }
+        return activityPendingSource?.continuationDate
+    }
+
+    func runTitle(for planID: UUID, readyTitle: String = "运行方案", continuingFrom: Date? = nil) -> String {
+        let state = continuation(for: planID, continuingFrom: continuingFrom)
         if state.pending == 0 { return state.unconfirmed > 0 ? "结果待确认" : state.completionTitle }
         if state.unconfirmed > 0 { return "继续其他任务" }
         return state.hasStarted ? "继续未完成" : readyTitle
@@ -531,11 +544,11 @@ final class AppModel: ObservableObject {
         return "\(client.displayName) / \(account.displayName)"
     }
 
-    func runHelp(for planID: UUID) -> String {
-        let progress = continuation(for: planID)
+    func runHelp(for planID: UUID, continuingFrom: Date? = nil) -> String {
+        let progress = continuation(for: planID, continuingFrom: continuingFrom)
         let scope = "执行 \(progress.pending) 项待办，已处理的任务会自动跳过"
         if progress.unconfirmed > 0 {
-            return "\(scope)；另有 \(progress.unconfirmed) 项待核实作战会保留，请在今日待办中核实"
+            return "\(scope)；另有 \(progress.unconfirmed) 项待核实作战会保留"
         }
         return scope
     }
@@ -551,7 +564,8 @@ final class AppModel: ObservableObject {
             return
         }
         do {
-            executionState = try ExecutionStateStore(directories: directories).handleRegularWithoutRetry(item.step, expected: item.result)
+            executionState = try executionStateStore.handleRegularWithoutRetry(item.step, expected: item.result,
+                                                                                clients: configuration.clients)
             historyStore.append(LogEntry(level: .info, message: "已人工处理：今天不再重试本方案的常规作战；原始结果仍未确认",
                                          runID: UUID(), phase: .completed, planID: item.step.planID,
                                          clientID: item.step.clientID, accountID: item.step.accountID, task: .fight,
@@ -620,8 +634,12 @@ final class AppModel: ObservableObject {
         return "已完成阶段保留。未确认阶段可能已消耗理智或道具，请先检查游戏；重跑会再次执行该阶段。"
     }
 
-    func runPlan(_ planID: UUID, resumeToday: Bool = true, retryStep: WorkflowStep? = nil) {
+    func runPlan(_ planID: UUID, resumeToday: Bool = true, retryStep: WorkflowStep? = nil, continuingFrom: Date? = nil) {
         reloadActivityHistory()
+        if let continuingFrom, continuation(for: planID, continuingFrom: continuingFrom).pending == 0 {
+            showFeedback("这次运行已没有可续跑的任务，请查看待办")
+            return
+        }
         selectCurrentPlan(planID)
         let issues = readinessIssues(for: planID)
         guard canRun(planID: planID) else {
@@ -656,7 +674,7 @@ final class AppModel: ObservableObject {
         }
         workflowTask = Task { [weak self] in
             let report = await runner.run(snapshot, planID: planID, resumeToday: resumeToday,
-                                          retryStep: retryStep)
+                                          retryStep: retryStep, continuingFrom: continuingFrom)
             guard let self else { return }
             self.lastReport = report
             self.isRunning = false
@@ -692,12 +710,17 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func runSelectedPlan(resumeToday: Bool = true) {
-        guard let currentPlanID else {
-            showFeedback("请先创建自动化方案")
-            return
+    var commandPlanID: UUID? {
+        if selection == .activity {
+            if case let .plan(planID) = activitySelection { return planID }
+            return nil
         }
-        runPlan(currentPlanID, resumeToday: resumeToday)
+        return currentPlanID
+    }
+
+    func runSelectedPlan() {
+        guard let planID = commandPlanID else { return }
+        runPlan(planID, continuingFrom: activityContinuationDate(for: planID))
     }
 
     func hotUpdate() {
@@ -1478,7 +1501,7 @@ final class AppModel: ObservableObject {
         }
         do {
             try executionStateStore.reset()
-            executionState = executionStateStore.loadForToday()
+            executionState = executionStateStore.loadSnapshot()
             showFeedback("今日完成记录已重置")
         } catch {
             showFeedback("重置失败：\(error.localizedDescription)", tone: .error)
@@ -1496,10 +1519,10 @@ final class AppModel: ObservableObject {
     }
 
     func canOpenFightStageSettings(for step: WorkflowStep) -> Bool {
+        let state = executionState.forGameDays(of: configuration.clients, at: currentDate)
         guard step.task == .fight, !isWorkflowRunning,
-              executionState.dateKey == ExecutionStateStore.dateKey(for: currentDate),
-              !executionState.isResolved(step.key), !executionState.needsFightConfirmation(step.key),
-              executionState.fightProgress?[step.key]?.canReselectRegularStage == true,
+              !state.isResolved(step.key), !state.needsFightConfirmation(step.key),
+              state.fightProgress?[step.key]?.canReselectRegularStage == true,
               let plan = configuration.plans.first(where: { $0.id == step.planID && $0.isEnabled(.fight) }),
               let client = configuration.clients.first(where: { $0.id == step.clientID && $0.enabled }),
               client.accounts.contains(where: { $0.id == step.accountID && plan.includes($0) })
@@ -1520,13 +1543,24 @@ final class AppModel: ObservableObject {
     func showPlanActivity(_ planID: UUID) {
         guard configuration.plans.contains(where: { $0.id == planID }) else { return }
         activityNavigationRequest = nil
+        activityPendingSource = nil
         selectCurrentPlan(planID)
         activitySelection = .plan(planID)
         selection = .activity
     }
 
+    func showPendingWork(from session: ActivitySession) {
+        guard let planID = session.planID,
+              configuration.plans.contains(where: { $0.id == planID }) else { return }
+        activityNavigationRequest = nil
+        activitySelection = .plan(planID)
+        activityPendingSource = .init(planID: planID, startedAt: session.startedAt, continuationDate: session.continuationDate)
+        selection = .activity
+    }
+
     func showCurrentActivity() {
         activityNavigationRequest = nil
+        activityPendingSource = nil
         activitySearch = ""
         activityFilter = .all
         if isWorkflowRunning {
@@ -1596,7 +1630,7 @@ final class AppModel: ObservableObject {
 
     func reloadActivityHistory() {
         currentDate = Date()
-        let state = executionStateStore.loadForToday()
+        let state = executionStateStore.loadSnapshot()
         if state != executionState { executionState = state }
         let entries = historyStore.load()
         if entries != activityEntries {

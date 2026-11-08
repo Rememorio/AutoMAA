@@ -58,7 +58,7 @@ struct FightRecoveryActions: View {
     @ViewBuilder
     private var actions: some View {
         if item.canConfirmWeeklyCompletion {
-            Button("确认本周剿灭奖励已满…") { confirmsWeeklyCompletion = true }
+            Button("确认奖励已满…") { confirmsWeeklyCompletion = true }
                 .buttonStyle(.bordered)
                 .fixedSize()
                 .disabled(model.isFightRecoveryBusy)
@@ -79,46 +79,55 @@ struct FightRecoveryActions: View {
 struct FightRecoveryRow: View {
     @EnvironmentObject private var model: AppModel
     @State private var showsReview = false
+    @State private var stageEditor: FightStageEditorContext?
     let item: FightRecoveryItem
     let context: String
-    var pendingTitle: String? = nil
-    var presentsReview = false
+
+    private var reviewsWeekly: Bool {
+        item.result.reason == .navigationUnavailable || item.result.kind == .annihilation
+            || FightStagePolicy.isAnnihilation(item.result.stage ?? "")
+    }
+
+    private var regularTarget: String? {
+        model.fightStageMemory.stage(clientID: item.step.clientID, accountID: item.step.accountID)
+    }
+
+    private var needsRegularTarget: Bool { item.result.reason == .missingRegularTarget }
+
+    private var title: String {
+        if needsRegularTarget { return regularTarget == nil ? "常规目标需设置" : "常规目标已设置" }
+        if reviewsWeekly { return "本周剿灭待核实" }
+        return item.title
+    }
+
+    private var reviewTitle: String {
+        if reviewsWeekly { return "核实剿灭…" }
+        return item.result.status == .failed ? "处理作战…" : "核实结果…"
+    }
 
     private var reason: String {
-        item.result.reason?.title ?? "请检查游戏中的作战结果，再选择如何继续。"
+        if needsRegularTarget, let regularTarget { return "已选择 \(regularTarget)，可以用顶部播放继续。" }
+        if reviewsWeekly, item.result.reason == .navigationUnavailable {
+            return "未能确认剿灭入口。请在游戏中检查本周奖励进度。"
+        }
+        return item.result.reason?.title ?? "请检查游戏中的作战结果，再选择如何继续。"
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Text(item.canConfirmWeeklyCompletion && item.result.reason == .navigationUnavailable
-                 ? "本周剿灭 · 待核实" : item.title)
-                .font(.subheadline.weight(.semibold))
-            Text(context).font(.callout).textSelection(.enabled)
-            if let pendingTitle { Text("待执行：" + pendingTitle).font(.callout) }
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).font(.callout).foregroundStyle(ActivityOutcome.partial.color)
             Text(reason)
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            if presentsReview, model.canOpenFightStageSettings(for: item.step) {
-                Button("前往关卡设置") { model.openFightStageSettings(for: item.step) }
-                    .buttonStyle(.link)
-                    .font(.caption)
-                    .help("在自定义参数中调整关卡策略和兜底关卡")
-            }
-            if presentsReview {
-                Button("核实结果…") { showsReview = true }
-                    .buttonStyle(.bordered)
-                    .tint(.primary)
-                    .help(model.isFightRecoveryBusy ? "运行或更新结束后可核实" : "核实 \(context) 的作战结果")
-                    .disabled(model.isFightRecoveryBusy)
-            } else {
-                FightRecoveryActions(item: item, context: context)
-            }
+            nextAction.disabled(model.isFightRecoveryBusy)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .sheet(item: $stageEditor) { FightStageEditorSheet(context: $0) }
         .sheet(isPresented: $showsReview) {
             VStack(alignment: .leading, spacing: 16) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("核实作战结果").font(.headline).accessibilityAddTraits(.isHeader)
+                    Text(reviewsWeekly ? "核实本周剿灭" : item.result.status == .failed ? "处理作战" : "核实作战结果")
+                        .font(.headline).accessibilityAddTraits(.isHeader)
                     Text(context).font(.callout)
                     Text(reason).font(.callout).foregroundStyle(.secondary)
                 }
@@ -133,6 +142,25 @@ struct FightRecoveryRow: View {
             .fixedSize(horizontal: false, vertical: true)
             .padding(20)
             .frame(width: 460)
+        }
+    }
+
+    @ViewBuilder
+    private var nextAction: some View {
+        if needsRegularTarget {
+            ActionTextButton(title: regularTarget == nil ? "设置常规目标…" : "常规目标  \(regularTarget ?? "")",
+                             symbol: "chevron.right", tint: .primary, symbolAfterTitle: true) {
+                stageEditor = .init(clientID: item.step.clientID, accountID: item.step.accountID,
+                                    label: context, stage: regularTarget)
+            }
+        } else if model.canOpenFightStageSettings(for: item.step) {
+            ActionTextButton(title: "调整关卡设置", symbol: "chevron.right", tint: .primary, symbolAfterTitle: true) {
+                model.openFightStageSettings(for: item.step)
+            }
+        } else {
+            ActionTextButton(title: reviewTitle, symbol: "chevron.right", tint: .primary,
+                             help: model.isFightRecoveryBusy ? "运行或更新结束后可处理" : "查看\(context)的作战处理选项",
+                             symbolAfterTitle: true) { showsReview = true }
         }
     }
 }

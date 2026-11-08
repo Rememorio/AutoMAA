@@ -109,8 +109,14 @@ struct DashboardSnapshot {
         for summary in plans {
             let progress = summary.progress
             if progress.unconfirmed > 0 || !progress.fightRecoveryItems.isEmpty {
+                let recovery = progress.fightRecoveryItems
+                let title: String
+                if progress.unconfirmed > 0 { title = "\(progress.unconfirmed) 项结果待确认" }
+                else if recovery.allSatisfy(\.canConfirmWeeklyCompletion) { title = "本周剿灭待核实" }
+                else if recovery.allSatisfy({ $0.result.reason == .missingRegularTarget }) { title = "常规目标需检查" }
+                else { title = "作战需要处理" }
                 results.append(.init(id: "result/\(summary.id)",
-                    title: progress.unconfirmed > 0 ? "\(progress.unconfirmed) 项结果待确认" : "作战需要处理",
+                    title: title,
                     detail: summary.plan.displayName, destination: .activity(summary.id)))
             }
             for issue in summary.readiness.directIssues + summary.readiness.externalBlockers where issue.severity == .error {

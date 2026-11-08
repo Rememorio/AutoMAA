@@ -2813,7 +2813,7 @@ final class AutoMAAKitTests: XCTestCase {
             XCTAssertTrue(report.pendingNotificationNotices.isEmpty)
             XCTAssertTrue(delivered.isEmpty)
             XCTAssertNil(WorkflowNotificationComposer.notification(for: report))
-            XCTAssertEqual(ExecutionStateStore(directories: directories).loadForToday().completedSteps.count, 1)
+            XCTAssertEqual(ExecutionStateStore(directories: directories).loadSnapshot().completedSteps.count, 1)
             let logs = HistoryStore(directories: directories).load()
             XCTAssertTrue(logs.contains {
                 $0.level == .info && $0.task == .recruit && $0.message.contains("5★")
@@ -3897,7 +3897,7 @@ final class AutoMAAKitTests: XCTestCase {
         let expected = completedSteps.union(complete.enabledTasks.map {
             "\(complete.id.uuidString)/\(client.id.uuidString)/\(account.id.uuidString)/\($0.rawValue)"
         })
-        XCTAssertEqual(ExecutionStateStore(directories: directories).loadForToday().completedSteps, expected)
+        XCTAssertEqual(ExecutionStateStore(directories: directories).loadSnapshot().completedSteps, expected)
         let resumed = await runner.run(config, planID: light.id)
         XCTAssertTrue(resumed.isSuccess)
         XCTAssertEqual(resumed.skippedSteps, light.enabledTasks.count)

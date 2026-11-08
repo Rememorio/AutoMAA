@@ -473,7 +473,7 @@ private actor FightTestCommands: CommandRunning {
         }
         let data = try Data(contentsOf: directories.maaConfig.appending(path: "tasks/\(name).json"))
         calls.append(Call(name: name, taskJSON: data, statePath: environment["MAA_STATE_DIR"],
-                          stateBeforeDispatch: ExecutionStateStore(directories: directories).loadForToday(),
+                          stateBeforeDispatch: ExecutionStateStore(directories: directories).loadSnapshot(),
                           weeklyBeforeDispatch: try WeeklyAnnihilationStore(directories: directories).load()))
         let reply = replies.isEmpty ? Reply(result: command()) : replies.removeFirst()
         if let callbacks = reply.callbacks, let path = environment["MAA_STATE_DIR"] {
@@ -527,7 +527,8 @@ private final class FightFixture {
     var directories: AppDirectories { AppDirectories(root: root) }
     var configuration: AppConfiguration { AppConfiguration(cliPath: "/usr/bin/true", clients: [client], plans: [plan]) }
     var step: WorkflowStep { WorkflowStep(planID: plan.id, clientID: client.id, accountID: account.id, task: .fight) }
-    var state: ExecutionState { ExecutionStateStore(directories: directories).loadForToday() }
+    var state: ExecutionState { ExecutionStateStore(directories: directories).loadSnapshot() }
+    var emptyState: ExecutionState { ExecutionState().forGameDays(of: [client], at: now) }
 
     init(priority: Bool = false, award: Bool = false) throws {
         let app = root.appending(path: "Test.app")
@@ -549,13 +550,14 @@ private final class FightFixture {
     func cleanup() { try? FileManager.default.removeItem(at: root) }
 
     func run(_ replies: [FightTestCommands.Reply], retry: Bool = false, blockStateSave: Bool = false,
-             blockWeeklySave: Bool = false) async -> (WorkflowReport, [FightTestCommands.Call]) {
+             blockWeeklySave: Bool = false, continuingFrom: Date? = nil) async -> (WorkflowReport, [FightTestCommands.Call]) {
         let commands = FightTestCommands(replies, directories: directories, blockStateSave: blockStateSave,
                                          blockWeeklySave: blockWeeklySave, inspection: inspection, inspectionFailure: inspectionFailure)
         let runner = WorkflowRunner(directories: directories, portProbe: runtime, gameController: runtime,
                                     shutdownPolicy: ClientShutdownPolicy(maaGracePeriod: 0, systemGracePeriod: 0, forcedGracePeriod: 0),
                                     commandRunner: commands, now: { [self] in now }, eventSink: runtime.record)
-        let report = await runner.run(configuration, planID: plan.id, retryStep: retry ? step : nil)
+        let report = await runner.run(configuration, planID: plan.id, retryStep: retry ? step : nil,
+                                      continuingFrom: continuingFrom)
         return (report, await commands.recordedCalls())
     }
 }
@@ -590,13 +592,13 @@ final class FightWorkflowTests: XCTestCase {
             let fixture = try FightFixture(priority: priority, award: true)
             defer { fixture.cleanup() }
             let original = FightResult(status: .unconfirmed, stage: "1-7", reason: .interruptedBattle, kind: .regular)
-            var state = ExecutionState(dateKey: ExecutionStateStore.todayKey)
+            var state = fixture.emptyState
             var progress = FightProgress(regularStage: "1-7")
             progress.regular = original
             if priority { progress.annihilation = .init(status: .unnecessary, reason: .insufficientSanity) }
             state.fightProgress = [fixture.step.key: progress]
             state.record(original, for: fixture.step.key)
-            try state.handleRegularWithoutRetry(fixture.step, expected: original, at: Date())
+            try state.handleRegularWithoutRetry(fixture.step, expected: original, at: fixture.now)
             try ExecutionStateStore(directories: fixture.directories).save(state)
             let report: WorkflowReport
             let calls: [FightTestCommands.Call]
@@ -615,7 +617,7 @@ final class FightWorkflowTests: XCTestCase {
             XCTAssertEqual(fixture.state.fightProgress?[fixture.step.key]?.regular, original)
             XCTAssertEqual(fixture.state.fightResults?[fixture.step.key]?.status, .manuallyHandled)
             let continuation = PlanContinuation(configuration: fixture.configuration, planID: fixture.plan.id,
-                state: fixture.state, history: [], now: Date())
+                state: fixture.state, history: [], now: fixture.now)
             XCTAssertEqual(continuation.unconfirmed, 0)
             XCTAssertEqual(continuation.manuallyHandled, 1)
             XCTAssertTrue(continuation.fightRecoveryItems.isEmpty)
@@ -903,7 +905,7 @@ final class FightWorkflowTests: XCTestCase {
             try WeeklyAnnihilationStore(directories: fixture.directories).save(weekly)
             var progress = FightProgress(regularStage: "")
             progress.regular = .init(status: unconfirmed ? .unconfirmed : .failed, reason: .commandFailed)
-            var state = ExecutionState(dateKey: ExecutionStateStore.todayKey)
+            var state = fixture.emptyState
             state.fightProgress = [fixture.step.key: progress]
             state.record(progress.regular!, for: fixture.step.key)
             try ExecutionStateStore(directories: fixture.directories).save(state)
@@ -1104,8 +1106,10 @@ final class FightWorkflowTests: XCTestCase {
         XCTAssertTrue(try store.load().entries.isEmpty)
         fixture.now = ISO8601DateFormatter().date(from: "2026-09-11T00:00:00Z")!
         let full = try settlementCallbacks(stage: "Map", kind: .annihilation, weeklyProgress: [1800, 1800])
-        let (_, friday) = await fixture.run([.init(result: command(), callbacks: full)])
-        XCTAssertEqual(friday.count, 1)
+        let (fridayReport, friday) = await fixture.run([.init(result: command(), callbacks: full),
+                                                       .init(result: command("Fight 1-7 1 times"))])
+        XCTAssertTrue(fridayReport.isSuccess)
+        XCTAssertEqual(friday.count, 2)
         fixture.now = fixture.now.addingTimeInterval(7 * 86400)
         try ExecutionStateStore(directories: fixture.directories).reset()
         let (newWeek, next) = await fixture.run([.init(result: command(), callbacks: noSanity), .init(result: command("Fight 1-7 1 times"))])
@@ -1319,7 +1323,7 @@ final class FightWorkflowTests: XCTestCase {
     func testInvalidFrozenStageUsesCorrectedTargetWithoutRepeatingAnnihilation() async throws {
         let fixture = try FightFixture(priority: true)
         defer { fixture.cleanup() }
-        var state = ExecutionState(dateKey: ExecutionStateStore.todayKey)
+        var state = fixture.emptyState
         var progress = FightProgress(regularStage: "カズデル")
         progress.annihilation = FightResult(status: .completed, times: 1, kind: .annihilation)
         progress.regular = FightResult(status: .failed)
@@ -1540,6 +1544,7 @@ final class FightWorkflowTests: XCTestCase {
         continuation = PlanContinuation(configuration: fixture.configuration, planID: fixture.plan.id, state: state, history: [])
         XCTAssertEqual(continuation.pending, 1)
         XCTAssertEqual(continuation.unconfirmed, 1)
+        state.record(.init(status: .completed), for: fixture.step.key)
         state.dateKey = "2000-01-01"
         continuation = PlanContinuation(configuration: fixture.configuration, planID: fixture.plan.id, state: state, history: [])
         XCTAssertEqual(continuation.pending, 2)
@@ -1625,10 +1630,21 @@ final class FightWorkflowTests: XCTestCase {
         XCTAssertEqual(fixture.runtime.launches, 1)
     }
 
+    func testHistoricalContinuationCannotLaunchAfterServerRefresh() async throws {
+        let fixture = try FightFixture()
+        defer { fixture.cleanup() }
+        let original = ISO8601DateFormatter().date(from: "2026-11-08T12:00:00Z")!
+        fixture.now = ISO8601DateFormatter().date(from: "2026-11-08T19:00:00Z")!
+        let (report, calls) = await fixture.run([], continuingFrom: original)
+        XCTAssertNotNil(report.fatalError)
+        XCTAssertTrue(calls.isEmpty)
+        XCTAssertEqual(fixture.runtime.launches, 0)
+    }
+
     func testUndispatchedRegularPhaseResumesWithoutRepeatingAnnihilation() async throws {
         let fixture = try FightFixture(priority: true)
         defer { fixture.cleanup() }
-        var state = fixture.state
+        var state = fixture.emptyState
         state.record(FightResult(status: .unconfirmed), for: fixture.step.key)
         var progress = FightProgress(regularStage: "1-7")
         progress.annihilation = FightResult(status: .completed, stage: "Annihilation", times: 1)

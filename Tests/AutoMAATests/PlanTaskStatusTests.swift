@@ -126,7 +126,7 @@ struct PlanTaskStatusTests {
         #expect(fixture.snapshot(entries: [fixture.entry(level: .error), fixture.entry(task: nil, phase: .cancelled)])
             .status(for: .recruit) == .failure)
         var state = fixture.emptyState
-        state.record(.init(status: .failed), for: fixture.step(.fight).key)
+        state.record(.init(status: .failed), for: fixture.step(.fight).key, at: fixture.now)
         #expect(fixture.snapshot(state: state, entries: [fixture.entry(task: .fight, level: .error, runID: UUID()),
             fixture.entry(task: .fight),
             fixture.entry(task: nil, phase: .cancelled)]).status(for: .fight) == .cancelled)
@@ -137,14 +137,14 @@ struct PlanTaskStatusTests {
         let fixture = Fixture()
         var state = fixture.emptyState
         for result in [FightResult(status: .unconfirmed), .init(status: .manuallyHandled)] {
-            state.record(result, for: fixture.step(.fight).key)
+            state.record(result, for: fixture.step(.fight).key, at: fixture.now)
             #expect(fixture.snapshot(state: state).status(for: .fight) == .attention)
         }
-        state.record(.init(status: .failed), for: fixture.step(.fight).key)
+        state.record(.init(status: .failed), for: fixture.step(.fight).key, at: fixture.now)
         #expect(fixture.snapshot(state: state).status(for: .fight) == .failure)
-        for index in [0, 1] { state.record(.init(status: .unnecessary), for: fixture.step(.fight, account: index).key) }
+        for index in [0, 1] { state.record(.init(status: .unnecessary), for: fixture.step(.fight, account: index).key, at: fixture.now) }
         #expect(fixture.snapshot(state: state).status(for: .fight) == .none)
-        state.record(.init(status: .unnecessary, reason: .navigationUnavailable), for: fixture.step(.fight).key)
+        state.record(.init(status: .unnecessary, reason: .navigationUnavailable), for: fixture.step(.fight).key, at: fixture.now)
         #expect(fixture.snapshot(state: state).status(for: .fight) == .attention)
         #expect(fixture.snapshot(state: fixture.completed(.fight)).status(for: .fight) == .success)
     }
@@ -172,7 +172,7 @@ struct PlanTaskStatusTests {
             return value
         }
         var emptyState: ExecutionState {
-            .init(dateKey: ExecutionStateStore.dateKey(for: now, calendar: calendar))
+            .init(dateKey: ExecutionStateStore.dateKey(for: now, calendar: calendar), updatedAt: now)
         }
 
         init() {
@@ -192,7 +192,7 @@ struct PlanTaskStatusTests {
         func completed(_ task: TaskKind, accounts: [Int] = [0, 1]) -> ExecutionState {
             var state = emptyState
             for index in accounts {
-                if task == .fight { state.record(.init(status: .completed), for: step(task, account: index).key) }
+                if task == .fight { state.record(.init(status: .completed), for: step(task, account: index).key, at: now) }
                 else { state.completedSteps.insert(step(task, account: index).key) }
             }
             return state

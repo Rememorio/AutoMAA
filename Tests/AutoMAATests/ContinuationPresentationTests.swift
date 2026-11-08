@@ -5,6 +5,23 @@ import Testing
 
 @Suite("Continuation presentation")
 struct ContinuationPresentationTests {
+    @Test("a historical record offers one live follow-up only while related work remains")
+    func historicalPendingLink() {
+        let planID = UUID()
+        let run = ActivitySession(id: "partial", runID: UUID(), entries: [
+            LogEntry(level: .warning, message: "部分完成", phase: .completed, planID: planID,
+                     runSummary: .init(completedSteps: 10, failedSteps: 0, unexecutedSteps: 5, totalSteps: 15))
+        ])
+        var progress = PlanContinuation(configuration: .defaults, planID: planID, state: .init(), history: [])
+        progress.hasStarted = true
+        progress.pending = 5
+        #expect(ActivityPendingLink(session: run, progress: progress) == .available("剩余 5 项"))
+        progress.pending = 0
+        #expect(ActivityPendingLink(session: run, progress: progress) == nil)
+        progress.hasExpiredScope = true
+        #expect(ActivityPendingLink(session: run, progress: progress) == .expired)
+    }
+
     @Test("today summaries distinguish runnable work from review, blocked and empty states")
     func summaryGuidanceRespectsScope() {
         var progress = PlanContinuation(configuration: .defaults, planID: UUID(),

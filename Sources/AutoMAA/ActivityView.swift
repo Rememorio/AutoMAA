@@ -101,7 +101,7 @@ struct ActivityView: View {
                 .tint(model.activityFilter == .all ? .secondary : .maaAccent)
                 .accessibilityLabel("筛选历史运行")
                 .accessibilityValue(model.activityFilter.title)
-                .help("历史运行：\(model.activityFilter.title)；当前运行和今日事项始终保留")
+                .help("历史运行：\(model.activityFilter.title)。当前运行和待办始终保留")
             }
             .padding(12)
             Divider()
@@ -123,7 +123,7 @@ struct ActivityView: View {
 
                     let todayPlans = model.configuration.plans.filter { $0.id != currentPlan?.id }
                     if !todayPlans.isEmpty {
-                        Section("今日") {
+                        Section("待办") {
                             ForEach(todayPlans) { plan in
                                 planRow(plan, isCurrent: false).tag(ActivityWorkspaceSelection.plan(plan.id))
                                     .id(ActivityWorkspaceSelection.plan(plan.id))
@@ -270,23 +270,22 @@ struct ActivityView: View {
         case let .session(id):
             if let session = sessions.first(where: { $0.id == id }) {
                 ActivityRecordDetail(session: session, title: title(for: session), section: recordSection,
-                                     showToday: todayAction(for: session))
+                                     pendingLink: pendingLink(for: session)) { model.showPendingWork(from: session) }
                     .id(session.id)
             } else {
                 ActivityEmptyState(title: "该记录已被清除", symbol: "clock.arrow.circlepath", detail: "从左侧选择其他记录。")
             }
         case nil:
             ActivityEmptyState(title: hasActiveFilters ? "没有匹配的记录" : "选择运行记录",
-                               symbol: "list.bullet.rectangle", detail: "从左侧查看今日状态或历史结果。")
+                               symbol: "list.bullet.rectangle", detail: "从左侧选择方案待办或历史记录。")
         }
     }
 
-    private func todayAction(for session: ActivitySession) -> (() -> Void)? {
-        guard let planID = session.planID, currentPlan?.id != planID,
+    private func pendingLink(for session: ActivitySession) -> ActivityPendingLink? {
+        guard let planID = session.planID,
               model.configuration.plans.contains(where: { $0.id == planID }) else { return nil }
-        let progress = model.continuation(for: planID)
-        guard (progress.hasStarted && progress.pending > 0) || !progress.fightRecoveryItems.isEmpty else { return nil }
-        return { model.activitySelection = .plan(planID) }
+        let progress = model.continuation(for: planID, continuingFrom: session.continuationDate)
+        return ActivityPendingLink(session: session, progress: progress)
     }
 
     private func restoreSelection() {

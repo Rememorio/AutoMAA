@@ -46,6 +46,8 @@ private struct TaskRunOutcome {
     }
 }
 
+private struct GameDayEnded: Error {}
+
 private struct MaintenanceCommandOutcome {
     let result: CommandResult
     let recoveredAfterRetry: Bool
@@ -248,13 +250,14 @@ public final class WorkflowRunner {
         _ configuration: AppConfiguration,
         planID: UUID,
         resumeToday: Bool = true,
-        retryStep: WorkflowStep? = nil
+        retryStep: WorkflowStep? = nil,
+        continuingFrom: Date? = nil
     ) async -> WorkflowReport {
         let runID = UUID()
         let control = WorkflowRunControl(directories: directories)
         let task = Task {
-            await runWorkflow(configuration, planID: planID, resumeToday: resumeToday,
-                              retryStep: retryStep, runID: runID)
+            await runWorkflow(configuration, planID: planID, resumeToday: resumeToday || continuingFrom != nil,
+                              retryStep: retryStep, continuingFrom: continuingFrom, runID: runID)
         }
         let monitor = Task {
             while !Task.isCancelled {
@@ -282,6 +285,7 @@ public final class WorkflowRunner {
         planID: UUID,
         resumeToday: Bool,
         retryStep: WorkflowStep?,
+        continuingFrom: Date?,
         runID: UUID
     ) async -> WorkflowReport {
         var report = WorkflowReport()
@@ -367,10 +371,20 @@ public final class WorkflowRunner {
         _ = lock
         _ = lease
 
+        let runDate = now()
+        let activeClients = configuration.clients.filter { client in
+            client.enabled && client.accounts.contains(where: plan.includes)
+                && (continuingFrom.map { GameDay.contains($0, for: client.kind, at: runDate) } ?? true)
+        }
+        guard !activeClients.isEmpty else {
+            report.fatalError = "本轮续跑已结束，请查看当前待办"
+            emit(.failed, report.fatalError!, 0, .error, continuationSource: continuingFrom)
+            return report
+        }
         var state: ExecutionState
         var weeklyAnnihilation: WeeklyAnnihilationState
         do {
-            state = try stateStore.loadForExecution()
+            state = try stateStore.loadForExecution().forGameDays(of: configuration.clients, at: runDate)
             weeklyAnnihilation = try weeklyAnnihilationStore.load()
         }
         catch {
@@ -384,7 +398,7 @@ public final class WorkflowRunner {
             state.fightResults = state.fightResults?.filter { !$0.key.hasPrefix(prefix) }
             state.fightProgress = state.fightProgress?.filter { !$0.key.hasPrefix(prefix) }
         }
-        state.prepareWeeklyAnnihilation(plan: plan, clients: configuration.clients, weekly: weeklyAnnihilation, at: now())
+        state.prepareWeeklyAnnihilation(plan: plan, clients: activeClients, weekly: weeklyAnnihilation, at: runDate)
         if let retryStep {
             guard !state.isResolved(retryStep.key) else {
                 report.fatalError = "本项今日已处理完成，请刷新活动记录"
@@ -393,16 +407,13 @@ public final class WorkflowRunner {
             }
 
         }
-        let activeClients = configuration.clients.filter { client in
-            client.enabled && client.accounts.contains(where: plan.includes)
-        }
         let totalSteps = max(1, activeClients.reduce(0) { partial, client in
             partial + client.accounts.filter(plan.includes).count * plan.enabledTasks.count
         })
         report.totalSteps = totalSteps
         var visitedSteps = 0
 
-        emit(.preparing, "正在准备「\(plan.displayName)」", 0, .info)
+        emit(.preparing, "正在准备「\(plan.displayName)」", 0, .info, continuationSource: continuingFrom)
         let pendingClients = activeClients.filter { client in
             client.accounts.filter(plan.includes).contains { account in
                 plan.enabledTasks.contains { task in
@@ -483,11 +494,19 @@ public final class WorkflowRunner {
             return report
         }
 
+        func canContinueGameDay(_ client: ClientConfiguration) -> Bool {
+            if GameDay.contains(runDate, for: client.kind, at: now()) { return true }
+            emit(.attention, "\(clientText(client))已到下一个游戏日，本轮剩余任务未执行",
+                 Double(visitedSteps) / Double(totalSteps), .warning, client: client)
+            return false
+        }
+
         clientLoop: for client in activeClients {
             if Task.isCancelled {
                 report.cancelled = true
                 break
             }
+            guard canContinueGameDay(client) else { continue }
             let activeAccounts = client.accounts.filter(plan.includes)
             let clientStepCount = activeAccounts.count * plan.enabledTasks.count
             if clientStepCount == 0 {
@@ -576,6 +595,7 @@ public final class WorkflowRunner {
                     stopAfterClosingClient = true
                     break accountLoop
                 }
+                guard canContinueGameDay(client) else { break accountLoop }
                 let enabledTasks = plan.enabledTasks
                 if resumeToday, enabledTasks.allSatisfy({
                     state.isResolved(checkpointKey(plan: plan, client: client, account: account, task: $0))
@@ -638,6 +658,7 @@ public final class WorkflowRunner {
                         stopAfterClosingClient = true
                         break accountLoop
                     }
+                    guard canContinueGameDay(client) else { break accountLoop }
                     let key = checkpointKey(plan: plan, client: client, account: account, task: task)
                     if resumeToday, state.isResolved(key) {
                         report.skippedSteps += 1
@@ -665,13 +686,17 @@ public final class WorkflowRunner {
                     do {
                         if task == .fight {
                             outcome = try await runFight(plan: plan, account: account, client: client,
-                                                        configuration: configuration, state: &state,
+                                                        configuration: configuration, runDate: runDate, state: &state,
                                                         memory: &fightStageMemory, weekly: &weeklyAnnihilation)
                         } else {
                             outcome = try await runTask(
-                                task, plan: plan, account: account, client: client, configuration: configuration
+                                task, plan: plan, account: account, client: client, configuration: configuration,
+                                runDate: runDate
                             )
                         }
+                    } catch is GameDayEnded {
+                        _ = canContinueGameDay(client)
+                        break accountLoop
                     } catch {
                         if isCancellation(error) {
                             report.cancelled = true
@@ -734,7 +759,7 @@ public final class WorkflowRunner {
                     }
                     visitedSteps += 1
                     if let result = outcome.fightResult {
-                        state.record(result, for: key)
+                        state.record(result, for: key, at: now())
                         do { try stateStore.save(state) }
                         catch {
                             report.fatalError = "作战记录保存失败，流程已停止：\(error.localizedDescription)"
@@ -753,7 +778,7 @@ public final class WorkflowRunner {
                     if outcome.succeeded {
                         if outcome.fightResult == nil || outcome.fightResult?.status == .completed { report.succeededSteps += 1 }
                         if outcome.fightResult == nil { state.completedSteps.insert(key) }
-                        state.updatedAt = Date()
+                        state.updatedAt = now()
                         do { try stateStore.save(state) }
                         catch {
                             report.fatalError = "完成记录保存失败，流程已停止：\(error.localizedDescription)"
@@ -1915,6 +1940,7 @@ public final class WorkflowRunner {
         account: AccountConfiguration,
         client: ClientConfiguration,
         configuration: AppConfiguration,
+        runDate: Date,
         state: inout ExecutionState,
         memory: inout FightStageMemory,
         weekly: inout WeeklyAnnihilationState
@@ -1976,6 +2002,13 @@ public final class WorkflowRunner {
             } else if canSelect, plan.fight.usesCustomSettings,
                       let fallback = FightStagePolicy.regularStage(from: plan.fight.fallbackStage, times: 1) {
                 progress.fallbackStage = fallback
+            } else if canSelect {
+                let result = FightResult(status: .failed, reason: .missingRegularTarget, kind: .regular, failurePhase: .navigation)
+                progress.regular = result
+                if state.fightProgress == nil { state.fightProgress = [:] }
+                state.fightProgress?[key] = progress
+                return TaskRunOutcome(succeeded: false, recoveredAfterRetry: false, notices: [], failureDetails: nil,
+                                      fightResult: result)
             } else {
                 throw MAAConfigurationWriterError.invalidConfiguration("未能确定常规关卡；请在游戏中选择常规关卡，或设置常规目标/兜底关卡")
             }
@@ -2004,7 +2037,7 @@ public final class WorkflowRunner {
             }
             var outcome = try await runFightPhase(
                 isAnnihilation: isAnnihilation, plan: plan, account: account, client: client,
-                configuration: configuration, progress: &progress, state: &state, weekly: &weekly,
+                configuration: configuration, runDate: runDate, progress: &progress, state: &state, weekly: &weekly,
                 useCurrentStage: !isAnnihilation && useCurrentStage && progress.fallbackStage == nil
             )
             var candidates: [String] = []
@@ -2027,7 +2060,7 @@ public final class WorkflowRunner {
                 catch { throw FightPersistenceError(details: error.localizedDescription) }
                 outcome = try await runFightPhase(
                     isAnnihilation: false, plan: plan, account: account, client: client,
-                    configuration: configuration, progress: &progress, state: &state, weekly: &weekly
+                    configuration: configuration, runDate: runDate, progress: &progress, state: &state, weekly: &weekly
                 )
             }
             lastOutcome = outcome
@@ -2060,16 +2093,20 @@ public final class WorkflowRunner {
         account: AccountConfiguration,
         client: ClientConfiguration,
         configuration: AppConfiguration,
+        runDate: Date,
         progress: inout FightProgress,
         state: inout ExecutionState,
         weekly: inout WeeklyAnnihilationState,
         useCurrentStage: Bool = false
     ) async throws -> TaskRunOutcome {
         guard !Task.isCancelled else { throw RuntimeError.cancelled }
+        try await requireConnection(client)
+        let dispatchDate = now()
+        guard GameDay.contains(runDate, for: client.kind, at: dispatchDate) else { throw GameDayEnded() }
         let key = checkpointKey(plan: plan, client: client, account: account, task: .fight)
         let stage = isAnnihilation ? "Annihilation" : progress.fallbackStage ?? progress.regularStage
         let fallbackFrom = !isAnnihilation && progress.fallbackStage != nil ? progress.regularStage : nil
-        let weekStart = GameWeek(client: client.kind, at: now()).start
+        let weekStart = GameWeek(client: client.kind, at: dispatchDate).start
         var phasePlan = plan
         if isAnnihilation {
             phasePlan.fight = FightConfiguration()
@@ -2087,7 +2124,7 @@ public final class WorkflowRunner {
             else { progress.regular = result }
             if state.fightProgress == nil { state.fightProgress = [:] }
             state.fightProgress?[key] = progress
-            state.record(result, for: key)
+            state.record(result, for: key, at: now())
         }
         // Persist the exact attempt before dispatch, including a selected fallback.
         let dispatched = FightResult(status: .unconfirmed, stage: stage, reason: .missingEvidence, fallbackFrom: fallbackFrom)
@@ -2127,7 +2164,8 @@ public final class WorkflowRunner {
             catch { throw FightPersistenceError(details: error.localizedDescription) }
         }
         if isAnnihilation, result.isResolved, progress.regular?.isResolved != true {
-            state.record(FightResult(status: .unconfirmed, stage: progress.fallbackStage ?? progress.regularStage, reason: .missingEvidence), for: key)
+            state.record(FightResult(status: .unconfirmed, stage: progress.fallbackStage ?? progress.regularStage, reason: .missingEvidence),
+                         for: key, at: now())
         }
         try persistFightState(state)
         if plan.fight.weeklyAnnihilation.enabled {
@@ -2148,7 +2186,8 @@ public final class WorkflowRunner {
         plan: AutomationPlan,
         account: AccountConfiguration,
         client: ClientConfiguration,
-        configuration: AppConfiguration
+        configuration: AppConfiguration,
+        runDate: Date? = nil
     ) async throws -> TaskRunOutcome {
         guard !Task.isCancelled else { throw RuntimeError.cancelled }
         let writer = MAAConfigurationWriter(directories: directories)
@@ -2178,7 +2217,10 @@ public final class WorkflowRunner {
                 : nil
             if let observationRoot { try FileManager.default.createDirectory(at: observationRoot, withIntermediateDirectories: true) }
             defer { if let observationRoot { try? FileManager.default.removeItem(at: observationRoot) } }
-            try await requireConnection(client)
+            if let runDate {
+                try await requireConnection(client)
+                guard GameDay.contains(runDate, for: client.kind, at: now()) else { throw GameDayEnded() }
+            }
             let result: CommandResult
             if let observationRoot {
                 result = await runCommand(executable: configuration.cliPath,
@@ -2236,6 +2278,7 @@ public final class WorkflowRunner {
                 )
             }
             failureDetails = commandFailureDetails(result)
+            if let runDate, !GameDay.contains(runDate, for: client.kind, at: now()) { throw GameDayEnded() }
             if result.timedOut {
                 guard attempt < attempts,
                       try await restartClientForRecovery(
@@ -2803,7 +2846,8 @@ public final class WorkflowRunner {
         details: String? = nil,
         runSummary: WorkflowRunSummary? = nil,
         updateInformation: MAAUpdateInformation? = nil,
-        fightResult: FightResult? = nil
+        fightResult: FightResult? = nil,
+        continuationSource: Date? = nil
     ) {
         let normalizedProgress = runProgress.advance(to: proposedProgress)
         let message = SensitiveDataRedactor.redact(message, sensitiveValues: currentSensitiveValues)
@@ -2816,6 +2860,7 @@ public final class WorkflowRunner {
             return result
         }
         let log = LogEntry(
+            timestamp: now(),
             level: level,
             message: message,
             details: details,
@@ -2828,7 +2873,8 @@ public final class WorkflowRunner {
             task: task,
             runSummary: runSummary,
             updateInformation: updateInformation,
-            fightResult: fightResult
+            fightResult: fightResult,
+            continuationSource: continuationSource
         )
         historyStore.append(log)
         eventSink(RunnerEvent(phase: phase, message: message, progress: normalizedProgress, log: log))

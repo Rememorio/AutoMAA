@@ -85,7 +85,8 @@ private struct AutoMAACommands: Commands {
         CommandGroup(after: .newItem) {
             Button(runCommandTitle) { model.runSelectedPlan() }
                 .keyboardShortcut("r", modifiers: [.command])
-                .disabled(workspaceActive != true || model.entityEditor != nil || model.readinessRequest != nil || model.updateDetailsRequest != nil || !model.canRun || model.currentPlanID.map { model.continuation(for: $0).pending == 0 } == true)
+                .disabled(workspaceActive != true || model.entityEditor != nil || model.readinessRequest != nil
+                          || model.updateDetailsRequest != nil || !canRunCommand)
             Button(model.activePlanID == nil ? "取消更新" : "安全停止当前流程") { model.cancelCurrentOperation() }
                 .keyboardShortcut(".", modifiers: [.command])
                 .disabled(!model.canCancelRun && !model.applicationUpdateState.canCancel)
@@ -104,10 +105,15 @@ private struct AutoMAACommands: Commands {
     }
 
     private var runCommandTitle: String {
-        guard let planID = model.currentPlanID, model.canRun(planID: planID) else {
+        guard let planID = model.commandPlanID, model.canRun(planID: planID) else {
             return "运行当前方案"
         }
-        return model.runTitle(for: planID, readyTitle: "运行当前方案")
+        return model.runTitle(for: planID, readyTitle: "运行当前方案", continuingFrom: model.activityContinuationDate(for: planID))
+    }
+
+    private var canRunCommand: Bool {
+        guard let planID = model.commandPlanID, model.canRun(planID: planID) else { return false }
+        return model.continuation(for: planID, continuingFrom: model.activityContinuationDate(for: planID)).pending > 0
     }
 
     private func showSettings(_ section: SettingsSection) {

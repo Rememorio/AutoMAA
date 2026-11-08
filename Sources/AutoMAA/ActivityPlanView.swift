@@ -26,7 +26,8 @@ struct PlanActivityView: View {
     var isTodayDetail = false
 
     private var plan: AutomationPlan? { model.configuration.plans.first { $0.id == planID } }
-    private var progress: PlanContinuation { model.continuation(for: planID) }
+    private var source: ActivityPendingSource? { isTodayDetail ? model.activityPendingSource : nil }
+    private var progress: PlanContinuation { model.continuation(for: planID, continuingFrom: source?.continuationDate) }
     private var snapshot: ActivityPlanSnapshot {
         ActivityPlanSnapshot(planID: planID,
             sessions: ActivityHistory.sessions(from: model.activityEntries),
@@ -34,14 +35,7 @@ struct PlanActivityView: View {
             isWorkflowRunning: model.isWorkflowRunning)
     }
 
-    private var pendingItems: [PendingWorkflowItem] {
-        let recoveryIDs = Set(progress.fightRecoveryItems.map(\.id))
-        return progress.pendingItems.filter { !recoveryIDs.contains($0.id) }
-    }
-
-    private var showsPendingWork: Bool {
-        !progress.fightRecoveryItems.isEmpty || (progress.hasStarted && progress.pending > 0)
-    }
+    private var showsPendingWork: Bool { isTodayDetail && progress.hasPendingWork }
 
     var body: some View {
         if let plan {
@@ -84,12 +78,11 @@ struct PlanActivityView: View {
             VStack(alignment: .leading, spacing: 20) {
                 if showsPendingWork {
                     pendingWork
-                    Divider()
+                    if snapshot.latestSession != nil { Divider() }
                 }
                 if let session = snapshot.latestSession {
                     VStack(alignment: .leading, spacing: 16) {
-                        ActivityRecordHeader(session: session, title: "最近运行",
-                                             showFullHistory: isTodayDetail ? { showFullHistory() } : nil)
+                        ActivityRecordHeader(session: session, title: "最近运行", showFullHistory: showFullHistory)
                         ActivitySessionContents(session: session).id(session.id)
                     }
                 } else {
@@ -105,59 +98,59 @@ struct PlanActivityView: View {
 
     private var pendingWork: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("今日待办").font(.subheadline.weight(.semibold))
-            if !progress.fightRecoveryItems.isEmpty { recovery }
-            if progress.hasStarted, !pendingItems.isEmpty {
-                PendingWorkList(items: pendingItems, showsStageSettings: isTodayDetail)
-            }
+            Text("待办").font(.subheadline.weight(.semibold))
+            PendingWorkList(items: progress.hasStarted ? progress.pendingItems : [], recovery: progress.fightRecoveryItems)
         }
     }
 
     private func header(_ plan: AutomationPlan) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            VStack(alignment: .leading, spacing: 7) {
-                if isTodayDetail || snapshot.isCurrent {
-                    Text(isTodayDetail ? plan.displayName : "本次运行")
-                        .font(.headline).fixedSize(horizontal: false, vertical: true)
-                }
-                if !snapshot.isCurrent {
-                    todaySummary(plan)
-                }
+        VStack(alignment: .leading, spacing: 7) {
+            if isTodayDetail || snapshot.isCurrent {
+                Text(isTodayDetail ? plan.displayName : "本次运行")
+                    .font(.headline).fixedSize(horizontal: false, vertical: true)
             }
-            Spacer(minLength: 8)
-            if !isTodayDetail { historyButton }
+            if let source {
+                Text("续跑 · \(source.startedAt.formatted(.dateTime.month().day().hour().minute()))")
+                    .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+            }
+            if !snapshot.isCurrent { todaySummary(plan) }
+            if !isTodayDetail, progress.hasPendingWork {
+                PendingWorkLinkButton { model.showPlanActivity(planID) }
+            }
         }
-    }
-
-    private var historyButton: some View {
-        ActionTextButton(title: "完整记录", symbol: "clock.arrow.circlepath", help: "查看本方案的完整运行记录",
-                         action: showFullHistory)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func todaySummary(_ plan: AutomationPlan) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            PlanTodaySummary(progress: progress, runState: model.planRunState(planID: planID))
+        let runState = model.planRunState(planID: planID)
+        return VStack(alignment: .leading, spacing: 5) {
+            if progress.hasExpiredScope, progress.pending == 0, progress.unconfirmed == 0 {
+                Text("本轮续跑已结束").font(.caption).foregroundStyle(.secondary)
+                ActionTextButton(title: "查看当前待办", symbol: "chevron.right", symbolAfterTitle: true) {
+                    model.showPlanActivity(planID)
+                }
+            } else {
+                PlanTodaySummary(progress: progress, runState: runState, showsGuidance: !isTodayDetail)
+                if isTodayDetail, progress.hasStarted, progress.pending > 0, runState == .ready {
+                    let accounts = Set(progress.pendingItems.map(\.step.accountID))
+                    Text("点击顶部播放，继续 \(accounts.count) 个账号的待办。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if progress.hasExpiredScope {
+                    Text("已刷新服务器的日常续跑已结束。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             if progress.manuallyHandled > 0 {
                 Text("\(progress.manuallyHandled) 项作战已人工处理，今天不再重试")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            if !progress.hasStarted, model.isPlanScheduleCurrent(plan),
+            if source == nil, !progress.hasStarted, model.isPlanScheduleCurrent(plan),
                let next = PlanScheduleFormatter.nextRunLabel(plan.schedule) {
                 Text("下次 \(next)").font(.caption).foregroundStyle(.secondary)
             }
         }
         .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private var recovery: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ForEach(progress.fightRecoveryItems) { item in
-                FightRecoveryRow(item: item, context: model.pendingWorkContext(item.step),
-                    pendingTitle: progress.pendingItems.first { $0.id == item.id }?.title,
-                    presentsReview: isTodayDetail)
-                if item.id != progress.fightRecoveryItems.last?.id { Divider() }
-            }
-        }
     }
 
     private func showFullHistory() {

@@ -7,14 +7,15 @@ final class FightManualHandlingTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appending(path: "fight-handling-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
         let store = ExecutionStateStore(directories: AppDirectories(root: root))
-        let step = WorkflowStep(planID: UUID(), clientID: UUID(), accountID: UUID(), task: .fight)
+        let client = testClient
+        let step = WorkflowStep(planID: UUID(), clientID: client.id, accountID: client.accounts[0].id, task: .fight)
         let other = WorkflowStep(planID: UUID(), clientID: step.clientID, accountID: step.accountID, task: .fight)
         let result = FightResult(status: .unconfirmed, stage: "PA-8", times: 2, reason: .interruptedBattle, kind: .regular)
         var state = ExecutionState(dateKey: ExecutionStateStore.todayKey)
         state.record(result, for: step.key)
         state.record(result, for: other.key)
         try store.save(state)
-        let handled = try store.handleRegularWithoutRetry(step, expected: result)
+        let handled = try store.handleRegularWithoutRetry(step, expected: result, clients: [client])
         XCTAssertEqual(handled.fightProgress?[step.key]?.regular, result)
         XCTAssertNotNil(handled.fightProgress?[step.key]?.regularManuallyHandledAt)
         XCTAssertEqual(handled.fightResults?[step.key]?.status, .manuallyHandled)
@@ -26,19 +27,20 @@ final class FightManualHandlingTests: XCTestCase {
         XCTAssertEqual(persisted.fightProgress?[step.key]?.regular, result)
         XCTAssertEqual(try XCTUnwrap(persisted.fightProgress?[step.key]?.regularManuallyHandledAt).timeIntervalSince1970,
                        try XCTUnwrap(handled.fightProgress?[step.key]?.regularManuallyHandledAt).timeIntervalSince1970, accuracy: 1)
-        XCTAssertThrowsError(try store.handleRegularWithoutRetry(step, expected: result))
-        var expired = handled
-        expired.dateKey = "2000-01-01"
-        try store.save(expired)
-        XCTAssertThrowsError(try store.handleRegularWithoutRetry(step, expected: result))
-        XCTAssertTrue(try store.loadForExecution().fightResults?.isEmpty ?? true)
+        XCTAssertThrowsError(try store.handleRegularWithoutRetry(step, expected: result, clients: [client]))
+        let tomorrow = Date().addingTimeInterval(86_400)
+        let nextDay = try store.loadForExecution().forGameDays(of: [client], at: tomorrow)
+        XCTAssertNil(nextDay.fightResults?[step.key])
+        XCTAssertTrue(nextDay.needsFightConfirmation(other.key))
+        XCTAssertThrowsError(try store.handleRegularWithoutRetry(step, expected: result, clients: [client], at: tomorrow))
     }
 
     func testHandlingRejectsRunningWorkflowStaleResultsAndAnnihilation() throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "fight-handling-lock-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
         let directories = AppDirectories(root: root), store = ExecutionStateStore(directories: directories)
-        let step = WorkflowStep(planID: UUID(), clientID: UUID(), accountID: UUID(), task: .fight)
+        let client = testClient
+        let step = WorkflowStep(planID: UUID(), clientID: client.id, accountID: client.accounts[0].id, task: .fight)
         let result = FightResult(status: .unconfirmed, stage: "PA-8", reason: .missingEvidence)
         var state = ExecutionState(dateKey: ExecutionStateStore.todayKey)
         state.record(result, for: step.key)
@@ -46,7 +48,7 @@ final class FightManualHandlingTests: XCTestCase {
         let persisted = try store.loadForExecution()
         let lock = try ProcessLock(url: directories.lock)
         try withExtendedLifetime(lock) {
-            XCTAssertThrowsError(try store.handleRegularWithoutRetry(step, expected: result))
+            XCTAssertThrowsError(try store.handleRegularWithoutRetry(step, expected: result, clients: [client]))
             XCTAssertEqual(try store.loadForExecution(), persisted)
         }
         XCTAssertFalse(state.canHandleRegularWithoutRetry(step.key, expected: .init(status: .unconfirmed, stage: "CE-6")))
@@ -56,6 +58,12 @@ final class FightManualHandlingTests: XCTestCase {
             state.record(result, for: step.key)
             XCTAssertThrowsError(try state.handleRegularWithoutRetry(step, expected: result, at: Date()))
         }
+    }
+
+    private var testClient: ClientConfiguration {
+        ClientConfiguration(name: "测试客户端", kind: .yoStarJP, appPath: "/test/Fake.app",
+                            address: "127.0.0.1:65495", profileName: "manual-test",
+                            bundleIdentifier: "dev.automaa.tests.manual", accounts: [AccountConfiguration(name: "测试账号")])
     }
 
     func testManualHandlingSummaryDoesNotCountAutomaticSuccess() {

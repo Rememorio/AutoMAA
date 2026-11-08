@@ -1,47 +1,50 @@
 import AutoMAAKit
 import SwiftUI
 
+struct PendingWorkLinkButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        ActionTextButton(title: "查看待办", symbol: "chevron.right", tint: .primary,
+                         help: "查看剩余任务和需要处理的事项", symbolAfterTitle: true, action: action)
+    }
+}
+
 struct PendingWorkList: View {
     @EnvironmentObject private var model: AppModel
     let items: [PendingWorkflowItem]
-    var showsStageSettings = false
+    let recovery: [FightRecoveryItem]
 
     private var accounts: [WorkflowStep] {
-        var seen: Set<String> = []
-        return items.map(\.step).filter { seen.insert("\($0.clientID)/\($0.accountID)").inserted }
+        var seen: Set<UUID> = []
+        return (items.map(\.step) + recovery.map(\.step)).filter { seen.insert($0.accountID).inserted }
     }
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 12) {
-            ForEach(accounts, id: \.key) { account in
-                let remaining = items.filter { $0.step.clientID == account.clientID && $0.step.accountID == account.accountID }
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Text(model.pendingWorkContext(account)).font(.callout.weight(.medium))
-                        Spacer()
-                        Text("剩余 \(remaining.count) 项").font(.caption).foregroundStyle(.secondary)
+            ForEach(accounts, id: \.accountID) { account in
+                let problems = recovery.filter { $0.step.accountID == account.accountID }
+                let ordinary = items.filter { item in
+                    item.step.accountID == account.accountID && !problems.contains(where: { $0.id == item.id })
+                }
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(model.pendingWorkContext(account))
+                        .font(.callout.weight(.medium)).accessibilityAddTraits(.isHeader)
+                    ForEach(problems) { item in
+                        FightRecoveryRow(item: item, context: model.pendingWorkContext(account))
                     }
-                    VStack(alignment: .leading, spacing: 10) {
-                        ForEach(remaining) { item in
-                            VStack(alignment: .leading, spacing: 4) {
-                                Label(item.title, systemImage: item.step.task.symbol).font(.callout)
-                                if item.reason != nil || item.lastFailure != nil || item.targets == [.weeklyAnnihilation],
-                                   let detail = item.detail {
-                                    Text(detail).font(.caption).foregroundStyle(.secondary)
-                                }
-                                if showsStageSettings, model.canOpenFightStageSettings(for: item.step) {
-                                    Button("前往关卡设置") { model.openFightStageSettings(for: item.step) }
-                                        .buttonStyle(.link)
-                                        .font(.caption)
-                                        .help("在自定义参数中调整关卡策略和兜底关卡")
-                                }
-                            }
-                            .fixedSize(horizontal: false, vertical: true)
-                            .accessibilityElement(children: .combine)
+                    if !ordinary.isEmpty {
+                        Text(ordinary.map(\.title).joined(separator: " · "))
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
+                    ForEach(ordinary.filter { $0.reason != nil || $0.lastFailure != nil || $0.targets == [.weeklyAnnihilation] }) { item in
+                        if let detail = item.detail {
+                            Text(detail).font(.caption).foregroundStyle(.secondary)
                         }
                     }
-                    .padding(.top, 8)
                 }
+                .fixedSize(horizontal: false, vertical: true)
+                if account.accountID != accounts.last?.accountID { Divider() }
             }
         }
     }

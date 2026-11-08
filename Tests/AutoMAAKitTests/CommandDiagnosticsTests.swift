@@ -25,7 +25,7 @@ struct CommandDiagnosticsTests {
         #expect(report.attentionMessages.contains { $0.contains("下载或解压更新数据") })
         #expect(!fixture.runtime.running)
         #expect(!ProcessLock.isHeld(at: fixture.directories.lock))
-        #expect(ExecutionStateStore(directories: fixture.directories).loadForToday().completedSteps.isEmpty)
+        #expect(ExecutionStateStore(directories: fixture.directories).loadSnapshot().completedSteps.isEmpty)
         #expect(await commands.roots.allSatisfy { !FileManager.default.fileExists(atPath: $0) })
     }
 
@@ -47,7 +47,7 @@ struct CommandDiagnosticsTests {
         #expect(await commands.taskCount == 1)
         #expect(!fixture.runtime.entries.contains { $0.message.contains("正在重启") })
         #expect(!fixture.runtime.running)
-        let state = ExecutionStateStore(directories: fixture.directories).loadForToday()
+        let state = ExecutionStateStore(directories: fixture.directories).loadSnapshot()
         let client = try #require(fixture.configuration.clients.first { $0.kind == .official })
         let key = "\(fixture.configuration.plans[0].id)/\(client.id)/\(client.accounts[0].id)/mall"
         #expect(state.completedSteps == [key])
@@ -70,7 +70,7 @@ struct CommandDiagnosticsTests {
         #expect(await commands.taskCount == 0)
         #expect(!fixture.runtime.entries.contains { $0.message.contains("正在重启") })
         #expect(!ProcessLock.isHeld(at: fixture.directories.lock))
-        #expect(ExecutionStateStore(directories: fixture.directories).loadForToday().completedSteps.isEmpty)
+        #expect(ExecutionStateStore(directories: fixture.directories).loadSnapshot().completedSteps.isEmpty)
     }
 
     @Test("navigation evidence does not override explicit manual intervention",
@@ -88,7 +88,7 @@ struct CommandDiagnosticsTests {
         #expect(report.unexecutedSteps == 1)
         #expect(!fixture.runtime.entries.contains { $0.message.contains("正在重启") })
         #expect(await commands.taskCount == 0)
-        #expect(ExecutionStateStore(directories: fixture.directories).loadForToday().completedSteps.isEmpty)
+        #expect(ExecutionStateStore(directories: fixture.directories).loadSnapshot().completedSteps.isEmpty)
     }
 
     @Test("navigation recovery shares the account restart budget with later task timeouts")
@@ -105,7 +105,7 @@ struct CommandDiagnosticsTests {
         #expect(!report.isSuccess)
         #expect(await commands.startupCount == 2)
         #expect(fixture.runtime.entries.count { $0.message.contains("正在重启") } == 1)
-        #expect(ExecutionStateStore(directories: fixture.directories).loadForToday().completedSteps.isEmpty)
+        #expect(ExecutionStateStore(directories: fixture.directories).loadSnapshot().completedSteps.isEmpty)
     }
 
     @Test("navigation failure cannot restart a cancelled workflow")
@@ -140,7 +140,7 @@ struct CommandDiagnosticsTests {
         #expect(!report.isSuccess)
         #expect(await commands.startupCount == 1)
         #expect(await commands.taskCount == 0)
-        #expect(ExecutionStateStore(directories: fixture.directories).loadForToday().completedSteps.isEmpty)
+        #expect(ExecutionStateStore(directories: fixture.directories).loadSnapshot().completedSteps.isEmpty)
         #expect(!ProcessLock.isHeld(at: fixture.directories.lock))
     }
 
@@ -160,7 +160,7 @@ struct CommandDiagnosticsTests {
         #expect(await commands.startupCount == 3)
         #expect(await commands.taskCount == (failsAgain ? 1 : 2))
         #expect(fixture.runtime.entries.count { $0.message.contains("设置页返回账号选择页失败，正在重启") } == 1)
-        #expect(ExecutionStateStore(directories: fixture.directories).loadForToday().completedSteps.count == (failsAgain ? 1 : 2))
+        #expect(ExecutionStateStore(directories: fixture.directories).loadSnapshot().completedSteps.count == (failsAgain ? 1 : 2))
         #expect(!fixture.runtime.running)
         #expect(!ProcessLock.isHeld(at: fixture.directories.lock))
         #expect(await commands.roots.allSatisfy { !FileManager.default.fileExists(atPath: $0) })
@@ -214,7 +214,7 @@ struct CommandDiagnosticsTests {
         ])
         let report = await fixture.run(commands)
         #expect(!report.isSuccess)
-        #expect(ExecutionStateStore(directories: fixture.directories).loadForToday().completedSteps.isEmpty)
+        #expect(ExecutionStateStore(directories: fixture.directories).loadSnapshot().completedSteps.isEmpty)
         let details = fixture.runtime.entries.compactMap(\.details)
         #expect(details.contains { $0.contains("FirstAttempt") && !$0.contains("SecondAttempt") })
         #expect(details.contains { $0.contains("SecondAttempt") && !$0.contains("FirstAttempt") })
@@ -268,7 +268,7 @@ struct CommandDiagnosticsTests {
         #expect(report.cancelled)
         #expect(!fixture.runtime.running)
         #expect(!ProcessLock.isHeld(at: fixture.directories.lock))
-        #expect(ExecutionStateStore(directories: fixture.directories).loadForToday().completedSteps.isEmpty)
+        #expect(ExecutionStateStore(directories: fixture.directories).loadSnapshot().completedSteps.isEmpty)
         let log = try fixture.diagnostics()
         #expect(log.contains("核心日志读取失败"))
         #expect(log.contains("· cancelled"))

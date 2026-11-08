@@ -686,6 +686,7 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
     public var runSummary: WorkflowRunSummary?
     public var updateInformation: MAAUpdateInformation?
     public var fightResult: FightResult?
+    public var continuationSource: Date?
 
     public init(
         id: UUID = UUID(),
@@ -702,7 +703,8 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
         task: TaskKind? = nil,
         runSummary: WorkflowRunSummary? = nil,
         updateInformation: MAAUpdateInformation? = nil,
-        fightResult: FightResult? = nil
+        fightResult: FightResult? = nil,
+        continuationSource: Date? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -719,6 +721,7 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
         self.runSummary = runSummary
         self.updateInformation = updateInformation
         self.fightResult = fightResult
+        self.continuationSource = continuationSource
     }
 }
 
@@ -743,6 +746,7 @@ public struct ActivitySession: Identifiable, Sendable, Equatable {
 
     public var startedAt: Date { entries.first?.timestamp ?? .distantPast }
     public var endedAt: Date { entries.last?.timestamp ?? startedAt }
+    public var continuationDate: Date { entries.lazy.compactMap(\.continuationSource).first ?? startedAt }
     public var planID: UUID? { entries.lazy.compactMap(\.planID).first }
     public var finalPhase: RunnerPhase? { entries.lazy.reversed().compactMap(\.phase).first }
     public var finalLevel: LogLevel { entries.last?.level ?? .info }
@@ -886,6 +890,7 @@ public struct ExecutionState: Codable, Sendable, Equatable {
     public var updatedAt: Date
     public var fightResults: [String: FightResult]?
     public var fightProgress: [String: FightProgress]?
+    public var gameDayStarts: [String: Date]?
 
     public init(dateKey: String = "", completedSteps: Set<String> = [], updatedAt: Date = Date()) {
         self.dateKey = dateKey

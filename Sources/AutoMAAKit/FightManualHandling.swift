@@ -19,18 +19,18 @@ extension ExecutionState {
         progress.regularManuallyHandledAt = date
         if fightProgress == nil { fightProgress = [:] }
         fightProgress?[step.key] = progress
-        record(progress.handledRegularResult!, for: step.key)
-        updatedAt = date
+        record(progress.handledRegularResult!, for: step.key, at: date)
     }
 }
 
 extension ExecutionStateStore {
-    public func handleRegularWithoutRetry(_ step: WorkflowStep, expected: FightResult) throws -> ExecutionState {
+    public func handleRegularWithoutRetry(_ step: WorkflowStep, expected: FightResult,
+                                          clients: [ClientConfiguration], at date: Date = Date()) throws -> ExecutionState {
         try directories.prepare()
         let lock = try ProcessLock(url: directories.lock)
         return try withExtendedLifetime(lock) {
-            var state = try loadForExecution()
-            try state.handleRegularWithoutRetry(step, expected: expected, at: Date())
+            var state = try loadForExecution().forGameDays(of: clients, at: date)
+            try state.handleRegularWithoutRetry(step, expected: expected, at: date)
             try save(state)
             return state
         }

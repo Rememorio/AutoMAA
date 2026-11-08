@@ -18,8 +18,7 @@ struct PlanTaskStatusSnapshot: Sendable {
     init(plan: AutomationPlan, clients: [ClientConfiguration], state: ExecutionState, entries: [LogEntry],
          weeklyAnnihilation: WeeklyAnnihilationState = .init(), activeRun: ActiveRun? = nil,
          now: Date = Date(), calendar: Calendar = .current) {
-        var state = state.dateKey == ExecutionStateStore.dateKey(for: now, calendar: calendar)
-            ? state : ExecutionState()
+        var state = state.forGameDays(of: clients, at: now, calendar: calendar)
         state.prepareWeeklyAnnihilation(plan: plan, clients: clients, weekly: weeklyAnnihilation, at: now)
         let accounts = clients.filter(\.enabled).flatMap { client in
             client.accounts.filter(plan.includes).map { (client.id, $0.id) }
@@ -28,7 +27,13 @@ struct PlanTaskStatusSnapshot: Sendable {
             accounts.map { WorkflowStep(planID: plan.id, clientID: $0.0, accountID: $0.1, task: task) }
         })
         let planEntries = entries.filter { $0.planID == plan.id }
-        let today = planEntries.filter { calendar.isDate($0.timestamp, inSameDayAs: now) }
+        let clientKinds = Dictionary(clients.map { ($0.id, $0.kind) }, uniquingKeysWith: { first, _ in first })
+        let today = planEntries.filter { entry in
+            if let kind = entry.clientID.flatMap({ clientKinds[$0] }) {
+                return GameDay.contains(entry.timestamp, for: kind, at: now)
+            }
+            return clientKinds.values.contains { GameDay.contains(entry.timestamp, for: $0, at: now) }
+        }
         var latest: [WorkflowStep: LogEntry] = [:]
         for entry in today {
             if let step = Self.step(entry), steps.contains(step) { latest[step] = entry }

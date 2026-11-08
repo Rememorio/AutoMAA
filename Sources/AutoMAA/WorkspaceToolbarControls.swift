@@ -10,6 +10,7 @@ struct WorkspaceRunControlState {
     let startHelp: String
     let canStop: Bool
     let stopHelp: String
+    private let continuingFrom: Date?
 
     var canStart: Bool {
         if case .unavailable = startAction { return false }
@@ -42,6 +43,7 @@ struct WorkspaceRunControlState {
             isToday = false
         }
         let selectedPlan = planID.flatMap { id in model.configuration.plans.first { $0.id == id } }
+        continuingFrom = planID.flatMap { model.activityContinuationDate(for: $0) }
         presentation = selectedPlan != nil ? .plan : (model.isWorkflowRunning ? .stop : .hidden)
         guard !model.isWorkflowRunning else {
             startAction = .unavailable
@@ -53,17 +55,22 @@ struct WorkspaceRunControlState {
             startHelp = "选择方案后运行"
             return
         }
-        let progress = model.continuation(for: planID)
+        let progress = model.continuation(for: planID, continuingFrom: continuingFrom)
         if isToday, progress.pending == 0, progress.unconfirmed > 0 {
             startAction = .unavailable
-            startHelp = "请先核实今日待办中的作战结果 · \(plan.displayName)"
+            startHelp = "请先核实待办中的作战结果 · \(plan.displayName)"
+            return
+        }
+        if progress.pending == 0, progress.hasExpiredScope {
+            startAction = .unavailable
+            startHelp = "本轮续跑已结束 · \(plan.displayName)"
             return
         }
         switch model.planRunState(planID: planID) {
         case .ready:
             if progress.pending > 0 {
                 startAction = .run(planID)
-                startHelp = "\(model.runTitle(for: planID)) · \(plan.displayName) · \(progress.pending) 项待办\n\(model.runHelp(for: planID))"
+                startHelp = "\(model.runTitle(for: planID, continuingFrom: continuingFrom)) · \(plan.displayName) · \(progress.pending) 项待办\n\(model.runHelp(for: planID, continuingFrom: continuingFrom))"
             } else if progress.unconfirmed > 0 {
                 startAction = .activity(planID)
                 startHelp = "处理待确认结果 · \(plan.displayName)"
@@ -83,7 +90,7 @@ struct WorkspaceRunControlState {
     func start(in model: AppModel) {
         switch startAction {
         case .unavailable: break
-        case let .run(id): model.runPlan(id)
+        case let .run(id): model.runPlan(id, continuingFrom: continuingFrom)
         case let .readiness(id): model.readinessRequest = PlanReadinessRequest(id: id)
         case let .activity(id): model.showPlanActivity(id)
         }

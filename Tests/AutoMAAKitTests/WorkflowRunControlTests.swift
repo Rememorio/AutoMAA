@@ -96,7 +96,7 @@ struct WorkflowRunControlTests {
         #expect(runtime.closedWhileLocked)
         #expect(!ProcessLock.isHeld(at: directories.lock))
         #expect(control.activeRun() == nil)
-        #expect(ExecutionStateStore(directories: directories).loadForToday().completedSteps.isEmpty)
+        #expect(ExecutionStateStore(directories: directories).loadSnapshot().completedSteps.isEmpty)
         #expect(runtime.lastPhase == .cancelled)
     }
 }

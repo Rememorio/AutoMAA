@@ -9,7 +9,7 @@ public enum FightKind: String, Codable, Sendable {
 }
 
 public enum FightStopReason: String, Codable, Sendable {
-    case insufficientSanity, timesLimit, weeklyLimit, confirmedWeeklyLimit, navigationUnavailable, stageUnavailable, unexpectedStage, interruptedBattle, missingEvidence, commandFailed
+    case insufficientSanity, timesLimit, weeklyLimit, confirmedWeeklyLimit, navigationUnavailable, stageUnavailable, missingRegularTarget, unexpectedStage, interruptedBattle, missingEvidence, commandFailed
 
     public var title: String {
         switch self {
@@ -19,6 +19,7 @@ public enum FightStopReason: String, Codable, Sendable {
         case .confirmedWeeklyLimit: "已手动确认本周剿灭完成"
         case .navigationUnavailable: "未能确认剿灭入口；请检查本周奖励或关卡页面"
         case .stageUnavailable: "无法进入目标关卡；请检查开放情况或更换关卡"
+        case .missingRegularTarget: "未找到可用的常规关卡，尚未开始作战"
         case .unexpectedStage: "实际作战与已确认的常规目标不符；请检查游戏与 MAA 资源"
         case .interruptedBattle: "作战被中断，结果未确认；请检查游戏结果"
         case .missingEvidence: "未取得有效作战结果；请检查游戏后重新尝试"
@@ -116,7 +117,8 @@ public struct FightProgress: Codable, Equatable, Sendable {
     }
 
     public var canReselectRegularStage: Bool {
-        regular?.status == .failed && regular?.reason == .stageUnavailable && regular?.times == 0
+        regular?.status == .failed && regular?.times == 0
+            && (regular?.reason == .stageUnavailable || regular?.reason == .missingRegularTarget)
     }
 
     public var pendingStage: String {
@@ -358,12 +360,12 @@ extension ExecutionState {
         return completedSteps.contains(key)
     }
 
-    public mutating func record(_ result: FightResult, for key: String) {
+    public mutating func record(_ result: FightResult, for key: String, at date: Date = Date()) {
         if fightResults == nil { fightResults = [:] }
         fightResults?[key] = result
         if result.status == .completed { completedSteps.insert(key) }
         else { completedSteps.remove(key) }
-        updatedAt = Date()
+        updatedAt = date
     }
 }
 
@@ -374,32 +376,44 @@ public struct PlanContinuation: Equatable, Sendable {
     public var manuallyHandled = 0
     public var completionTitle: String { manuallyHandled > 0 ? "今日已处理" : "今日已完成" }
     public var hasStarted = false
+    public var hasExpiredScope = false
     public var pendingItems: [PendingWorkflowItem] = []
     public var fightRecoveryItems: [FightRecoveryItem] = []
+    public var hasPendingWork: Bool { (hasStarted && pending > 0) || !fightRecoveryItems.isEmpty }
 
     public init(configuration: AppConfiguration, planID: UUID, state: ExecutionState, history: [LogEntry],
                 weeklyAnnihilation: WeeklyAnnihilationState = .init(),
-                now: Date = Date(), calendar: Calendar = .current) {
+                now: Date = Date(), calendar: Calendar = .current, continuingFrom: Date? = nil) {
         guard let plan = configuration.plans.first(where: { $0.id == planID }) else { return }
-        var state = state.dateKey == ExecutionStateStore.dateKey(for: now, calendar: calendar)
-            ? state : ExecutionState(dateKey: "")
+        var state = state.forGameDays(of: configuration.clients, at: now, calendar: calendar)
         state.prepareWeeklyAnnihilation(plan: plan, clients: configuration.clients, weekly: weeklyAnnihilation, at: now)
-        hasStarted = history.contains {
-            $0.planID == planID && $0.phase == .preparing && calendar.isDate($0.timestamp, inSameDayAs: now)
-        }
-        for client in configuration.clients where client.enabled {
+        let planHistory = history.filter { $0.planID == planID }
+        for client in configuration.clients where client.enabled && client.accounts.contains(where: plan.includes) {
+            let includesDay = continuingFrom.map { GameDay.contains($0, for: client.kind, at: now) } ?? true
+            let includesWeek = continuingFrom.map {
+                GameWeek(client: client.kind, at: $0).start == GameWeek(client: client.kind, at: now).start
+            } ?? true
+            hasExpiredScope = hasExpiredScope || !includesDay
+            let clientHistory = planHistory.filter { GameDay.contains($0.continuationSource ?? $0.timestamp, for: client.kind, at: now) }
+            hasStarted = hasStarted || (includesDay && clientHistory.contains { $0.phase == .preparing })
             for account in client.accounts.filter(plan.includes) {
                 for task in plan.enabledTasks {
-                    let key = WorkflowStep(planID: planID, clientID: client.id, accountID: account.id, task: task).key
-                    hasStarted = hasStarted || state.fightResults?[key] != nil || state.fightProgress?[key] != nil
-                    if state.fightProgress?[key]?.isRegularManuallyHandled == true { manuallyHandled += 1 }
-                    if state.isResolved(key) { resolved += 1 }
-                    else if state.needsFightConfirmation(key) { unconfirmed += 1 }
-                    else {
+                    let step = WorkflowStep(planID: planID, clientID: client.id, accountID: account.id, task: task)
+                    let key = step.key
+                    let progress = state.fightProgress?[key]
+                    let result = state.fightResults?[key]
+                    let needsReview = state.needsFightConfirmation(key)
+                    if needsReview { unconfirmed += 1 }
+                    if includesDay {
+                        hasStarted = hasStarted || result != nil || progress != nil
+                        if progress?.isRegularManuallyHandled == true { manuallyHandled += 1 }
+                        if state.isResolved(key) { resolved += 1 }
+                    }
+                    let weeklyStatus = weeklyAnnihilation.status(for: plan.fight.weeklyAnnihilation,
+                                                                client: client, accountID: account.id, at: now)
+                    let entry = weeklyAnnihilation.entry(clientID: client.id, accountID: account.id)
+                    if includesDay, !state.isResolved(key), !needsReview {
                         pending += 1
-                        let weeklyStatus = weeklyAnnihilation.status(for: plan.fight.weeklyAnnihilation,
-                                                                    client: client, accountID: account.id, at: now)
-                        let progress = state.fightProgress?[key]
                         let hasWeeklyPolicy = task == .fight && plan.fight.weeklyAnnihilation.enabled
                         var targets: [ContinuationTarget] = []
                         if hasWeeklyPolicy {
@@ -408,44 +422,31 @@ public struct PlanContinuation: Equatable, Sendable {
                             }
                             if progress?.isRegularHandled != true { targets.append(.regularFight) }
                         } else { targets = [.task] }
-                        let entry = weeklyAnnihilation.entry(clientID: client.id, accountID: account.id)
                         let currentEntry = entry?.clientKind == client.kind
                             && entry?.weekStart == GameWeek(client: client.kind, at: now).start
                         let reason: FightStopReason?
                         switch targets.first {
                         case .weeklyAnnihilation: reason = currentEntry ? entry?.result.reason : nil
                         case .regularFight: reason = progress?.regular?.reason
-                        default: reason = state.fightResults?[key]?.reason
+                        default: reason = result?.reason
                         }
-                        let lastAttempt = history.last {
-                            $0.planID == planID && $0.clientID == client.id && $0.accountID == account.id
-                                && $0.task == task
-                                && calendar.isDate($0.timestamp, inSameDayAs: now)
+                        let lastAttempt = clientHistory.last {
+                            $0.clientID == client.id && $0.accountID == account.id && $0.task == task
                         }
-                        pendingItems.append(.init(
-                            step: .init(planID: planID, clientID: client.id, accountID: account.id, task: task),
-                            targets: targets, reason: reason,
-                            lastFailure: lastAttempt?.level == .error ? lastAttempt?.message : nil
-                        ))
+                        pendingItems.append(.init(step: step, targets: targets, reason: reason,
+                                                  lastFailure: lastAttempt?.level == .error ? lastAttempt?.message : nil))
                     }
                     if task == .fight {
-                        let canConfirm = plan.fight.weeklyAnnihilation.enabled
+                        let canConfirm = includesWeek && plan.fight.weeklyAnnihilation.enabled
                             && weeklyAnnihilation.canConfirmComplete(client: client, accountID: account.id, at: now)
-                        let result = state.fightResults?[key]
-                        let needsAttention = state.needsFightConfirmation(key) || result?.status == .failed
-                        if needsAttention || canConfirm {
-                            if let result = needsAttention ? result : weeklyAnnihilation.entry(clientID: client.id, accountID: account.id)?.result {
-                                let progress = state.fightProgress?[key]
-                                let weeklyStatus = weeklyAnnihilation.status(for: plan.fight.weeklyAnnihilation,
-                                                                           client: client, accountID: account.id, at: now)
-                                let retryStage = FightProgress.needsAnnihilation(progress, weeklyStatus: weeklyStatus)
-                                    ? "Annihilation" : progress?.pendingStage ?? ""
-                                fightRecoveryItems.append(.init(
-                                    step: .init(planID: planID, clientID: client.id, accountID: account.id, task: .fight),
-                                    result: result, canConfirmWeeklyCompletion: canConfirm, retryStage: retryStage,
-                                    canHandleRegularWithoutRetry: state.canHandleRegularWithoutRetry(key, expected: result)
-                                ))
-                            }
+                        let needsAttention = needsReview || (includesDay && result?.status == .failed)
+                        if let result = needsAttention ? result : canConfirm ? entry?.result : nil {
+                            let retryStage = FightProgress.needsAnnihilation(progress, weeklyStatus: weeklyStatus)
+                                ? "Annihilation" : progress?.pendingStage ?? ""
+                            fightRecoveryItems.append(.init(
+                                step: step, result: result, canConfirmWeeklyCompletion: canConfirm, retryStage: retryStage,
+                                canHandleRegularWithoutRetry: state.canHandleRegularWithoutRetry(key, expected: result)
+                            ))
                         }
                     }
                 }

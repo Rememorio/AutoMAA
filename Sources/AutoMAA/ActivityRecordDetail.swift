@@ -90,17 +90,14 @@ struct ActivityRecordDetail: View {
     let session: ActivitySession
     let title: String
     let section: ActivityRecordSection
-    var showToday: (() -> Void)? = nil
+    var pendingLink: ActivityPendingLink?
+    var showPendingWork: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 10) {
                 ActivityRecordHeader(session: session, title: title)
-                if let showToday {
-                    Button("查看今日待办", action: showToday)
-                        .controlSize(.small)
-                        .tint(.primary)
-                }
+                followUp
             }
             .padding(20)
             Divider()
@@ -111,6 +108,29 @@ struct ActivityRecordDetail: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private var followUp: some View {
+        switch pendingLink {
+        case let .available(summary):
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) { pendingSummary(summary); pendingButton }
+                VStack(alignment: .leading, spacing: 2) { pendingSummary(summary); pendingButton }
+            }
+        case .expired:
+            Text("本轮续跑已结束").font(.caption).foregroundStyle(.secondary)
+        case nil: EmptyView()
+        }
+    }
+
+    private func pendingSummary(_ summary: String) -> some View {
+        Text(summary).font(.caption.weight(.medium)).foregroundStyle(ActivityOutcome.partial.color)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var pendingButton: some View {
+        PendingWorkLinkButton(action: showPendingWork)
     }
 }
 
@@ -124,7 +144,6 @@ struct ActivityRecordHeader: View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text(title).font(.headline).textSelection(.enabled)
-                Spacer(minLength: 8)
                 if let information = session.updateInformation {
                     ActionTextButton(title: "更新内容", symbol: "doc.text", help: "查看本次 MAA 更新内容") {
                         model.updateDetailsRequest = .maa(information)

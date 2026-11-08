@@ -42,11 +42,7 @@ struct PlanTaskInspector: View {
         }
         .onChange(of: plan.id) { _, _ in useCustomFightStage = nil }
         .sheet(item: $fightStageEditor) { context in
-            FightStageEditorSheet(context: context) { stage in
-                guard !model.isWorkflowRunning else { return "运行结束后可保存。" }
-                if model.setFightRecoveryStage(stage, clientID: context.clientID, accountID: context.accountID) { return nil }
-                return model.feedback.notice?.message ?? "常规目标未能保存，请重试。"
-            }
+            FightStageEditorSheet(context: context)
         }
     }
 
@@ -312,12 +308,9 @@ struct PlanTaskInspector: View {
 
     @ViewBuilder
     private var fightRecovery: some View {
-        let items = model.continuation(for: plan.id).fightRecoveryItems
-        if !items.isEmpty {
+        if !model.continuation(for: plan.id).fightRecoveryItems.isEmpty {
             PlanFormSection("需要处理") {
-                ForEach(items) { item in
-                    FightRecoveryRow(item: item, context: recoveryLabel(item))
-                }
+                PendingWorkLinkButton { model.showPlanActivity(plan.id) }
             }
         }
     }
@@ -329,28 +322,24 @@ struct PlanTaskInspector: View {
                 VStack(alignment: .leading, spacing: 14) {
                     ForEach(fightStageMemoryRows) { row in
                         VStack(alignment: .leading, spacing: 7) {
-                            HStack {
-                                Text(row.label).font(.callout.weight(.medium))
-                                    .fixedSize(horizontal: false, vertical: true)
-                                Spacer(minLength: 8)
-                                if showsRecoveryStage {
-                                    ActionIconButton(title: "设置\(row.label)的常规目标…", symbol: "pencil") {
-                                        fightStageEditor = FightStageEditorContext(row: row)
-                                    }
-                                }
-                            }
+                            Text(row.label).font(.callout.weight(.medium))
+                                .fixedSize(horizontal: false, vertical: true)
                             if let status = row.weeklyStatus {
                                 Text(status.title)
                                     .font(.caption)
                                     .foregroundStyle(status == .unconfirmed ? Color.orange : .secondary)
                             }
                             if showsRecoveryStage {
-                                parameterHint(row.stage.map { "恢复目标：\($0)；游戏中的新常规关卡优先" }
-                                    ?? "运行时先识别游戏关卡；可预设已解锁的常规目标用于恢复。")
+                                ActionTextButton(title: "常规目标  \(row.stage ?? "未设置")", symbol: "chevron.right",
+                                                 help: "设置\(row.label)的常规目标", symbolAfterTitle: true) {
+                                    fightStageEditor = .init(clientID: row.clientID, accountID: row.accountID,
+                                                             label: row.label, stage: row.stage)
+                                }
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    if showsRecoveryStage { parameterHint("游戏中的新常规关卡优先。") }
                 }
                 .padding(.top, 10)
             }
@@ -375,13 +364,6 @@ struct PlanTaskInspector: View {
                 )
             }
         }
-    }
-
-    private func recoveryLabel(_ item: FightRecoveryItem) -> String {
-        guard let client = model.configuration.clients.first(where: { $0.id == item.step.clientID }),
-              let account = client.accounts.first(where: { $0.id == item.step.accountID })
-        else { return plan.displayName }
-        return "\(client.displayName) / \(account.displayName)"
     }
 
     private var showsRecoveryStage: Bool {
@@ -586,34 +568,24 @@ private struct FightStageMemoryRow: Identifiable {
     var id: String { "\(clientID.uuidString)-\(accountID.uuidString)" }
 }
 
-private struct FightStageEditorContext: Identifiable {
+struct FightStageEditorContext: Identifiable {
     let clientID: UUID
     let accountID: UUID
     let label: String
     let stage: String?
 
-    init(row: FightStageMemoryRow) {
-        clientID = row.clientID
-        accountID = row.accountID
-        label = row.label
-        stage = row.stage
-    }
-
     var id: String { "\(clientID.uuidString)-\(accountID.uuidString)" }
 }
 
-private struct FightStageEditorSheet: View {
+struct FightStageEditorSheet: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @FocusState private var fieldFocused: Bool
     @State private var stage: String
     @State private var saveError: String?
     let context: FightStageEditorContext
-    let onSave: (String) -> String?
-
-    init(context: FightStageEditorContext, onSave: @escaping (String) -> String?) {
+    init(context: FightStageEditorContext) {
         self.context = context
-        self.onSave = onSave
         _stage = State(initialValue: context.stage ?? "")
     }
 
@@ -667,8 +639,15 @@ private struct FightStageEditorSheet: View {
                 .keyboardShortcut(.cancelAction)
                 Button {
                     guard let normalizedStage else { return }
-                    saveError = onSave(normalizedStage)
-                    if saveError == nil { dismiss() }
+                    guard !model.isWorkflowRunning else {
+                        saveError = "运行结束后可保存。"
+                        return
+                    }
+                    if model.setFightRecoveryStage(normalizedStage, clientID: context.clientID, accountID: context.accountID) {
+                        dismiss()
+                    } else {
+                        saveError = model.feedback.notice?.message ?? "常规目标未能保存，请重试。"
+                    }
                 } label: {
                     Text("保存").frame(minWidth: 56)
                 }

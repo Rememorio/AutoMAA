@@ -6,6 +6,33 @@ struct ActivityNavigationRequest: Identifiable, Equatable {
     let runID: UUID
 }
 
+struct ActivityPendingSource: Equatable {
+    let planID: UUID
+    let startedAt: Date
+    let continuationDate: Date
+}
+
+enum ActivityPendingLink: Equatable {
+    case available(String)
+    case expired
+
+    init?(session: ActivitySession, progress: PlanContinuation) {
+        let summary = session.runSummary
+        let needsFollowUp = summary?.isPartial == true || (summary?.pendingWeeklyAnnihilation ?? 0) > 0
+            || [.failed, .awaitingReview, .unfinished, .cancelled].contains(session.outcome)
+        guard needsFollowUp else { return nil }
+        if progress.hasPendingWork {
+            var parts: [String] = []
+            if progress.pending > 0 { parts.append("剩余 \(progress.pending) 项") }
+            if progress.unconfirmed > 0 { parts.append("\(progress.unconfirmed) 项待核实") }
+            else if progress.fightRecoveryItems.contains(where: \.canConfirmWeeklyCompletion) { parts.append("剿灭待核实") }
+            self = .available(parts.joined(separator: " · "))
+        } else if progress.hasExpiredScope, (summary?.isPartial ?? needsFollowUp) {
+            self = .expired
+        } else { return nil }
+    }
+}
+
 extension LogEntry {
     var terminalOutcome: ActivityOutcome? {
         guard task == nil, clientID == nil, accountID == nil,
