@@ -14,7 +14,7 @@
 
 <img src="./docs/assets/screenshots/overview-light.webp" width="940" alt="AutoMAA 今日总览，集中查看当前方案、待处理事项和最近三次运行结果">
 
-<sub>AutoMAA v0.16.1 今日总览</sub>
+<sub>AutoMAA v0.16.2 今日总览</sub>
 
 </div>
 

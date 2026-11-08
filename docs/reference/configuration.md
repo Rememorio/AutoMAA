@@ -34,7 +34,7 @@
 | 文件或目录 | 内容 |
 | --- | --- |
 | `config.json` | 客户端、账号、方案和设置 |
-| `execution-state.json` | 各方案当天的成功断点、作战结果与剿灭／常规分阶段进度 |
+| `execution-state.json` | 各方案按服务器游戏日保存的成功断点、作战结果与剿灭／常规分阶段进度 |
 | `fight-stage-memory.json` | 每个账号记录的常规关卡与恢复状态 |
 | `weekly-annihilation.json` | 按客户端、账号、服务器与游戏周保存的剿灭状态；参与方案共享，独立于每日断点 |
 | `history.json` | 运行记录，包括运行结果与 MAA 更新详情 |
