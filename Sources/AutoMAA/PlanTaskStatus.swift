@@ -46,10 +46,8 @@ struct PlanTaskStatusSnapshot: Sendable {
                   let step = Self.step(last), Self.isInFlight(last), latest[step]?.id == last.id else { continue }
             interruptions[step] = end.phase == .cancelled ? .cancelled : .failure
         }
-        let current = activeRun.flatMap { run -> [LogEntry]? in
-            guard run.planID == plan.id, let id = run.runID else { return nil }
-            return planEntries.filter { $0.runID == id }
-        }
+        let activeRunID = activeRun?.planID == plan.id ? activeRun?.runID : nil
+        let current = activeRunID.map { id in planEntries.filter { $0.runID == id } }
         var running: WorkflowStep?
         if let activeRun, let current {
             if activeRun.isCancelling,
@@ -66,8 +64,12 @@ struct PlanTaskStatusSnapshot: Sendable {
             let targets = steps.filter { $0.task == task }
             guard !targets.isEmpty else { return (task, .none) }
             if running?.task == task { return (task, .running) }
-            let outcomes = targets.map { step in
-                Self.outcome(step, state: state, latest: latest[step], interruption: interruptions[step])
+            let outcomes = targets.map { step -> PlanTaskStatus in
+                let entry = latest[step]
+                if let activeRunID, let entry, entry.runID == activeRunID, Self.isFightFallback(entry) {
+                    return interruptions[step] ?? .none
+                }
+                return Self.outcome(step, state: state, latest: entry, interruption: interruptions[step])
             }
             if outcomes.allSatisfy({ $0 == .success }) { return (task, .success) }
             for status in [PlanTaskStatus.failure, .attention, .cancelled] where outcomes.contains(status) {
@@ -118,7 +120,11 @@ struct PlanTaskStatusSnapshot: Sendable {
     }
 
     private static func isInFlight(_ entry: LogEntry) -> Bool {
-        entry.phase == .runningTask && entry.fightResult == nil
-            && (entry.level == .info || entry.level == .warning)
+        entry.phase == .runningTask
+            && ((entry.fightResult == nil && (entry.level == .info || entry.level == .warning)) || isFightFallback(entry))
+    }
+
+    private static func isFightFallback(_ entry: LogEntry) -> Bool {
+        entry.level == .warning && entry.fightResult.map { FightStagePolicy.canChangeStage(after: $0) } == true
     }
 }

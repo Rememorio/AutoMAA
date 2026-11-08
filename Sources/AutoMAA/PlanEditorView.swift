@@ -311,16 +311,20 @@ private struct PlanTaskFeedback: View {
             switch status {
             case .none: Color.clear
             case .running: ProgressView().controlSize(.small)
-            case .success: Image(systemName: "checkmark.circle").foregroundStyle(.green)
-            case .failure: Image(systemName: "xmark.circle").foregroundStyle(.red)
+            case .success: symbol(.completed)
+            case .failure: symbol(.failed)
             case .cancelled: Image(systemName: "slash.circle").foregroundStyle(.secondary)
-            case .attention: Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
+            case .attention: symbol(.awaitingReview)
             }
         }
         .font(.system(size: 14))
         .frame(width: 18, height: 18)
         .help(status.description)
         .accessibilityHidden(true)
+    }
+
+    private func symbol(_ outcome: ActivityOutcome) -> some View {
+        Image(systemName: outcome.symbol).foregroundStyle(outcome.color)
     }
 }
 

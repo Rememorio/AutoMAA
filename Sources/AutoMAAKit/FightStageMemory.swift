@@ -211,7 +211,7 @@ public enum FightStagePolicy {
         return stage
     }
 
-    static func canChangeStage(after result: FightResult) -> Bool {
+    public static func canChangeStage(after result: FightResult) -> Bool {
         result.status == .failed && result.reason == .stageUnavailable && result.times == 0
     }
 

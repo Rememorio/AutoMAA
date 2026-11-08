@@ -84,6 +84,70 @@ struct PlanTaskStatusTests {
         #expect(fixture.snapshot(entries: [start]).status(for: .recruit) == .none)
     }
 
+    @Test("foreground task results update row feedback before the rest of the plan finishes")
+    @MainActor
+    func taskFeedbackFollowsPersistedResultsImmediately() throws {
+        let fixture = Fixture()
+        let root = FileManager.default.temporaryDirectory.appending(path: "automaa-live-task-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        let model = AppModel(directories: directories, launchAgentsDirectory: root.appending(path: "LaunchAgents"),
+            managesSystemLaunchAgents: false, checksForUpdatesAutomatically: false, allowsAutomaticMAAMaintenance: false)
+        model.configuration = .init(cliPath: "/usr/bin/true", clients: fixture.clients, plans: [fixture.plan])
+        model.isRunning = true
+        model.runningPlanID = fixture.plan.id
+        let store = ExecutionStateStore(directories: directories)
+        var state = ExecutionState().forGameDays(of: fixture.clients, at: Date())
+
+        func send(_ task: TaskKind, account: Int = 0, level: LogLevel = .info) {
+            let entry = fixture.entry(task: task, account: account, level: level, at: Date())
+            model.consume(.init(phase: .runningTask, message: entry.message, progress: 0, log: entry))
+        }
+
+        func status(_ task: TaskKind) -> PlanTaskStatus {
+            PlanTaskStatusSnapshot(plan: fixture.plan, clients: fixture.clients, state: model.executionState,
+                entries: model.activityEntries, activeRun: .init(planID: model.activePlanID, runID: model.activeRunID,
+                    phase: model.activePhase), now: model.currentDate).status(for: task)
+        }
+
+        send(.recruit)
+        #expect(status(.recruit) == .running)
+        state.completedSteps.insert(fixture.step(.recruit).key)
+        try store.save(state)
+        send(.recruit, level: .success)
+        #expect(status(.recruit) == .none)
+        send(.recruit, account: 1)
+        #expect(status(.recruit) == .running)
+        state.completedSteps.insert(fixture.step(.recruit, account: 1).key)
+        try store.save(state)
+        send(.recruit, account: 1, level: .success)
+        #expect(status(.recruit) == .success)
+        send(.infrast)
+        #expect(status(.infrast) == .running)
+        send(.infrast, level: .error)
+        #expect(status(.infrast) == .failure)
+        #expect(status(.recruit) == .success)
+        #expect(status(.award) == .none)
+        #expect(model.isWorkflowRunning)
+    }
+
+    @Test("a failed stage being retried via fallback is still in progress")
+    func fallbackShowsFinalFailureOnlyAfterRetry() {
+        let fixture = Fixture()
+        let failed = FightResult(status: .failed, reason: .stageUnavailable, failurePhase: .navigation)
+        var state = fixture.emptyState
+        state.record(failed, for: fixture.step(.fight).key, at: fixture.now)
+        let fallback = fixture.entry(task: .fight, level: .warning, fightResult: failed)
+        #expect(fixture.snapshot(state: state, entries: [fallback], activeRun: fixture.active())
+            .status(for: .fight) == .running)
+        let preparing = fixture.entry(task: nil, phase: .switchingAccount)
+        #expect(fixture.snapshot(state: state, entries: [fallback, preparing], activeRun: fixture.active(phase: .switchingAccount))
+            .status(for: .fight) == .none)
+        let final = fixture.entry(task: .fight, level: .error, fightResult: failed)
+        #expect(fixture.snapshot(state: state, entries: [fallback, final], activeRun: fixture.active())
+            .status(for: .fight) == .failure)
+    }
+
     @Test("checkpoint skips do not animate and a newer attempt replaces an earlier task failure")
     func resolvedAndRetriedTasksDoNotKeepStaleFeedback() {
         let fixture = Fixture()

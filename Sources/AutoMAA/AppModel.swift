@@ -1630,14 +1630,18 @@ final class AppModel: ObservableObject {
 
     func reloadActivityHistory() {
         currentDate = Date()
-        let state = executionStateStore.loadSnapshot()
-        if state != executionState { executionState = state }
+        reloadExecutionState()
         let entries = historyStore.load()
         if entries != activityEntries {
             activityEntries = entries
         }
         reloadFightStageMemory()
         refreshExternalRunState()
+    }
+
+    private func reloadExecutionState() {
+        let state = executionStateStore.loadSnapshot()
+        if state != executionState { executionState = state }
     }
 
     private func reloadFightStageMemory() {
@@ -2114,7 +2118,14 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func consume(_ event: RunnerEvent) {
+    func consume(_ event: RunnerEvent) {
+        let log = event.log
+        if let task = log.task, log.level == .success || log.level == .error || log.fightResult != nil {
+            // The runner persists task checkpoints before publishing their outcomes.
+            currentDate = Date()
+            reloadExecutionState()
+            if task == .fight { reloadFightStageMemory() }
+        }
         externalRunState = nil
         runningRunID = event.log.runID
         phase = event.phase
