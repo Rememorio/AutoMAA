@@ -32,29 +32,22 @@ struct DashboardView: View {
     }
 
     private func attention(_ items: [DashboardAttentionItem]) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionHeading(title: "需要处理")
-            ForEach(showsAllAttention ? items : Array(items.prefix(3))) { item in
-                Button { open(item.destination) } label: {
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: "exclamationmark.circle")
-                            .foregroundStyle(ActivityOutcome.awaitingReview.color)
-                            .frame(width: 18).accessibilityHidden(true)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(item.title).font(.callout).foregroundStyle(.primary)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Text(item.detail).font(.caption).foregroundStyle(.secondary)
-                        }
-                        Image(systemName: "chevron.right")
-                            .font(.caption2).foregroundStyle(.tertiary).accessibilityHidden(true)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                SectionHeading(title: "需要处理")
+                if items.count > 3 {
+                    ActionTextButton(title: showsAllAttention ? "收起" : "查看全部 \(items.count) 项",
+                                     symbol: showsAllAttention ? "chevron.up" : "chevron.down",
+                                     symbolAfterTitle: true) {
+                        showsAllAttention.toggle()
                     }
-                    .padding(.vertical, 4).contentShape(Rectangle())
                 }
-                .buttonStyle(.plain).help("查看并处理：\(item.title)")
             }
-            if items.count > 3 {
-                Button(showsAllAttention ? "收起" : "查看全部 \(items.count) 项") { showsAllAttention.toggle() }
-                    .buttonStyle(.borderless).font(.caption)
+            summaryPanel(showsAllAttention ? items : Array(items.prefix(3))) { item in
+                DashboardSummaryRow(title: item.title, detail: Text(item.detail), outcome: .awaitingReview,
+                                    help: "查看并处理\(item.title)") {
+                    open(item.destination)
+                }
             }
         }
     }
@@ -79,7 +72,7 @@ struct DashboardView: View {
     }
 
     private func recentActivity(_ sessions: [ActivitySession]) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 SectionHeading(title: "最近运行")
                 ActionTextButton(title: "全部记录", symbol: "clock.arrow.circlepath", help: "查看全部运行记录") {
@@ -90,16 +83,29 @@ struct DashboardView: View {
                 Text("方案运行结束后，可以在这里回看结果。")
                     .font(.callout).foregroundStyle(.secondary).padding(.vertical, 8)
             } else {
-                let columns = Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .leading),
-                                    count: min(3, sessions.count))
-                LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
-                    ForEach(sessions) { session in
-                        DashboardRunCard(session: session,
-                            title: ActivityRecordPresentation.title(session, plans: model.configuration.plans)) {
-                            if let runID = session.runID { model.showActivity(runID: runID) }
-                            else { model.selection = .activity }
-                        }
+                summaryPanel(sessions) { session in
+                    let title = ActivityRecordPresentation.title(session, plans: model.configuration.plans)
+                    let outcome = session.outcome
+                    let status = Text(outcome.title).foregroundStyle(outcome == .completed ? Color.secondary : outcome.color)
+                    let time = Text(session.startedAt, format: .dateTime.month().day().hour().minute())
+                    let detail = Text("\(status) · \(ActivityRecordPresentation.listSummary(session)) · \(time)")
+                    DashboardSummaryRow(title: title, detail: detail, outcome: outcome, help: "查看「\(title)」的完整运行结果") {
+                        if let runID = session.runID { model.showActivity(runID: runID) }
+                        else { model.selection = .activity }
                     }
+                }
+            }
+        }
+    }
+
+    private func summaryPanel<Item: Identifiable, Row: View>(
+        _ items: [Item], @ViewBuilder row: @escaping (Item) -> Row
+    ) -> some View {
+        Panel {
+            VStack(spacing: 0) {
+                ForEach(items) { item in
+                    row(item)
+                    if item.id != items.last?.id { Divider().padding(.leading, 32) }
                 }
             }
         }
@@ -114,34 +120,40 @@ struct DashboardView: View {
     }
 }
 
-private struct DashboardRunCard: View {
-    let session: ActivitySession
+private struct DashboardSummaryRow: View {
     let title: String
+    let detail: Text
+    let outcome: ActivityOutcome
+    let help: String
     let open: () -> Void
     @State private var isHovered = false
 
     var body: some View {
         Button(action: open) {
-            Panel {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(title).font(.callout.weight(.medium)).foregroundStyle(.primary)
-                        .lineLimit(2).fixedSize(horizontal: false, vertical: true)
-                    ActivityOutcomeLabel(outcome: session.outcome).font(.caption)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(ActivityRecordPresentation.listSummary(session))
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: outcome.symbol)
+                    .font(.system(size: 13))
+                    .foregroundStyle(outcome.color)
+                    .frame(width: 18, height: 16)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(title).font(.callout.weight(.medium)).foregroundStyle(.primary)
                             .fixedSize(horizontal: false, vertical: true)
-                        Text(session.startedAt, format: .dateTime.month().day().hour().minute())
-                            .monospacedDigit()
+                        Image(systemName: "chevron.right").font(.caption2.weight(.medium))
+                            .foregroundStyle(.tertiary).accessibilityHidden(true)
                     }
-                    .font(.caption).foregroundStyle(.secondary)
+                    detail.font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
             }
-            .background(Color.primary.opacity(isHovered ? 0.035 : 0),
-                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 7)
+            .background(Color.primary.opacity(isHovered ? 0.04 : 0), in: .rect(cornerRadius: 5))
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain).onHover { isHovered = $0 }
-        .help("查看「\(title)」的完整运行结果")
+        .help(help)
     }
 }
