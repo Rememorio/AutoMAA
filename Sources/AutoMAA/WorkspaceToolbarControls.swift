@@ -24,7 +24,7 @@ struct WorkspaceRunControlState {
         if model.isCancellingRun {
             stopHelp = "正在停止并清理 · \(identity)"
         } else if model.isWorkflowRunning {
-            stopHelp = "\(model.activePlanID == nil && !model.isExternalRunActive ? "取消更新" : "安全停止") · \(identity)"
+            stopHelp = "\(model.isMAAMaintenanceRunning ? "取消更新" : "安全停止") · \(identity)"
         } else {
             stopHelp = "没有正在运行的操作"
         }
@@ -43,7 +43,8 @@ struct WorkspaceRunControlState {
         }
         let selectedPlan = planID.flatMap { id in model.configuration.plans.first { $0.id == id } }
         let roundID = planID.flatMap { model.activityRoundID(for: $0) }
-        presentation = selectedPlan != nil ? .plan : (model.isWorkflowRunning ? .stop : .hidden)
+        presentation = model.selection == .overview ? .hidden
+            : selectedPlan != nil ? .plan : (model.isWorkflowRunning ? .stop : .hidden)
         guard !model.isWorkflowRunning else {
             startAction = .unavailable
             startHelp = "运行结束后可开始其他任务"
@@ -98,5 +99,15 @@ struct WorkspaceRunControlState {
         case let .readiness(id): model.readinessRequest = PlanReadinessRequest(id: id)
         case let .activity(id): model.showPlanActivity(id)
         }
+    }
+
+    func openOperation(in model: AppModel) {
+        if model.isMAAMaintenanceRunning { model.showSettings(.environment) }
+        else { model.showCurrentActivity() }
+    }
+
+    func stopWorkflow(in model: AppModel) {
+        guard canStop, !model.isMAAMaintenanceRunning else { return }
+        model.cancelRun()
     }
 }

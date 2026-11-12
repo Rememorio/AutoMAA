@@ -74,16 +74,31 @@ struct DashboardFocusView: View {
     }
 
     private var running: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        let maintenance = model.isMAAMaintenanceRunning
+        let controls = WorkspaceRunControlState(model: model)
+        return VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("当前运行").font(.caption).foregroundStyle(.secondary)
-                Text(summary?.plan.displayName ?? (model.isExternalRunActive ? "后台任务" : "MAA 维护"))
+                Text(maintenance ? (model.maaUpdateActivity?.automatic == true ? "自动维护" : "环境维护") : "当前运行")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text(maintenance ? (model.maaUpdateActivity?.component.title ?? "MAA 维护") : (summary?.plan.displayName ?? "后台任务"))
                     .font(.title3.weight(.semibold)).accessibilityAddTraits(.isHeader)
             }
             Text(model.activeStatusMessage).font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            ActionTextButton(title: "查看运行", symbol: "arrow.right", help: "查看当前运行的过程与结果") {
-                model.showCurrentActivity()
+            HStack(spacing: 16) {
+                if maintenance {
+                    ActionTextButton(title: "查看维护", symbol: "arrow.right", help: "打开 MAA 环境设置，查看维护进度或取消更新") {
+                        controls.openOperation(in: model)
+                    }
+                } else {
+                    ActionTextButton(title: "查看运行", symbol: "arrow.right", help: "查看当前运行的过程与结果") {
+                        controls.openOperation(in: model)
+                    }
+                    ActionTextButton(title: "安全停止", symbol: "stop.fill", help: controls.stopHelp) {
+                        controls.stopWorkflow(in: model)
+                    }
+                    .disabled(!controls.canStop)
+                }
             }
         }
     }

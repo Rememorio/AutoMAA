@@ -7,6 +7,49 @@ import Testing
 @MainActor
 @Suite("Workspace run controls")
 struct WorkspaceRunControlsTests {
+    @Test("overview keeps its toolbar free of run controls during a background workflow and cleanup")
+    func overviewOmitsToolbarControls() throws {
+        let fixture = makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let model = fixture.model
+        model.selection = .overview
+        let chrome = WorkspaceChromeController()
+        let lock = try ProcessLock(url: model.directories.lock)
+        let identity = WorkflowRunIdentity(runID: UUID(), planID: fixture.plan.id, lockID: lock.identity)
+        let control = WorkflowRunControl(directories: model.directories)
+        try control.activate(identity)
+        defer { control.finish(identity); withExtendedLifetime(lock) {} }
+        model.reloadActivityHistory()
+        chrome.setRunControls(model: model)
+        #expect(WorkspaceRunControlState(model: model).canStop)
+        #expect(!chrome.itemIdentifiers.contains(WorkspaceChromeController.runID))
+        #expect(!chrome.itemIdentifiers.contains(WorkspaceChromeController.stopID))
+        model.cancelRun()
+        chrome.setRunControls(model: model)
+        #expect(model.isCancellingRun)
+        #expect(control.isStopRequested(for: identity))
+        #expect(!chrome.itemIdentifiers.contains(WorkspaceChromeController.stopID))
+    }
+
+    @Test("overview maintenance and cancellation never add a toolbar stop button")
+    func overviewMaintenanceOmitsToolbarControls() async throws {
+        let fixture = makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let model = fixture.model
+        model.selection = .overview
+        let chrome = WorkspaceChromeController()
+        model.hotUpdate()
+        chrome.setRunControls(model: model)
+        let showsStop = chrome.itemIdentifiers.contains(WorkspaceChromeController.stopID)
+        model.cancelRun()
+        chrome.setRunControls(model: model)
+        #expect(!showsStop)
+        #expect(!chrome.itemIdentifiers.contains(WorkspaceChromeController.runID))
+        #expect(!chrome.itemIdentifiers.contains(WorkspaceChromeController.stopID))
+        for _ in 0..<500 where model.isRunning { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(!model.isWorkflowRunning)
+    }
+
     @Test("plan playback starts a round and pending playback resumes only the current round")
     func continuationHelpMatchesAcrossPages() throws {
         let fixture = makeFixture()

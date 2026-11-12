@@ -325,6 +325,10 @@ final class AppModel: ObservableObject {
         isRunning || externalRunState != nil
     }
 
+    var isMAAMaintenanceRunning: Bool {
+        isRunning && runningPlanID == nil
+    }
+
     var isExternalRunActive: Bool {
         externalRunState != nil
     }

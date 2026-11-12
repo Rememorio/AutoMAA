@@ -63,7 +63,7 @@ struct SidebarOperationStatus: View {
 
     private var progress: Double? {
         guard !model.isCancellingRun else { return nil }
-        if model.activePlanID == nil, !model.isExternalRunActive {
+        if model.isMAAMaintenanceRunning {
             return model.maaUpdateActivity?.progress?.download?.fractionCompleted
         }
         let value = model.activeProgress
