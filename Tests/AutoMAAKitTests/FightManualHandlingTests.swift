@@ -28,6 +28,13 @@ final class FightManualHandlingTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(persisted.fightProgress?[step.key]?.regularManuallyHandledAt).timeIntervalSince1970,
                        try XCTUnwrap(handled.fightProgress?[step.key]?.regularManuallyHandledAt).timeIntervalSince1970, accuracy: 1)
         XCTAssertThrowsError(try store.handleRegularWithoutRetry(step, expected: result, clients: [client]))
+        var nextRound = persisted
+        nextRound.startRound(for: step.planID, at: Date())
+        XCTAssertTrue(nextRound.fightProgress?[step.key]?.isRegularManuallyHandled == true)
+        XCTAssertEqual(nextRound.fightProgress?[step.key]?.regular, result)
+        XCTAssertFalse(nextRound.completedSteps.contains(step.key))
+        XCTAssertFalse(nextRound.needsFightConfirmation(step.key))
+        try store.save(nextRound)
         let tomorrow = Date().addingTimeInterval(86_400)
         let nextDay = try store.loadForExecution().forGameDays(of: [client], at: tomorrow)
         XCTAssertNil(nextDay.fightResults?[step.key])
@@ -101,7 +108,7 @@ final class FightManualHandlingTests: XCTestCase {
         XCTAssertEqual(continuation.pending, 0)
         XCTAssertEqual(continuation.unconfirmed, 0)
         XCTAssertEqual(continuation.manuallyHandled, 1)
-        XCTAssertEqual(continuation.completionTitle, "今日已处理")
+        XCTAssertEqual(continuation.completionTitle, "本轮已处理")
         XCTAssertEqual(state.fightProgress?[step.key]?.regular, original)
         XCTAssertFalse(state.completedSteps.contains(step.key))
     }

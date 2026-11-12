@@ -105,15 +105,18 @@ private struct AutoMAACommands: Commands {
     }
 
     private var runCommandTitle: String {
-        guard let planID = model.commandPlanID, model.canRun(planID: planID) else {
-            return "运行当前方案"
+        guard let planID = model.commandPlanID, model.canRun(planID: planID), let request = model.commandRunRequest else {
+            return "运行当前方案一轮"
         }
-        return model.runTitle(for: planID, readyTitle: "运行当前方案", continuingFrom: model.activityContinuationDate(for: planID))
+        return model.runTitle(for: planID, readyTitle: "运行当前方案一轮", request: request)
     }
 
     private var canRunCommand: Bool {
         guard let planID = model.commandPlanID, model.canRun(planID: planID) else { return false }
-        return model.continuation(for: planID, continuingFrom: model.activityContinuationDate(for: planID)).pending > 0
+        let progress = model.continuation(for: planID, roundID: model.activityRoundID(for: planID))
+        return model.selection == .activity
+            ? progress.roundID != nil && progress.hasStarted && progress.pending > 0
+            : progress.newRoundTasks > 0
     }
 
     private func showSettings(_ section: SettingsSection) {

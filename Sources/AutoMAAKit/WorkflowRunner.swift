@@ -168,6 +168,7 @@ public final class WorkflowRunner {
     private let updateProgressSink: UpdateProgressSink?
     private var currentPlanID: UUID?
     private var currentRunID: UUID?
+    private var currentRoundID: UUID?
     private var currentSensitiveValues: [String] = []
     private var runProgress = MonotonicProgress()
     private var restartedAccountsByClient: [UUID: Set<UUID>] = [:]
@@ -249,15 +250,14 @@ public final class WorkflowRunner {
     public func run(
         _ configuration: AppConfiguration,
         planID: UUID,
-        resumeToday: Bool = true,
-        retryStep: WorkflowStep? = nil,
-        continuingFrom: Date? = nil
+        request: WorkflowRunRequest = .newRound,
+        retryStep: WorkflowStep? = nil
     ) async -> WorkflowReport {
         let runID = UUID()
         let control = WorkflowRunControl(directories: directories)
         let task = Task {
-            await runWorkflow(configuration, planID: planID, resumeToday: resumeToday || continuingFrom != nil,
-                              retryStep: retryStep, continuingFrom: continuingFrom, runID: runID)
+            await runWorkflow(configuration, planID: planID, request: request,
+                              retryStep: retryStep, runID: runID)
         }
         let monitor = Task {
             while !Task.isCancelled {
@@ -283,9 +283,8 @@ public final class WorkflowRunner {
     private func runWorkflow(
         _ configuration: AppConfiguration,
         planID: UUID,
-        resumeToday: Bool,
+        request: WorkflowRunRequest,
         retryStep: WorkflowStep?,
-        continuingFrom: Date?,
         runID: UUID
     ) async -> WorkflowReport {
         var report = WorkflowReport()
@@ -308,7 +307,10 @@ public final class WorkflowRunner {
             return report
         }
         currentPlanID = plan.id
-        defer { currentPlanID = nil }
+        defer {
+            currentPlanID = nil
+            currentRoundID = nil
+        }
         if let retryStep {
             guard retryStep.planID == planID,
                   let client = configuration.clients.first(where: { $0.id == retryStep.clientID && $0.enabled }),
@@ -372,15 +374,6 @@ public final class WorkflowRunner {
         _ = lease
 
         let runDate = now()
-        let activeClients = configuration.clients.filter { client in
-            client.enabled && client.accounts.contains(where: plan.includes)
-                && (continuingFrom.map { GameDay.contains($0, for: client.kind, at: runDate) } ?? true)
-        }
-        guard !activeClients.isEmpty else {
-            report.fatalError = "本轮续跑已结束，请查看当前待办"
-            emit(.failed, report.fatalError!, 0, .error, continuationSource: continuingFrom)
-            return report
-        }
         var state: ExecutionState
         var weeklyAnnihilation: WeeklyAnnihilationState
         do {
@@ -392,16 +385,32 @@ public final class WorkflowRunner {
             emit(.failed, report.fatalError!, 0, .error)
             return report
         }
-        if !resumeToday, retryStep == nil {
-            let prefix = "\(plan.id)/"
-            state.completedSteps = state.completedSteps.filter { !$0.hasPrefix(prefix) }
-            state.fightResults = state.fightResults?.filter { !$0.key.hasPrefix(prefix) }
-            state.fightProgress = state.fightProgress?.filter { !$0.key.hasPrefix(prefix) }
+        let round: ExecutionRound
+        switch request {
+        case .newRound:
+            round = state.startRound(for: planID, at: runDate)
+        case let .resume(roundID):
+            guard let current = state.currentRound(for: planID), current.id == roundID else {
+                report.fatalError = "本轮续跑已结束，请查看当前待办"
+                emit(.failed, report.fatalError!, 0, .error)
+                return report
+            }
+            round = current
         }
+        let activeClients = configuration.clients.filter { client in
+            client.enabled && client.accounts.contains(where: plan.includes)
+                && GameDay.contains(round.startedAt, for: client.kind, at: runDate)
+        }
+        guard !activeClients.isEmpty else {
+            report.fatalError = "本轮续跑已结束，请查看当前待办"
+            emit(.failed, report.fatalError!, 0, .error)
+            return report
+        }
+        currentRoundID = round.id
         state.prepareWeeklyAnnihilation(plan: plan, clients: activeClients, weekly: weeklyAnnihilation, at: runDate)
         if let retryStep {
             guard !state.isResolved(retryStep.key) else {
-                report.fatalError = "本项今日已处理完成，请刷新活动记录"
+                report.fatalError = "本项本轮已处理完成，请刷新活动记录"
                 emit(.failed, report.fatalError!, 0, .error)
                 return report
             }
@@ -413,7 +422,7 @@ public final class WorkflowRunner {
         report.totalSteps = totalSteps
         var visitedSteps = 0
 
-        emit(.preparing, "正在准备「\(plan.displayName)」", 0, .info, continuationSource: continuingFrom)
+        emit(.preparing, "正在准备「\(plan.displayName)」第 \(round.number) 轮", 0, .info)
         let pendingClients = activeClients.filter { client in
             client.accounts.filter(plan.includes).contains { account in
                 plan.enabledTasks.contains { task in
@@ -513,15 +522,13 @@ public final class WorkflowRunner {
                 emit(.runningTask, "\(clientText(client))没有待执行任务，未启动", Double(visitedSteps) / Double(totalSteps), .info, client: client)
                 continue
             }
-            let completedClientSteps = resumeToday
-                ? completedStepCount(plan: plan, client: client, state: state)
-                : 0
+            let completedClientSteps = completedStepCount(plan: plan, client: client, state: state)
             if completedClientSteps == clientStepCount {
                 report.skippedSteps += clientStepCount
                 visitedSteps += clientStepCount
                 emit(
                     .runningTask,
-                    "\(clientText(client))的今日任务已全部处理，未启动",
+                    "\(clientText(client))的本轮任务已全部处理，未启动",
                     Double(visitedSteps) / Double(totalSteps),
                     .info,
                     client: client
@@ -560,7 +567,7 @@ public final class WorkflowRunner {
                     break
                 }
                 let intervention = manualIntervention(for: error, client: client)
-                let completedBeforeLaunch = resumeToday ? completedClientSteps : 0
+                let completedBeforeLaunch = completedClientSteps
                 report.skippedSteps += completedBeforeLaunch
                 visitedSteps += completedBeforeLaunch
                 appendIntervention(
@@ -597,14 +604,14 @@ public final class WorkflowRunner {
                 }
                 guard canContinueGameDay(client) else { break accountLoop }
                 let enabledTasks = plan.enabledTasks
-                if resumeToday, enabledTasks.allSatisfy({
+                if enabledTasks.allSatisfy({
                     state.isResolved(checkpointKey(plan: plan, client: client, account: account, task: $0))
                 }) {
                     report.skippedSteps += enabledTasks.count
                     visitedSteps += enabledTasks.count
                     emit(
                         .runningTask,
-                        "\(accountText(account))的今日任务已全部处理，无需再次准备",
+                        "\(accountText(account))的本轮任务已全部处理，无需再次准备",
                         Double(visitedSteps) / Double(totalSteps),
                         .info,
                         client: client,
@@ -660,12 +667,12 @@ public final class WorkflowRunner {
                     }
                     guard canContinueGameDay(client) else { break accountLoop }
                     let key = checkpointKey(plan: plan, client: client, account: account, task: task)
-                    if resumeToday, state.isResolved(key) {
+                    if state.isResolved(key) {
                         report.skippedSteps += 1
                         visitedSteps += 1
                         emit(
                             .runningTask,
-                            "\(accountText(account))：\(task.title)今日已处理，已跳过",
+                            "\(accountText(account))：\(task.title)本轮已处理，已跳过",
                             Double(visitedSteps) / Double(totalSteps),
                             .info,
                             client: client,
@@ -2846,8 +2853,7 @@ public final class WorkflowRunner {
         details: String? = nil,
         runSummary: WorkflowRunSummary? = nil,
         updateInformation: MAAUpdateInformation? = nil,
-        fightResult: FightResult? = nil,
-        continuationSource: Date? = nil
+        fightResult: FightResult? = nil
     ) {
         let normalizedProgress = runProgress.advance(to: proposedProgress)
         let message = SensitiveDataRedactor.redact(message, sensitiveValues: currentSensitiveValues)
@@ -2874,7 +2880,7 @@ public final class WorkflowRunner {
             runSummary: runSummary,
             updateInformation: updateInformation,
             fightResult: fightResult,
-            continuationSource: continuationSource
+            roundID: currentRoundID
         )
         historyStore.append(log)
         eventSink(RunnerEvent(phase: phase, message: message, progress: normalizedProgress, log: log))

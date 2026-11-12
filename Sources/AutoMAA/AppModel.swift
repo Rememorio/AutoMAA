@@ -520,19 +520,21 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func continuation(for planID: UUID, at date: Date? = nil, continuingFrom: Date? = nil) -> PlanContinuation {
+    func continuation(for planID: UUID, at date: Date? = nil, roundID: UUID? = nil) -> PlanContinuation {
         PlanContinuation(configuration: configuration, planID: planID, state: executionState, history: activityEntries,
-                         weeklyAnnihilation: weeklyAnnihilation, now: date ?? currentDate, continuingFrom: continuingFrom)
+                         weeklyAnnihilation: weeklyAnnihilation, now: date ?? currentDate, roundID: roundID)
     }
 
-    func activityContinuationDate(for planID: UUID) -> Date? {
+    func activityRoundID(for planID: UUID) -> UUID? {
         guard selection == .activity, activitySelection == .plan(planID),
               activityPendingSource?.planID == planID else { return nil }
-        return activityPendingSource?.continuationDate
+        return activityPendingSource?.roundID
     }
 
-    func runTitle(for planID: UUID, readyTitle: String = "运行方案", continuingFrom: Date? = nil) -> String {
-        let state = continuation(for: planID, continuingFrom: continuingFrom)
+    func runTitle(for planID: UUID, readyTitle: String = "运行一轮", request: WorkflowRunRequest = .newRound) -> String {
+        guard case let .resume(roundID) = request else { return readyTitle }
+        let state = continuation(for: planID, roundID: roundID)
+        if state.hasExpiredScope, state.pending == 0, state.unconfirmed == 0 { return "本轮续跑已结束" }
         if state.pending == 0 { return state.unconfirmed > 0 ? "结果待确认" : state.completionTitle }
         if state.unconfirmed > 0 { return "继续其他任务" }
         return state.hasStarted ? "继续未完成" : readyTitle
@@ -544,8 +546,15 @@ final class AppModel: ObservableObject {
         return "\(client.displayName) / \(account.displayName)"
     }
 
-    func runHelp(for planID: UUID, continuingFrom: Date? = nil) -> String {
-        let progress = continuation(for: planID, continuingFrom: continuingFrom)
+    func runHelp(for planID: UUID, request: WorkflowRunRequest = .newRound) -> String {
+        let progress: PlanContinuation
+        switch request {
+        case .newRound:
+            progress = continuation(for: planID)
+            return "开启新一轮，执行 \(progress.newRoundTasks) 项任务；未确认的作战会保留。作战次数和用药额度每轮重新计算。"
+        case let .resume(roundID):
+            progress = continuation(for: planID, roundID: roundID)
+        }
         let scope = "执行 \(progress.pending) 项待办，已处理的任务会自动跳过"
         if progress.unconfirmed > 0 {
             return "\(scope)；另有 \(progress.unconfirmed) 项待核实作战会保留"
@@ -605,7 +614,15 @@ final class AppModel: ObservableObject {
             showFeedback("作战状态已变化或仍在运行，请重新核实结果")
             return
         }
-        runPlan(item.step.planID, retryStep: item.step)
+        let round = executionState.currentRound(for: item.step.planID)
+        let client = configuration.clients.first { $0.id == item.step.clientID }
+        let request: WorkflowRunRequest
+        if let round, let client, GameDay.contains(round.startedAt, for: client.kind, at: currentDate) {
+            request = .resume(roundID: round.id)
+        } else {
+            request = .newRound
+        }
+        runPlan(item.step.planID, request: request, retryStep: item.step)
     }
 
     func fightRetryHint(_ step: WorkflowStep) -> String {
@@ -634,9 +651,10 @@ final class AppModel: ObservableObject {
         return "已完成阶段保留。未确认阶段可能已消耗理智或道具，请先检查游戏；重跑会再次执行该阶段。"
     }
 
-    func runPlan(_ planID: UUID, resumeToday: Bool = true, retryStep: WorkflowStep? = nil, continuingFrom: Date? = nil) {
+    func runPlan(_ planID: UUID, request: WorkflowRunRequest = .newRound, retryStep: WorkflowStep? = nil) {
         reloadActivityHistory()
-        if let continuingFrom, continuation(for: planID, continuingFrom: continuingFrom).pending == 0 {
+        if case let .resume(roundID) = request, retryStep == nil,
+           continuation(for: planID, roundID: roundID).pending == 0 {
             showFeedback("这次运行已没有可续跑的任务，请查看待办")
             return
         }
@@ -673,8 +691,7 @@ final class AppModel: ObservableObject {
             self?.consume(event)
         }
         workflowTask = Task { [weak self] in
-            let report = await runner.run(snapshot, planID: planID, resumeToday: resumeToday,
-                                          retryStep: retryStep, continuingFrom: continuingFrom)
+            let report = await runner.run(snapshot, planID: planID, request: request, retryStep: retryStep)
             guard let self else { return }
             self.lastReport = report
             self.isRunning = false
@@ -719,8 +736,15 @@ final class AppModel: ObservableObject {
     }
 
     func runSelectedPlan() {
-        guard let planID = commandPlanID else { return }
-        runPlan(planID, continuingFrom: activityContinuationDate(for: planID))
+        guard let planID = commandPlanID, let request = commandRunRequest else { return }
+        runPlan(planID, request: request)
+    }
+
+    var commandRunRequest: WorkflowRunRequest? {
+        guard selection == .activity else { return .newRound }
+        guard let planID = commandPlanID,
+              let roundID = activityRoundID(for: planID) ?? executionState.currentRound(for: planID)?.id else { return nil }
+        return .resume(roundID: roundID)
     }
 
     func hotUpdate() {
@@ -1493,21 +1517,6 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func resetToday() {
-        reloadActivityHistory()
-        guard !isWorkflowRunning else {
-            showFeedback("运行期间不能重置今日完成记录，请等待当前任务结束后重试。")
-            return
-        }
-        do {
-            try executionStateStore.reset()
-            executionState = executionStateStore.loadSnapshot()
-            showFeedback("今日完成记录已重置")
-        } catch {
-            showFeedback("重置失败：\(error.localizedDescription)", tone: .error)
-        }
-    }
-
     func clearActivityHistory() {
         do {
             try historyStore.clear()
@@ -1552,9 +1561,13 @@ final class AppModel: ObservableObject {
     func showPendingWork(from session: ActivitySession) {
         guard let planID = session.planID,
               configuration.plans.contains(where: { $0.id == planID }) else { return }
+        guard let roundID = session.roundID else {
+            showFeedback("这次运行已归档，请查看当前待办")
+            return
+        }
         activityNavigationRequest = nil
         activitySelection = .plan(planID)
-        activityPendingSource = .init(planID: planID, startedAt: session.startedAt, continuationDate: session.continuationDate)
+        activityPendingSource = .init(planID: planID, startedAt: session.startedAt, roundID: roundID)
         selection = .activity
     }
 
@@ -1959,20 +1972,11 @@ final class AppModel: ObservableObject {
     }
 
     func addPlanScheduleRule(_ planID: UUID) {
-        guard let plan = configuration.plans.first(where: { $0.id == planID }),
-              let weekday = ScheduleWeekday.allCases.first(where: { !plan.schedule.scheduledWeekdays.contains($0) })
-        else {
-            showFeedback("每个星期都已有定时时段；同一方案每天最多运行一次")
-            return
-        }
-        let reference = plan.schedule.rules.last
+        var added = false
         updatePlanSchedule(planID, debounce: false) { schedule in
-            schedule.rules.append(.init(
-                weekdays: [weekday],
-                hour: reference?.hour ?? 8,
-                minute: reference?.minute ?? 0
-            ))
+            added = schedule.addRule()
         }
+        if !added { showFeedback("所选星期的所有分钟都已安排，请调整现有时段") }
     }
 
     func removePlanScheduleRule(_ planID: UUID, ruleID: UUID) {

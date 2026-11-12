@@ -374,7 +374,10 @@ public struct PlanContinuation: Equatable, Sendable {
     public var unconfirmed = 0
     public var resolved = 0
     public var manuallyHandled = 0
-    public var completionTitle: String { manuallyHandled > 0 ? "今日已处理" : "今日已完成" }
+    public var completionTitle: String { manuallyHandled > 0 ? "本轮已处理" : "本轮已完成" }
+    public var roundID: UUID?
+    public var roundsToday = 0
+    public var newRoundTasks = 0
     public var hasStarted = false
     public var hasExpiredScope = false
     public var pendingItems: [PendingWorkflowItem] = []
@@ -383,19 +386,26 @@ public struct PlanContinuation: Equatable, Sendable {
 
     public init(configuration: AppConfiguration, planID: UUID, state: ExecutionState, history: [LogEntry],
                 weeklyAnnihilation: WeeklyAnnihilationState = .init(),
-                now: Date = Date(), calendar: Calendar = .current, continuingFrom: Date? = nil) {
+                now: Date = Date(), calendar: Calendar = .current, roundID: UUID? = nil) {
         guard let plan = configuration.plans.first(where: { $0.id == planID }) else { return }
+        let round = state.currentRound(for: planID)
+        if let roundID, round?.id != roundID {
+            hasExpiredScope = true
+            return
+        }
+        self.roundID = round?.id
+        roundsToday = round.map { calendar.isDate($0.startedAt, inSameDayAs: now) ? $0.number : 0 } ?? 0
         var state = state.forGameDays(of: configuration.clients, at: now, calendar: calendar)
         state.prepareWeeklyAnnihilation(plan: plan, clients: configuration.clients, weekly: weeklyAnnihilation, at: now)
-        let planHistory = history.filter { $0.planID == planID }
+        let planHistory = history.filter { $0.planID == planID && (round == nil || $0.roundID == round?.id) }
         for client in configuration.clients where client.enabled && client.accounts.contains(where: plan.includes) {
-            let includesDay = continuingFrom.map { GameDay.contains($0, for: client.kind, at: now) } ?? true
-            let includesWeek = continuingFrom.map {
-                GameWeek(client: client.kind, at: $0).start == GameWeek(client: client.kind, at: now).start
+            let includesDay = round.map { GameDay.contains($0.startedAt, for: client.kind, at: now) } ?? true
+            let includesWeek = round.map {
+                GameWeek(client: client.kind, at: $0.startedAt).start == GameWeek(client: client.kind, at: now).start
             } ?? true
             hasExpiredScope = hasExpiredScope || !includesDay
-            let clientHistory = planHistory.filter { GameDay.contains($0.continuationSource ?? $0.timestamp, for: client.kind, at: now) }
-            hasStarted = hasStarted || (includesDay && clientHistory.contains { $0.phase == .preparing })
+            let clientHistory = planHistory.filter { GameDay.contains($0.timestamp, for: client.kind, at: now) }
+            hasStarted = hasStarted || (includesDay && round != nil)
             for account in client.accounts.filter(plan.includes) {
                 for task in plan.enabledTasks {
                     let step = WorkflowStep(planID: planID, clientID: client.id, accountID: account.id, task: task)
@@ -411,6 +421,9 @@ public struct PlanContinuation: Equatable, Sendable {
                     }
                     let weeklyStatus = weeklyAnnihilation.status(for: plan.fight.weeklyAnnihilation,
                                                                 client: client, accountID: account.id, at: now)
+                    if task != .fight || (!needsReview && (progress?.isRegularManuallyHandled != true || weeklyStatus == .pending)) {
+                        newRoundTasks += 1
+                    }
                     let entry = weeklyAnnihilation.entry(clientID: client.id, accountID: account.id)
                     if includesDay, !state.isResolved(key), !needsReview {
                         pending += 1

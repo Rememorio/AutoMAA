@@ -24,8 +24,13 @@ struct PlanEditorView: View {
             switch detailSection {
             case .settings:
                 VStack(spacing: 0) {
-                    PlanTodaySummary(progress: model.continuation(for: plan.id),
-                                     runState: model.planRunState(planID: plan.id))
+                    VStack(alignment: .leading, spacing: 5) {
+                        let progress = model.continuation(for: plan.id)
+                        PlanRoundSummary(progress: progress, runState: model.planRunState(planID: plan.id))
+                        if progress.hasPendingWork {
+                            PendingWorkLinkButton { model.showPlanActivity(plan.id) }
+                        }
+                    }
                         .padding(.horizontal, 20).padding(.vertical, 14)
                     Divider()
                     if let selectedTask {
@@ -43,7 +48,7 @@ struct PlanEditorView: View {
         .workspaceToolbar(title: plan.displayName, actions: toolbarActions,
             modes: WorkspaceToolbarModes(options: [
                 .init(title: "任务设置", symbol: "slider.horizontal.3", help: "任务设置 · 调整所选任务的参数"),
-                .init(title: "运行概况", symbol: "checklist", help: "运行概况 · 查看本方案今日待办、当前进度与最近结果")
+                .init(title: "运行概况", symbol: "checklist", help: "运行概况 · 查看本方案当前轮待办、进度与最近结果")
             ], selectedIndex: detailSection == .settings ? 0 : 1) { index in
                 detailSection = index == 0 ? .settings : .activity
             })

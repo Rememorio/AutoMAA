@@ -42,7 +42,7 @@ enum AutoMAARunnerMain {
                 print("[\(formatter.string(from: event.log.timestamp))] \(event.message)")
                 fflush(stdout)
             }
-            let report = await runner.run(configuration, planID: planID, resumeToday: true)
+            let report = await runner.run(configuration, planID: planID)
             if configuration.notifications.importantEventsEnabled {
                 let result = await notificationCenter.post(report: report, planID: planID)
                 if let failure = result.failureDescription {

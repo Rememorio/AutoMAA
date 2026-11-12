@@ -59,7 +59,7 @@ struct DashboardFocusView: View {
             }
             Text(summary.plan.enabledTasks.isEmpty ? "尚未启用任务" : summary.plan.enabledTasks.map(\.title).joined(separator: "  →  "))
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            PlanTodaySummary(progress: summary.progress, runState: summary.runState, showsGuidance: false)
+            PlanRoundSummary(progress: summary.progress, runState: summary.runState, showsGuidance: false)
             HStack(spacing: 12) {
                 PlanRunControl(planID: summary.id, showsTitle: true)
                 if case let .warnings(count) = summary.readiness.state {

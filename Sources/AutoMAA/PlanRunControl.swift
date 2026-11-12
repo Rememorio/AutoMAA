@@ -9,7 +9,7 @@ struct PlanRunControl: View {
         switch model.planRunState(planID: planID) {
         case .ready:
             let progress = model.continuation(for: planID)
-            if progress.pending > 0 {
+            if progress.newRoundTasks > 0 {
                 if showsTitle {
                     titledRunButton
                 } else {
@@ -23,7 +23,7 @@ struct PlanRunControl: View {
                     model.showPlanActivity(planID)
                 }
             } else {
-                unavailableRunButton(progress.completionTitle)
+                unavailableRunButton("没有可执行任务")
             }
         case .running:
             unavailableRunButton("正在运行")
@@ -45,7 +45,7 @@ struct PlanRunControl: View {
 
     private var titledRunButton: some View {
         let button = Button { model.runPlan(planID) } label: {
-            Label(model.runTitle(for: planID, readyTitle: "运行方案"), systemImage: "play.fill")
+            Label(model.runTitle(for: planID), systemImage: "play.fill")
         }
         return button.buttonStyle(.borderedProminent).tint(.maaAction).controlSize(.large)
             .help(model.runHelp(for: planID))
@@ -54,7 +54,7 @@ struct PlanRunControl: View {
 
     private func unavailableRunButton(_ title: String) -> some View {
         let button = Button {} label: {
-            Label(showsTitle ? "运行方案" : title, systemImage: "play.fill")
+            Label(showsTitle ? "运行一轮" : title, systemImage: "play.fill")
         }
         return Group {
             if showsTitle {

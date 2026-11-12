@@ -34,9 +34,9 @@
 | 文件或目录 | 内容 |
 | --- | --- |
 | `config.json` | 客户端、账号、方案和设置 |
-| `execution-state.json` | 各方案按服务器游戏日保存的成功断点、作战结果与剿灭／常规分阶段进度 |
+| `execution-state.json` | 各方案当前轮身份、开始时间、当日轮数、成功断点及作战分阶段进度；未确认作战跨轮保留 |
 | `fight-stage-memory.json` | 每个账号记录的常规关卡与恢复状态 |
-| `weekly-annihilation.json` | 按客户端、账号、服务器与游戏周保存的剿灭状态；参与方案共享，独立于每日断点 |
+| `weekly-annihilation.json` | 按客户端、账号、服务器与游戏周保存的剿灭状态；参与方案共享，独立于轮次断点 |
 | `history.json` | 运行记录，包括运行结果与 MAA 更新详情 |
 | `release-notes.json` | 更新说明缓存和阅读状态 |
 | `maa-maintenance.json` | 最近一次完整 MAA 更新尝试时间 |
@@ -56,7 +56,7 @@
 | `notifications.importantEventsEnabled` | 希望接收重要通知；macOS 是否授权仍由系统单独控制 |
 | `applicationUpdates.automaticallyDownloadsUpdates` | 空闲时自动准备 AutoMAA 更新，不代表允许静默重启 |
 | `maaUpdates.automaticallyUpdatesCoreAndResources` | 空闲时自动维护 MAA；具体时机见[更新指南](../guide/updates#自动更新-maa) |
-| `schedule.rules` | 方案的星期集合、小时和分钟；同一个星期不能出现在多条规则中 |
+| `schedule.rules` | 方案的星期集合、小时和分钟；同一星期可配置多个时间，星期与时间完全相同的规则会被拒绝 |
 | `stageStrategy` | `gameCurrentOrLast` 跟随游戏、`rememberedRegular` 跟随常规关卡（开战前识别，记录用于恢复）、`fixed` 固定关卡 |
 | `fallbackStage` | 可选常规兜底关卡，留空关闭；开战前检查完成但没有可用目标，或选关失败且尚未开战时尝试一次，不覆盖恢复记录 |
 | `weeklyAnnihilation.enabled` | 开启本方案的每周优先剿灭；独立于 MAA 参数模式，默认关闭 |

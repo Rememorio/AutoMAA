@@ -145,7 +145,7 @@ public enum PlanScheduleProblem: Equatable, Sendable {
     case duplicateRuleID
     case emptyWeekdays
     case invalidTime
-    case repeatedWeekday(ScheduleWeekday)
+    case duplicateSlot(WeeklyScheduleSlot)
 
     public func message(planName: String) -> String {
         switch self {
@@ -157,8 +157,8 @@ public enum PlanScheduleProblem: Equatable, Sendable {
             "「\(planName)」的每个定时时段都需要选择星期"
         case .invalidTime:
             "「\(planName)」的定时时间无效"
-        case let .repeatedWeekday(weekday):
-            "「\(planName)」在\(weekday.title)设置了多个时段；同一方案每天最多运行一次"
+        case let .duplicateSlot(slot):
+            "「\(planName)」在\(slot.weekday.title) \(PlanScheduleFormatter.time(hour: slot.hour, minute: slot.minute))设置了重复时段，请调整时间"
         }
     }
 }
@@ -175,12 +175,13 @@ public enum PlanScheduleValidator {
     public static func problem(in schedule: PlanSchedule) -> PlanScheduleProblem? {
         guard !schedule.rules.isEmpty else { return .noRules }
         guard Set(schedule.rules.map(\.id)).count == schedule.rules.count else { return .duplicateRuleID }
-        var occupied: Set<ScheduleWeekday> = []
+        var occupied: Set<WeeklyScheduleSlot> = []
         for rule in schedule.rules {
             guard !rule.weekdays.isEmpty else { return .emptyWeekdays }
             guard (0...23).contains(rule.hour), (0...59).contains(rule.minute) else { return .invalidTime }
             for weekday in ScheduleWeekday.ordered(rule.weekdays) {
-                guard occupied.insert(weekday).inserted else { return .repeatedWeekday(weekday) }
+                let slot = WeeklyScheduleSlot(weekday: weekday, hour: rule.hour, minute: rule.minute)
+                guard occupied.insert(slot).inserted else { return .duplicateSlot(slot) }
             }
         }
         return nil
@@ -231,8 +232,20 @@ public extension PlanSchedule {
         }
     }
 
-    var scheduledWeekdays: Set<ScheduleWeekday> {
-        rules.reduce(into: []) { $0.formUnion($1.weekdays) }
+    @discardableResult
+    mutating func addRule() -> Bool {
+        let weekdays = rules.last?.weekdays ?? ScheduleWeekday.everyDay
+        let reference = rules.last.map { ($0.hour * 60 + $0.minute + 720) % 1440 } ?? 480
+        let occupied = Set(slots)
+        for offset in 0..<1440 {
+            let minute = (reference + offset) % 1440
+            guard weekdays.allSatisfy({
+                !occupied.contains(.init(weekday: $0, hour: minute / 60, minute: minute % 60))
+            }) else { continue }
+            rules.append(.init(weekdays: weekdays, hour: minute / 60, minute: minute % 60))
+            return true
+        }
+        return false
     }
 }
 

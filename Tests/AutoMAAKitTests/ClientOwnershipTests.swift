@@ -53,7 +53,7 @@ struct ClientOwnershipTests {
         let before = try Data(contentsOf: fixture.directories.executionState)
         fixture.runtime.running.insert(client.id)
         fixture.runtime.portOpen = true
-        #expect(await fixture.run(resumeToday: false).fatalError != nil)
+        #expect(await fixture.run(request: .newRound).fatalError != nil)
         #expect(try Data(contentsOf: fixture.directories.executionState) == before)
         #expect(!FileManager.default.fileExists(atPath: fixture.directories.generatedManifest.path))
         #expect(await fixture.commands.commands.isEmpty)
@@ -74,12 +74,13 @@ struct ClientOwnershipTests {
         #expect(await fixture.commands.gameCommands.isEmpty)
     }
 
-    @Test("a completed plan does not inspect or touch an externally running game")
+    @Test("resuming a completed round does not inspect or touch an externally running game")
     @MainActor
     func completedPlan() async throws {
         let fixture = try OwnershipFixture()
         defer { fixture.remove() }
         var state = ExecutionState(dateKey: ExecutionStateStore.todayKey)
+        let round = state.startRound(for: fixture.configuration.plans[0].id, at: Date())
         for client in fixture.configuration.clients {
             state.completedSteps.insert(WorkflowStep(planID: fixture.configuration.plans[0].id,
                 clientID: client.id, accountID: client.accounts[0].id, task: .award).key)
@@ -87,7 +88,7 @@ struct ClientOwnershipTests {
         try ExecutionStateStore(directories: fixture.directories).save(state)
         fixture.runtime.inspectionFails = true
         fixture.runtime.running.insert(fixture.configuration.clients[0].id)
-        #expect(await fixture.run().isSuccess)
+        #expect(await fixture.run(request: .resume(roundID: round.id)).isSuccess)
         #expect(fixture.runtime.inspections == 0)
         #expect(fixture.runtime.launches == 0)
     }
@@ -267,14 +268,14 @@ private final class OwnershipFixture {
         commands = OwnershipCommands(runtime: runtime)
     }
 
-    func run(resumeToday: Bool = true) async -> WorkflowReport {
+    func run(request: WorkflowRunRequest = .newRound) async -> WorkflowReport {
         let runner = WorkflowRunner(directories: directories, portProbe: runtime, gameController: runtime,
             shutdownPolicy: .init(maaGracePeriod: 0, systemGracePeriod: 0, forcedGracePeriod: 0),
             commandRunner: commands, eventSink: {
                 self.runtime.events.append($0)
                 self.runtime.onEvent?($0)
             })
-        return await runner.run(configuration, planID: configuration.plans[0].id, resumeToday: resumeToday)
+        return await runner.run(configuration, planID: configuration.plans[0].id, request: request)
     }
 
     func remove() {

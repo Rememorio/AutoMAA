@@ -26,7 +26,8 @@ struct PlanTaskStatusSnapshot: Sendable {
         let steps = Set(plan.enabledTasks.flatMap { task in
             accounts.map { WorkflowStep(planID: plan.id, clientID: $0.0, accountID: $0.1, task: task) }
         })
-        let planEntries = entries.filter { $0.planID == plan.id }
+        let round = state.currentRound(for: plan.id)
+        let planEntries = entries.filter { $0.planID == plan.id && (round == nil || $0.roundID == round?.id) }
         let clientKinds = Dictionary(clients.map { ($0.id, $0.kind) }, uniquingKeysWith: { first, _ in first })
         let today = planEntries.filter { entry in
             if let kind = entry.clientID.flatMap({ clientKinds[$0] }) {

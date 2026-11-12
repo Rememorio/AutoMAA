@@ -9,7 +9,6 @@ struct SettingsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var selectedSection: SettingsSection
     @State private var showsBetaUpdateConfirmation = false
-    @State private var showsResetConfirmation = false
     @State private var updateDetailsRequest: UpdateDetailsRequest?
     @State private var preferredContentHeight: CGFloat = 360
     @State private var feedbackHeight: CGFloat = 0
@@ -75,14 +74,6 @@ struct SettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: .autoMAAOpenSettings)) { _ in
             updateDetailsRequest = nil
             showsBetaUpdateConfirmation = false
-            showsResetConfirmation = false
-        }
-        .confirmationDialog("重置今日完成记录？", isPresented: $showsResetConfirmation) {
-            Button("取消", role: .cancel) {}
-            Button("重置完成记录", role: .destructive) { model.resetToday() }
-                .disabled(model.isWorkflowRunning)
-        } message: {
-            Text("所有方案今天的成功步骤会被清空；再次运行时，这些步骤会重新执行。配置和活动记录会保留。")
         }
         .confirmationDialog(
             "更新到 MAA Beta？",
@@ -532,11 +523,8 @@ struct SettingsView: View {
                 Spacer()
                 Label(model.configurationSaveError == nil ? "自动保存" : "尚未保存", systemImage: model.configurationSaveError == nil ? "checkmark.circle" : "exclamationmark.circle")
                     .font(.caption).foregroundStyle(.secondary)
-                ActionIconMenu(title: "数据与恢复操作") {
-                    Button("打开日志目录") { NSWorkspace.shared.open(model.directories.logs) }
-                    Divider()
-                    Button("重置今日完成记录…", role: .destructive) { showsResetConfirmation = true }
-                        .disabled(model.isWorkflowRunning)
+                ActionIconButton(title: "打开日志目录", symbol: "doc.text.magnifyingglass") {
+                    NSWorkspace.shared.open(model.directories.logs)
                 }
             }
             HStack(spacing: 8) {

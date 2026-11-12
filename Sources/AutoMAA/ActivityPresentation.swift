@@ -9,7 +9,7 @@ struct ActivityNavigationRequest: Identifiable, Equatable {
 struct ActivityPendingSource: Equatable {
     let planID: UUID
     let startedAt: Date
-    let continuationDate: Date
+    let roundID: UUID
 }
 
 enum ActivityPendingLink: Equatable {
@@ -21,6 +21,7 @@ enum ActivityPendingLink: Equatable {
         let needsFollowUp = summary?.isPartial == true || (summary?.pendingWeeklyAnnihilation ?? 0) > 0
             || [.failed, .awaitingReview, .unfinished, .cancelled].contains(session.outcome)
         guard needsFollowUp else { return nil }
+        guard let roundID = session.roundID, roundID == progress.roundID else { self = .expired; return }
         if progress.hasPendingWork {
             var parts: [String] = []
             if progress.pending > 0 { parts.append("剩余 \(progress.pending) 项") }

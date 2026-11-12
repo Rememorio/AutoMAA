@@ -666,7 +666,7 @@ public struct WorkflowRunSummary: Codable, Sendable, Equatable {
         if pendingWeeklyAnnihilation > 0 {
             return "「\(planName)」本轮已结束，\(pendingWeeklyAnnihilation) 个账号本周剿灭待补打"
         }
-        return "「\(planName)」今日任务已处理"
+        return "「\(planName)」本轮任务已处理"
     }
 }
 
@@ -686,7 +686,7 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
     public var runSummary: WorkflowRunSummary?
     public var updateInformation: MAAUpdateInformation?
     public var fightResult: FightResult?
-    public var continuationSource: Date?
+    public var roundID: UUID?
 
     public init(
         id: UUID = UUID(),
@@ -704,7 +704,7 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
         runSummary: WorkflowRunSummary? = nil,
         updateInformation: MAAUpdateInformation? = nil,
         fightResult: FightResult? = nil,
-        continuationSource: Date? = nil
+        roundID: UUID? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -721,7 +721,7 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
         self.runSummary = runSummary
         self.updateInformation = updateInformation
         self.fightResult = fightResult
-        self.continuationSource = continuationSource
+        self.roundID = roundID
     }
 }
 
@@ -746,7 +746,7 @@ public struct ActivitySession: Identifiable, Sendable, Equatable {
 
     public var startedAt: Date { entries.first?.timestamp ?? .distantPast }
     public var endedAt: Date { entries.last?.timestamp ?? startedAt }
-    public var continuationDate: Date { entries.lazy.compactMap(\.continuationSource).first ?? startedAt }
+    public var roundID: UUID? { entries.lazy.compactMap(\.roundID).first }
     public var planID: UUID? { entries.lazy.compactMap(\.planID).first }
     public var finalPhase: RunnerPhase? { entries.lazy.reversed().compactMap(\.phase).first }
     public var finalLevel: LogLevel { entries.last?.level ?? .info }
@@ -891,6 +891,7 @@ public struct ExecutionState: Codable, Sendable, Equatable {
     public var fightResults: [String: FightResult]?
     public var fightProgress: [String: FightProgress]?
     public var gameDayStarts: [String: Date]?
+    public var rounds: [String: ExecutionRound]?
 
     public init(dateKey: String = "", completedSteps: Set<String> = [], updatedAt: Date = Date()) {
         self.dateKey = dateKey

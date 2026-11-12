@@ -304,10 +304,6 @@ public struct ExecutionStateStore: Sendable {
         try data.write(to: directories.executionState, options: .atomic)
     }
 
-    public func reset() throws {
-        try save(ExecutionState(dateKey: Self.todayKey))
-    }
-
     public static var todayKey: String { dateKey(for: Date()) }
 
     public static func dateKey(for date: Date, calendar: Calendar = .current) -> String {

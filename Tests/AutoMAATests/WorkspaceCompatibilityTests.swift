@@ -343,9 +343,9 @@ struct WorkspaceCompatibilityTests {
         #expect(try ConfigurationStore(directories: model.directories).load() == original)
     }
 
-    @Test("reset detects a new background run and preserves checkpoints until the run ends")
+    @Test("starting a round detects a new background run and preserves checkpoints")
     @MainActor
-    func resetTodayRejectsNewBackgroundRun() throws {
+    func newRoundRejectsBackgroundRun() throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let model = makeModel(root: root)
@@ -366,21 +366,17 @@ struct WorkspaceCompatibilityTests {
         defer { withExtendedLifetime(lock) {} }
         #expect(!model.isWorkflowRunning)
 
-        model.resetToday()
+        model.runPlan(planID)
 
         #expect(model.isExternalRunActive)
         #expect(model.executionState == savedState)
         #expect(try Data(contentsOf: model.directories.executionState) == savedData)
-        #expect(model.feedback.notice?.message.contains("运行期间不能重置今日完成记录") == true)
-
         lock = nil
-        model.resetToday()
-
+        model.reloadActivityHistory()
         #expect(!model.isWorkflowRunning)
-        #expect(model.executionState.completedSteps.isEmpty)
-        #expect(model.executionState.fightResults == nil)
+        #expect(model.executionState.completedSteps == savedState.completedSteps)
+        #expect(model.executionState.needsFightConfirmation(fightStep.key))
         #expect(try store.loadForExecution() == model.executionState)
-        #expect(model.feedback.notice?.message == "今日完成记录已重置")
     }
 
     private func temporaryRoot() -> URL {

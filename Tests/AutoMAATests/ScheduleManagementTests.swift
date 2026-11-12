@@ -69,7 +69,6 @@ struct ScheduleManagementTests {
         ) == true)
         #expect(model.isPlanScheduleCurrent(model.configuration.plans[0]))
 
-        model.togglePlanScheduleWeekday(lightID, ruleID: firstRuleID, weekday: .sunday)
         model.addPlanScheduleRule(lightID)
         let sundayRuleID = try #require(model.configuration.plans[0].schedule.rules.last?.id)
         model.setPlanScheduleRuleTime(lightID, ruleID: sundayRuleID, hour: 21, minute: 0)
@@ -77,7 +76,8 @@ struct ScheduleManagementTests {
         #expect(manager.installedSlots(planID: lightID)?.contains(
             WeeklyScheduleSlot(weekday: .sunday, hour: 21, minute: 0)
         ) == true)
-        #expect(PlanScheduleFormatter.summary(model.configuration.plans[0].schedule) == "周一至周六 10:17；周日 21:00")
+        #expect(manager.installedSlots(planID: lightID)?.count == 14)
+        #expect(PlanScheduleFormatter.summary(model.configuration.plans[0].schedule) == "每天 10:17；每天 21:00")
 
         let completeID = model.configuration.plans[1].id
         let completeRuleID = model.configuration.plans[1].schedule.rules[0].id

@@ -18,13 +18,13 @@ enum ActivityRecordPresentation {
         return client.displayName
     }
 
-    static func todaySummary(_ progress: PlanContinuation) -> String {
+    static func roundSummary(_ progress: PlanContinuation) -> String {
         if !progress.fightRecoveryItems.isEmpty {
             return (progress.hasStarted ? "\(progress.resolved) 项已处理 · " : "")
                 + "\(progress.fightRecoveryItems.count) 项作战待处理"
                 + (progress.pending > 0 ? " · \(progress.pending) 项可继续" : "")
         }
-        guard progress.hasStarted else { return "今日尚未运行" }
+        guard progress.hasStarted else { return progress.hasExpiredScope ? "本轮已结束" : "今日尚未运行" }
         if progress.pending == 0, progress.unconfirmed == 0 { return progress.completionTitle }
         return "\(progress.resolved) 项已处理"
             + (progress.pending > 0 ? " · \(progress.pending) 项可继续" : "")

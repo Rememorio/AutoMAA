@@ -7,13 +7,14 @@ import Testing
 @MainActor
 @Suite("Workspace run controls")
 struct WorkspaceRunControlsTests {
-    @Test("settings and today's records describe the same runnable and review scope")
+    @Test("plan playback starts a round and pending playback resumes only the current round")
     func continuationHelpMatchesAcrossPages() throws {
         let fixture = makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let model = fixture.model
         model.configuration.plans[0].award.enabled = true
         var state = ExecutionState(dateKey: ExecutionStateStore.todayKey)
+        let round = state.startRound(for: fixture.plan.id, at: Date())
         state.record(.init(status: .unconfirmed, reason: .interruptedBattle), for: fixture.step.key)
         try ExecutionStateStore(directories: model.directories).save(state)
         model.reloadActivityHistory()
@@ -24,7 +25,9 @@ struct WorkspaceRunControlsTests {
         let today = WorkspaceRunControlState(model: model)
         #expect(settings.canStart)
         #expect(today.canStart)
-        #expect(settings.startHelp == today.startHelp)
+        if case .run(fixture.plan.id) = settings.startAction {} else { Issue.record("Expected a new round") }
+        if case .resume(fixture.plan.id, round.id) = today.startAction {} else { Issue.record("Expected the current round") }
+        #expect(settings.startHelp.contains("开启新一轮"))
         #expect(today.startHelp.contains(fixture.plan.name))
         #expect(today.startHelp.contains("1 项待办"))
         #expect(today.startHelp.contains("1 项待核实"))
@@ -90,7 +93,8 @@ struct WorkspaceRunControlsTests {
         refresh(chrome, model: model, window: window)
         #expect(model.continuation(for: fixture.plan.id).pending == 0)
         #expect(!stop.isEnabled)
-        #expect(!play.isEnabled)
+        #expect(play.isEnabled)
+        #expect(play.toolTip?.contains("开启新一轮") == true)
         try expectFixedControls(group, stop: stop, play: play, window: window, frames: initialFrames, images: images)
         #expect(window.frame == windowFrame)
     }

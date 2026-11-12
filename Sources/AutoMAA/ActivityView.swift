@@ -215,7 +215,7 @@ struct ActivityView: View {
                 .frame(width: 18).padding(.top, 2).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text(plan.displayName).font(.callout.weight(.medium)).lineLimit(2)
-                Text(isCurrent ? "本次运行" : ActivityRecordPresentation.todaySummary(progress))
+                Text(isCurrent ? "本次运行" : ActivityRecordPresentation.roundSummary(progress))
                     .font(.caption).foregroundStyle(.secondary)
                     .lineLimit(2)
             }
@@ -263,7 +263,7 @@ struct ActivityView: View {
     private var selectedDetail: some View {
         switch model.activitySelection {
         case let .plan(planID):
-            PlanActivityView(planID: planID, isTodayDetail: true)
+            PlanActivityView(planID: planID, isPendingDetail: true)
                 .id(planID)
         case .maintenance:
             ActivityCurrentRunView()
@@ -284,7 +284,7 @@ struct ActivityView: View {
     private func pendingLink(for session: ActivitySession) -> ActivityPendingLink? {
         guard let planID = session.planID,
               model.configuration.plans.contains(where: { $0.id == planID }) else { return nil }
-        let progress = model.continuation(for: planID, continuingFrom: session.continuationDate)
+        let progress = model.continuation(for: planID, roundID: session.roundID)
         return ActivityPendingLink(session: session, progress: progress)
     }
 

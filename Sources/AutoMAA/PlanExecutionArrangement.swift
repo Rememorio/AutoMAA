@@ -130,11 +130,8 @@ struct PlanExecutionArrangement: View {
                     scheduleRule(rule, index: index)
                 }
                 Button("添加时段", systemImage: "plus", action: addScheduleRule)
-                    .disabled(schedule.scheduledWeekdays.count == ScheduleWeekday.allCases.count)
-                    .help(schedule.scheduledWeekdays.count == ScheduleWeekday.allCases.count
-                          ? "先从现有时段取消一个星期"
-                          : "为尚未安排的星期添加另一个时间")
-                Text("无需保持 AutoMAA 打开；执行时需保持系统唤醒、登录且解锁。")
+                    .help("同一天可以安排多个时间，每个时段开启新一轮")
+                Text("每次定时开启新一轮。无需保持 AutoMAA 打开；执行时需保持系统唤醒、登录且解锁。")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -165,11 +162,9 @@ struct PlanExecutionArrangement: View {
             }
             HStack(spacing: 7) {
                 ForEach(ScheduleWeekday.allCases) { weekday in
-                    let occupied = usedWeekdays(excluding: rule.id).contains(weekday)
                     Toggle(weekday.shortTitle, isOn: weekdayBinding(weekday, ruleID: rule.id))
                         .toggleStyle(.button)
-                        .disabled(occupied && !rule.weekdays.contains(weekday))
-                        .help(occupied ? "\(weekday.title)已由其他时段使用" : weekday.title)
+                        .help(weekday.title)
                         .accessibilityLabel("时段 \(index + 1) \(weekday.title)")
                 }
             }
@@ -184,8 +179,9 @@ struct PlanExecutionArrangement: View {
             Stepper("单步骤失败重试：\(policy.maxRetries) 次", value: $policy.maxRetries, in: 0...3)
                 .fixedSize(horizontal: true, vertical: false)
             Toggle("某一步失败后继续后续步骤", isOn: $policy.continueAfterStepFailure)
-            Text("日常完成记录按方案隔离，每周剿灭进度按账号共享。")
+            Text("断点按方案与轮次隔离，每周剿灭进度按账号共享。作战次数、理智药和源石额度每轮重新计算；未确认的作战会保留。")
                 .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -226,13 +222,8 @@ struct PlanExecutionArrangement: View {
         }
     }
 
-    private func usedWeekdays(excluding id: UUID) -> Set<ScheduleWeekday> {
-        schedule.rules.filter { $0.id != id }.reduce(into: []) { $0.formUnion($1.weekdays) }
-    }
-
     private func addScheduleRule() {
-        guard let weekday = ScheduleWeekday.allCases.first(where: { !schedule.scheduledWeekdays.contains($0) }) else { return }
-        schedule.rules.append(.init(weekdays: [weekday], hour: schedule.rules.last?.hour ?? 8, minute: schedule.rules.last?.minute ?? 0))
+        if !schedule.addRule() { error = "所选星期的所有分钟都已安排，请调整现有时段" }
     }
 
     private func apply() {

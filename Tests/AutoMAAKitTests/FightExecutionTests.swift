@@ -528,7 +528,11 @@ private final class FightFixture {
     var configuration: AppConfiguration { AppConfiguration(cliPath: "/usr/bin/true", clients: [client], plans: [plan]) }
     var step: WorkflowStep { WorkflowStep(planID: plan.id, clientID: client.id, accountID: account.id, task: .fight) }
     var state: ExecutionState { ExecutionStateStore(directories: directories).loadSnapshot() }
-    var emptyState: ExecutionState { ExecutionState().forGameDays(of: [client], at: now) }
+    var emptyState: ExecutionState {
+        var state = ExecutionState().forGameDays(of: [client], at: now)
+        state.startRound(for: plan.id, at: now)
+        return state
+    }
 
     init(priority: Bool = false, award: Bool = false) throws {
         let app = root.appending(path: "Test.app")
@@ -550,20 +554,51 @@ private final class FightFixture {
     func cleanup() { try? FileManager.default.removeItem(at: root) }
 
     func run(_ replies: [FightTestCommands.Reply], retry: Bool = false, blockStateSave: Bool = false,
-             blockWeeklySave: Bool = false, continuingFrom: Date? = nil) async -> (WorkflowReport, [FightTestCommands.Call]) {
+             blockWeeklySave: Bool = false, request: WorkflowRunRequest? = nil) async -> (WorkflowReport, [FightTestCommands.Call]) {
         let commands = FightTestCommands(replies, directories: directories, blockStateSave: blockStateSave,
                                          blockWeeklySave: blockWeeklySave, inspection: inspection, inspectionFailure: inspectionFailure)
         let runner = WorkflowRunner(directories: directories, portProbe: runtime, gameController: runtime,
                                     shutdownPolicy: ClientShutdownPolicy(maaGracePeriod: 0, systemGracePeriod: 0, forcedGracePeriod: 0),
                                     commandRunner: commands, now: { [self] in now }, eventSink: runtime.record)
-        let report = await runner.run(configuration, planID: plan.id, retryStep: retry ? step : nil,
-                                      continuingFrom: continuingFrom)
+        let current = state.currentRound(for: plan.id).flatMap { GameDay.contains($0.startedAt, for: client.kind, at: now) ? $0 : nil }
+        let request = request ?? current.map { .resume(roundID: $0.id) } ?? .newRound
+        let report = await runner.run(configuration, planID: plan.id, request: request, retryStep: retry ? step : nil)
         return (report, await commands.recordedCalls())
     }
 }
 
 @MainActor
 final class FightWorkflowTests: XCTestCase {
+    func testNewRoundPreservesUnknownBattleAndRunsOtherTasks() async throws {
+        let fixture = try FightFixture(award: true)
+        defer { fixture.cleanup() }
+        _ = await fixture.run([.init(result: command(timeout: true))])
+        let previous = try XCTUnwrap(fixture.state.currentRound(for: fixture.plan.id))
+        let unknown = try XCTUnwrap(fixture.state.fightResults?[fixture.step.key])
+        let (report, calls) = await fixture.run([.init(result: command())], request: .newRound)
+        XCTAssertEqual(report.succeededSteps, 1)
+        XCTAssertEqual(report.unconfirmedSteps, 1)
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertTrue(calls[0].name.hasSuffix("-award"))
+        XCTAssertEqual(fixture.state.fightResults?[fixture.step.key], unknown)
+        XCTAssertNotEqual(fixture.state.currentRound(for: fixture.plan.id)?.id, previous.id)
+        XCTAssertTrue(fixture.state.needsFightConfirmation(fixture.step.key))
+    }
+
+    func testNewRoundKeepsWeeklyCompletionAndRepeatsRegularFight() async throws {
+        let fixture = try FightFixture(priority: true)
+        defer { fixture.cleanup() }
+        let weekly = try settlementCallbacks(stage: "Map", kind: .annihilation, weeklyProgress: [1800, 1800])
+        _ = await fixture.run([.init(result: command(), callbacks: weekly), .init(result: command("Fight 1-7 1 times"))])
+        let (report, calls) = await fixture.run([.init(result: command("Fight 1-7 1 times"))], request: .newRound)
+        XCTAssertTrue(report.isSuccess)
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(try parameters(XCTUnwrap(calls.first))["stage"] as? String, "1-7")
+        let state = try WeeklyAnnihilationStore(directories: fixture.directories).load()
+        XCTAssertEqual(state.status(for: fixture.plan.fight.weeklyAnnihilation, client: fixture.client,
+                                    accountID: fixture.account.id, at: fixture.now), .completed)
+    }
+
     func testFailedCurrentStageKeepsConfirmedTargetAndDoesNotStartFallbackOrMarkCompletion() async throws {
         let fixture = try FightFixture()
         defer { fixture.cleanup() }
@@ -1053,20 +1088,18 @@ final class FightWorkflowTests: XCTestCase {
             fixture.plan = light
             let (_, morningAgain) = await fixture.run([])
             XCTAssertTrue(morningAgain.isEmpty)
-            try ExecutionStateStore(directories: fixture.directories).reset()
-            let (tomorrow, next) = await fixture.run([.init(result: command("Fight 1-7 1 times"))])
+            let (tomorrow, next) = await fixture.run([.init(result: command("Fight 1-7 1 times"))], request: .newRound)
             XCTAssertTrue(tomorrow.isSuccess)
             XCTAssertEqual(next.count, 1)
             XCTAssertEqual(try parameters(XCTUnwrap(next.first))["stage"] as? String, "1-7")
         }
     }
 
-    func testUnconfirmedWeeklyAttemptBlocksAnotherPlanAndSurvivesDailyReset() async throws {
+    func testUnconfirmedWeeklyAttemptBlocksAnotherPlanAndSurvivesNewRound() async throws {
         let fixture = try FightFixture(priority: true)
         defer { fixture.cleanup() }
         _ = await fixture.run([.init(result: command(timeout: true))])
         fixture.plan.id = UUID()
-        try ExecutionStateStore(directories: fixture.directories).reset()
         let before = fixture.runtime.launches
         let (_, blocked) = await fixture.run([])
         XCTAssertTrue(blocked.isEmpty)
@@ -1111,7 +1144,6 @@ final class FightWorkflowTests: XCTestCase {
         XCTAssertTrue(fridayReport.isSuccess)
         XCTAssertEqual(friday.count, 2)
         fixture.now = fixture.now.addingTimeInterval(7 * 86400)
-        try ExecutionStateStore(directories: fixture.directories).reset()
         let (newWeek, next) = await fixture.run([.init(result: command(), callbacks: noSanity), .init(result: command("Fight 1-7 1 times"))])
         XCTAssertTrue(newWeek.isSuccess)
         XCTAssertEqual(next.count, 2)
@@ -1532,23 +1564,31 @@ final class FightWorkflowTests: XCTestCase {
         XCTAssertEqual(fixture.runtime.launches, launches)
     }
 
-    func testContinuationIncludesUnattemptedFailuresAndIgnoresOtherDaysAndPlans() throws {
+    func testContinuationIncludesUnattemptedTasksAndExpiresAtServerReset() throws {
         let fixture = try FightFixture(award: true)
         defer { fixture.cleanup() }
-        let entry = LogEntry(level: .info, message: "正在准备", phase: .preparing, planID: fixture.plan.id)
-        var state = ExecutionState(dateKey: ExecutionStateStore.todayKey)
-        var continuation = PlanContinuation(configuration: fixture.configuration, planID: fixture.plan.id, state: state, history: [entry])
+        var state = fixture.emptyState
+        var continuation = PlanContinuation(configuration: fixture.configuration, planID: fixture.plan.id,
+                                             state: state, history: [], now: fixture.now)
         XCTAssertTrue(continuation.hasStarted)
         XCTAssertEqual(continuation.pending, 2)
-        state.record(FightResult(status: .unconfirmed), for: fixture.step.key)
-        continuation = PlanContinuation(configuration: fixture.configuration, planID: fixture.plan.id, state: state, history: [])
+        state.record(FightResult(status: .unconfirmed), for: fixture.step.key, at: fixture.now)
+        continuation = PlanContinuation(configuration: fixture.configuration, planID: fixture.plan.id,
+                                        state: state, history: [], now: fixture.now)
         XCTAssertEqual(continuation.pending, 1)
         XCTAssertEqual(continuation.unconfirmed, 1)
-        state.record(.init(status: .completed), for: fixture.step.key)
-        state.dateKey = "2000-01-01"
-        continuation = PlanContinuation(configuration: fixture.configuration, planID: fixture.plan.id, state: state, history: [])
-        XCTAssertEqual(continuation.pending, 2)
+        state.record(.init(status: .completed), for: fixture.step.key, at: fixture.now)
+        let tomorrow = fixture.now.addingTimeInterval(86_400)
+        continuation = PlanContinuation(configuration: fixture.configuration, planID: fixture.plan.id,
+                                        state: state, history: [], now: tomorrow)
+        XCTAssertEqual(continuation.pending, 0)
+        XCTAssertTrue(continuation.hasExpiredScope)
         XCTAssertFalse(continuation.hasStarted)
+        state = state.forGameDays(of: [fixture.client], at: tomorrow)
+        state.startRound(for: fixture.plan.id, at: tomorrow)
+        continuation = PlanContinuation(configuration: fixture.configuration, planID: fixture.plan.id,
+                                        state: state, history: [], now: tomorrow)
+        XCTAssertEqual(continuation.pending, 2)
         XCTAssertEqual(PlanContinuation(configuration: fixture.configuration, planID: UUID(), state: state, history: []).pending, 0)
     }
 
@@ -1634,8 +1674,11 @@ final class FightWorkflowTests: XCTestCase {
         let fixture = try FightFixture()
         defer { fixture.cleanup() }
         let original = ISO8601DateFormatter().date(from: "2026-11-08T12:00:00Z")!
+        var state = fixture.emptyState
+        let round = state.startRound(for: fixture.plan.id, at: original)
+        try ExecutionStateStore(directories: fixture.directories).save(state)
         fixture.now = ISO8601DateFormatter().date(from: "2026-11-08T19:00:00Z")!
-        let (report, calls) = await fixture.run([], continuingFrom: original)
+        let (report, calls) = await fixture.run([], request: .resume(roundID: round.id))
         XCTAssertNotNil(report.fatalError)
         XCTAssertTrue(calls.isEmpty)
         XCTAssertEqual(fixture.runtime.launches, 0)

@@ -33,7 +33,7 @@ AutoMAA 提供已建模的日常任务参数。三星招聘许可保留量、基
 | `scripts/` | 构建、打包与验证脚本 |
 | `docs/` | 用户指南和文档站 |
 
-修改配置通常从 `Models.swift` 与 `ConfigurationValidation.swift` 开始，任务参数转换位于 `MAAConfigurationWriter.swift`，运行顺序、重试和断点位于 `WorkflowRunner.swift`。可测试逻辑应留在 `AutoMAAKit`，避免在界面层重复实现。
+修改配置通常从 `Models.swift` 与 `ConfigurationValidation.swift` 开始，任务参数转换位于 `MAAConfigurationWriter.swift`，运行顺序、重试和断点位于 `WorkflowRunner.swift`，轮次身份与新轮状态重置位于 `ExecutionRound.swift`。`WorkflowRunRequest.newRound` 开启新轮，`resume(roundID:)` 只接受该方案当前轮，过期轮次在操作客户端前被拒绝；运行历史通过 `roundID` 关联同一轮的多次尝试。可测试逻辑应留在 `AutoMAAKit`，避免在界面层重复实现。
 
 ### 界面与交互
 
@@ -65,7 +65,7 @@ AutoMAA 提供已建模的日常任务参数。三星招聘许可保留量、基
 
 每周剿灭策略与状态位于 `WeeklyAnnihilation.swift`。策略属于方案，周状态按客户端、账号与服务器区分；只以明确周奖励上限或手动确认为本周完成，单次成功与理智不足均不能替代。游戏周使用 [maa-cli v0.7.5 的服务器时间偏移](https://github.com/MaaAssistantArknights/maa-cli/blob/v0.7.5/crates/maa-cli/src/config/task/client_type.rs)：官服、Bilibili、繁中服为 UTC+4，日服、韩服为 UTC+5，国际服为 UTC−11；这些偏移已包含游戏日 04:00 的边界，不是当地民用时区。每周从游戏日周一开始；派发时固定周标识，跨周结果不会误记为新周完成。未确认结果跨周仍阻止自动补打。
 
-`ExecutionState.prepareWeeklyAnnihilation` 统一供 Runner 与界面续跑状态使用，恢复剿灭可执行性时保留每日常规阶段与其他步骤。派发前分别原子保存每日目标和共享周状态；任何写入失败均停止派发，未完成的保存不能伪装成成功。`PlanContinuation.fightRecoveryItems` 提供独立于历史日志的当前处理项，方案页和运行记录共用 `FightRecoveryActions`。`WeeklyAnnihilationStore.confirmComplete` 在进程锁内重新读取并校验当前游戏周记录，仅更新周状态，不启动工作流。入口不可用只有在完整任务回调证明尚未进入作战时才可安全跳过，证据不足仍保留待确认。
+`ExecutionState.prepareWeeklyAnnihilation` 统一供 Runner 与界面续跑状态使用，恢复剿灭可执行性时保留本轮常规阶段与其他步骤。派发前分别原子保存本轮目标和共享周状态；任何写入失败均停止派发，未完成的保存不能伪装成成功。`PlanContinuation.fightRecoveryItems` 提供独立于历史日志的当前处理项，方案页和运行记录共用 `FightRecoveryActions`。`WeeklyAnnihilationStore.confirmComplete` 在进程锁内重新读取并校验当前游戏周记录，仅更新周状态，不启动工作流。入口不可用只有在完整任务回调证明尚未进入作战时才可安全跳过，证据不足仍保留待确认。
 
 ### 常规关卡的开战前检查
 

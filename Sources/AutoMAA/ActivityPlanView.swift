@@ -23,11 +23,11 @@ struct ActivityPlanSnapshot {
 struct PlanActivityView: View {
     @EnvironmentObject private var model: AppModel
     let planID: UUID
-    var isTodayDetail = false
+    var isPendingDetail = false
 
     private var plan: AutomationPlan? { model.configuration.plans.first { $0.id == planID } }
-    private var source: ActivityPendingSource? { isTodayDetail ? model.activityPendingSource : nil }
-    private var progress: PlanContinuation { model.continuation(for: planID, continuingFrom: source?.continuationDate) }
+    private var source: ActivityPendingSource? { isPendingDetail ? model.activityPendingSource : nil }
+    private var progress: PlanContinuation { model.continuation(for: planID, roundID: source?.roundID) }
     private var snapshot: ActivityPlanSnapshot {
         ActivityPlanSnapshot(planID: planID,
             sessions: ActivityHistory.sessions(from: model.activityEntries),
@@ -35,7 +35,7 @@ struct PlanActivityView: View {
             isWorkflowRunning: model.isWorkflowRunning)
     }
 
-    private var showsPendingWork: Bool { isTodayDetail && progress.hasPendingWork }
+    private var showsPendingWork: Bool { isPendingDetail && progress.hasPendingWork }
 
     var body: some View {
         if let plan {
@@ -105,23 +105,23 @@ struct PlanActivityView: View {
 
     private func header(_ plan: AutomationPlan) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            if isTodayDetail || snapshot.isCurrent {
-                Text(isTodayDetail ? plan.displayName : "本次运行")
+            if isPendingDetail || snapshot.isCurrent {
+                Text(isPendingDetail ? plan.displayName : "本次运行")
                     .font(.headline).fixedSize(horizontal: false, vertical: true)
             }
             if let source {
                 Text("续跑 · \(source.startedAt.formatted(.dateTime.month().day().hour().minute()))")
                     .font(.caption).monospacedDigit().foregroundStyle(.secondary)
             }
-            if !snapshot.isCurrent { todaySummary(plan) }
-            if !isTodayDetail, progress.hasPendingWork {
+            if !snapshot.isCurrent { roundSummary(plan) }
+            if !isPendingDetail, progress.hasPendingWork {
                 PendingWorkLinkButton { model.showPlanActivity(planID) }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func todaySummary(_ plan: AutomationPlan) -> some View {
+    private func roundSummary(_ plan: AutomationPlan) -> some View {
         let runState = model.planRunState(planID: planID)
         return VStack(alignment: .leading, spacing: 5) {
             if progress.hasExpiredScope, progress.pending == 0, progress.unconfirmed == 0 {
@@ -130,8 +130,8 @@ struct PlanActivityView: View {
                     model.showPlanActivity(planID)
                 }
             } else {
-                PlanTodaySummary(progress: progress, runState: runState, showsGuidance: !isTodayDetail)
-                if isTodayDetail, progress.hasStarted, progress.pending > 0, runState == .ready {
+                PlanRoundSummary(progress: progress, runState: runState, showsGuidance: !isPendingDetail)
+                if isPendingDetail, progress.hasStarted, progress.pending > 0, runState == .ready {
                     let accounts = Set(progress.pendingItems.map(\.step.accountID))
                     Text("点击顶部播放，继续 \(accounts.count) 个账号的待办。")
                         .font(.caption).foregroundStyle(.secondary)

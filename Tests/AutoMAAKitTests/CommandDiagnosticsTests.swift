@@ -454,7 +454,9 @@ private final class DiagnosticFixture {
         let runner = WorkflowRunner(directories: directories, portProbe: runtime, gameController: runtime,
             shutdownPolicy: .init(maaGracePeriod: 0, systemGracePeriod: 0, forcedGracePeriod: 0),
             commandRunner: commands, eventSink: runtime.record)
-        return await runner.run(configuration, planID: configuration.plans[0].id)
+        let planID = configuration.plans[0].id
+        let round = ExecutionStateStore(directories: directories).loadSnapshot().currentRound(for: planID)
+        return await runner.run(configuration, planID: planID, request: round.map { .resume(roundID: $0.id) } ?? .newRound)
     }
 
     func diagnostics() throws -> String {

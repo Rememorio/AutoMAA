@@ -50,7 +50,7 @@ npm run docs:build
 | `Sources/AutoMAAKit/MAAConfigurationWriter.swift` | 将 AutoMAA 配置转换为独立的 MAA Profile 与 Task 文件 |
 | `Sources/AutoMAAKit/WorkflowRunner.swift` | 串行调度、重试、断点、清理和事件输出 |
 | `Sources/AutoMAAKit/RuntimeSupport.swift` | 进程锁、端口、游戏生命周期和人工处理分类 |
-| `Sources/AutoMAAKit/Stores.swift` | 配置、历史与当日执行状态的持久化 |
+| `Sources/AutoMAAKit/Stores.swift` | 配置、历史与当前轮执行状态的持久化 |
 | `Sources/AutoMAAKit/LaunchAgentManager.swift` | macOS LaunchAgent 定时任务 |
 | `Sources/AutoMAARunner/` | 无界面定时运行入口 |
 | `Sources/AutoMAAResourceProbe/` | 在独立进程中调用 MaaCore 验证基础与增量资源组合 |
@@ -70,7 +70,7 @@ npm run docs:build
 1. 客户端严格串行运行；只有当前客户端关闭且 MaaTools 端口确认释放后，才能启动下一个客户端。
 2. 只有当前 MAA 支持自动切换账号的服务器才能在同一客户端启用多个账号，这些账号必须使用非空且互不重复的匹配片段；不支持切换的服务器只能启用一个账号并使用游戏当前登录状态。
 3. 账号匹配失败只能跳过该账号；客户端更新、维护或无法进入游戏时应跳过该客户端；连接到错误进程、端口无法释放等安全问题必须停止整个流程。
-4. 只有成功完成的任务才能写入当日断点。断点必须按方案隔离；失败、超时和取消不得伪装成成功。
+4. 只有成功完成的任务才能写入成功断点。断点按方案与当前轮隔离，续跑必须核对轮次身份；失败、超时和取消不得伪装成成功。开启新轮必须保留未确认作战、游戏日内的人工处理决定和独立的每周剿灭状态。
 5. “安全停止”必须终止当前 MAA 命令、关闭当前客户端并清理连接。
 6. 不绕过登录、验证码、用户协议、维护、强制更新或未知弹窗，也不自动下载或安装游戏包体。
 7. 日志与错误信息应足以定位问题，但必须通过统一脱敏层隐藏配置中的账号片段、完整手机号、邮箱和其他凭据。

@@ -5,6 +5,19 @@ import Testing
 
 @Suite("Plan task status")
 struct PlanTaskStatusTests {
+    @Test("an archived round's failures cannot mark the current round's tasks")
+    func statusesAreScopedToCurrentRound() {
+        let fixture = Fixture()
+        var state = fixture.emptyState
+        let old = state.startRound(for: fixture.plan.id, at: fixture.now)
+        var failure = fixture.entry(level: .error)
+        failure.roundID = old.id
+        state.startRound(for: fixture.plan.id, at: fixture.now)
+        #expect(fixture.snapshot(state: state, entries: [failure]).status(for: .recruit) == .none)
+        failure.roundID = state.currentRound(for: fixture.plan.id)?.id
+        #expect(fixture.snapshot(state: state, entries: [failure]).status(for: .recruit) == .failure)
+    }
+
     @Test("a task succeeds only after every participating account has a successful daily checkpoint")
     func successRequiresEveryTarget() {
         var fixture = Fixture()

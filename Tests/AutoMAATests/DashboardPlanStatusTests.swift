@@ -40,10 +40,10 @@ struct DashboardPlanStatusTests {
         #expect(pending.title == "还有 2 项未完成")
         #expect(pending.destination == .activity)
         progress.pending = 0
-        #expect(DashboardPlanStatus.resolve(runState: .ready, progress: progress, readiness: ready).title == "今日已完成")
+        #expect(DashboardPlanStatus.resolve(runState: .ready, progress: progress, readiness: ready).title == "本轮已完成")
         progress.manuallyHandled = 1
         let handled = DashboardPlanStatus.resolve(runState: .ready, progress: progress, readiness: ready)
-        #expect(handled.title == "今日已处理")
+        #expect(handled.title == "本轮已处理")
         #expect(handled.tone != .success)
     }
 

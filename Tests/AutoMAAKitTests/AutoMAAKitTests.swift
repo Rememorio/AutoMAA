@@ -494,7 +494,7 @@ final class AutoMAAKitTests: XCTestCase {
             eventSink: runtime.record
         )
 
-        let report = await runner.run(configuration, planID: plan.id, resumeToday: false)
+        let report = await runner.run(configuration, planID: plan.id, request: .newRound)
 
         let message = "客户端「日服测试」仍在运行并占用 MaaTools 端口 \(address)。为避免连接错误客户端，请关闭该客户端及其他 MAA 后重新运行"
         XCTAssertEqual(report.fatalError, message)
@@ -558,7 +558,7 @@ final class AutoMAAKitTests: XCTestCase {
             eventSink: runtime.record
         )
 
-        let report = await runner.run(configuration, planID: plan.id, resumeToday: false)
+        let report = await runner.run(configuration, planID: plan.id, request: .newRound)
         return (report, runtime)
     }
 
@@ -1202,7 +1202,7 @@ final class AutoMAAKitTests: XCTestCase {
         })
     }
 
-    func testLaunchAgentRejectsMultipleTimesForOnePlanOnSameWeekday() async throws {
+    func testLaunchAgentAcceptsMultipleTimesForOnePlanAndRejectsDuplicateSlots() async throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let launchAgents = root.appending(path: "LaunchAgents", directoryHint: .isDirectory)
@@ -1217,19 +1217,25 @@ final class AutoMAAKitTests: XCTestCase {
             systemIntegrationEnabled: false
         )
 
+        try await manager.synchronize(runnerURL: root.appending(path: "AutoMAARunner"), plans: [plan])
+        XCTAssertEqual(manager.installedSlots(planID: plan.id), [
+            WeeklyScheduleSlot(weekday: .sunday, hour: 9, minute: 0),
+            WeeklyScheduleSlot(weekday: .sunday, hour: 21, minute: 0),
+        ])
+        plan.schedule.rules[1].hour = 9
         do {
             try await manager.synchronize(
                 runnerURL: root.appending(path: "AutoMAARunner"),
                 plans: [plan]
             )
-            XCTFail("Expected repeated weekday rejection")
+            XCTFail("Expected duplicate slot rejection")
         } catch {
             XCTAssertEqual(
                 error as? LaunchAgentError,
-                .invalidSchedule(plan: "轻量日常", problem: .repeatedWeekday(.sunday))
+                .invalidSchedule(plan: "轻量日常", problem: .duplicateSlot(.init(weekday: .sunday, hour: 9, minute: 0)))
             )
         }
-        XCTAssertTrue(manager.installedPlanIDs.isEmpty)
+        XCTAssertEqual(manager.installedSlots(planID: plan.id)?.count, 2)
     }
 
     func testLaunchAgentSynchronizationCanRunWithoutSystemIntegration() async throws {
@@ -1626,7 +1632,7 @@ final class AutoMAAKitTests: XCTestCase {
         let config = AppConfiguration(cliPath: "/usr/bin/true", clients: [client], plans: [plan])
         let directories = AppDirectories(root: root)
 
-        _ = await WorkflowRunner(directories: directories).run(config, planID: plan.id, resumeToday: false)
+        _ = await WorkflowRunner(directories: directories).run(config, planID: plan.id, request: .newRound)
         let entries = HistoryStore(directories: directories).load()
 
         XCTAssertFalse(entries.isEmpty)
@@ -2328,7 +2334,7 @@ final class AutoMAAKitTests: XCTestCase {
         let runner = WorkflowRunner(directories: directories, portProbe: runtime, gameController: runtime,
                                     shutdownPolicy: .immediate, resourceProbeExecutable: installation.probe,
                                     eventSink: runtime.record)
-        let task = Task { await runner.run(configuration, planID: plan.id, resumeToday: false) }
+        let task = Task { await runner.run(configuration, planID: plan.id, request: .newRound) }
         for _ in 0..<400 {
             if FileManager.default.fileExists(atPath: marker.path) { break }
             try await Task.sleep(for: .milliseconds(10))
@@ -2415,7 +2421,7 @@ final class AutoMAAKitTests: XCTestCase {
             eventSink: runtime.record
         )
 
-        let report = await runner.run(configuration, planID: plan.id, resumeToday: false)
+        let report = await runner.run(configuration, planID: plan.id, request: .newRound)
 
         XCTAssertTrue(report.fatalError?.contains("MaaCore 无法完整加载") == true)
         XCTAssertEqual(report.unexecutedSteps, report.totalSteps)
@@ -2742,7 +2748,7 @@ final class AutoMAAKitTests: XCTestCase {
             eventSink: runtime.record
         )
 
-        let report = await runner.run(configuration, planID: plan.id, resumeToday: false)
+        let report = await runner.run(configuration, planID: plan.id, request: .newRound)
 
         XCTAssertTrue(report.isSuccess, report.fatalError ?? report.attentionMessages.joined(separator: " / "))
         XCTAssertEqual(delivered, [report.notices])
@@ -2805,7 +2811,7 @@ final class AutoMAAKitTests: XCTestCase {
                 }, eventSink: runtime.record
             )
 
-            let report = await runner.run(configuration, planID: plan.id, resumeToday: false)
+            let report = await runner.run(configuration, planID: plan.id, request: .newRound)
 
             XCTAssertTrue(report.isSuccess, report.fatalError ?? "")
             XCTAssertEqual(report.succeededSteps, 1)
@@ -3165,7 +3171,7 @@ final class AutoMAAKitTests: XCTestCase {
             eventSink: runtime.record
         )
 
-        let report = await runner.run(configuration, planID: plan.id, resumeToday: false)
+        let report = await runner.run(configuration, planID: plan.id, request: .newRound)
         let completion = try XCTUnwrap(runtime.events.first {
             $0.log.task == .fight && $0.log.level == .success && $0.message.contains("已完成")
         })
@@ -3243,7 +3249,7 @@ final class AutoMAAKitTests: XCTestCase {
         let annihilationReport = await annihilationRunner.run(
             configuration,
             planID: plan.id,
-            resumeToday: false
+            request: .newRound
         )
         let pendingMemory = try FightStageMemoryStore(directories: directories).load()
 
@@ -3275,7 +3281,7 @@ final class AutoMAAKitTests: XCTestCase {
             eventSink: runtime.record
         )
 
-        let regularReport = await regularRunner.run(configuration, planID: plan.id, resumeToday: false)
+        let regularReport = await regularRunner.run(configuration, planID: plan.id, request: .newRound)
         let restoredMemory = try FightStageMemoryStore(directories: directories).load()
 
         XCTAssertTrue(
@@ -3770,7 +3776,7 @@ final class AutoMAAKitTests: XCTestCase {
             eventSink: runtime.record
         )
 
-        let report = await runner.run(configuration, planID: plan.id, resumeToday: false)
+        let report = await runner.run(configuration, planID: plan.id, request: .newRound)
         return (report, runtime)
     }
 
@@ -3819,14 +3825,14 @@ final class AutoMAAKitTests: XCTestCase {
             eventSink: runtime.record
         )
 
-        let report = await runner.run(configuration, planID: plan.id, resumeToday: false)
+        let report = await runner.run(configuration, planID: plan.id, request: .newRound)
         let state = try ExecutionStateStore(directories: AppDirectories(root: root)).loadForExecution()
         XCTAssertEqual(state.completedSteps.count, report.runSummary?.completedSteps)
         return (report, runtime)
     }
 
     @MainActor
-    func testCompletedPlanIsNotLaunchedAgainToday() async throws {
+    func testResumingCompletedRoundDoesNotLaunchClient() async throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let directories = AppDirectories(root: root)
@@ -3845,11 +3851,12 @@ final class AutoMAAKitTests: XCTestCase {
         let completedSteps = Set(plan.enabledTasks.map {
             "\(plan.id.uuidString)/\(client.id.uuidString)/\(account.id.uuidString)/\($0.rawValue)"
         })
-        try ExecutionStateStore(directories: directories).save(
-            ExecutionState(dateKey: ExecutionStateStore.todayKey, completedSteps: completedSteps)
-        )
+        var state = ExecutionState(dateKey: ExecutionStateStore.todayKey)
+        let round = state.startRound(for: plan.id, at: Date())
+        state.completedSteps = completedSteps
+        try ExecutionStateStore(directories: directories).save(state)
 
-        let report = await WorkflowRunner(directories: directories).run(config, planID: plan.id)
+        let report = await WorkflowRunner(directories: directories).run(config, planID: plan.id, request: .resume(roundID: round.id))
 
         XCTAssertTrue(report.isSuccess)
         XCTAssertEqual(report.skippedSteps, plan.enabledTasks.count)
@@ -3883,9 +3890,10 @@ final class AutoMAAKitTests: XCTestCase {
         let completedSteps = Set(light.enabledTasks.map {
             "\(light.id.uuidString)/\(client.id.uuidString)/\(account.id.uuidString)/\($0.rawValue)"
         })
-        try ExecutionStateStore(directories: directories).save(
-            ExecutionState(dateKey: ExecutionStateStore.todayKey, completedSteps: completedSteps)
-        )
+        var state = ExecutionState(dateKey: ExecutionStateStore.todayKey)
+        let lightRound = state.startRound(for: light.id, at: Date())
+        state.completedSteps = completedSteps
+        try ExecutionStateStore(directories: directories).save(state)
 
         let runtime = StubClientRuntime(closesOnForce: true)
         let runner = WorkflowRunner(directories: directories, portProbe: runtime, gameController: runtime,
@@ -3898,10 +3906,84 @@ final class AutoMAAKitTests: XCTestCase {
             "\(complete.id.uuidString)/\(client.id.uuidString)/\(account.id.uuidString)/\($0.rawValue)"
         })
         XCTAssertEqual(ExecutionStateStore(directories: directories).loadSnapshot().completedSteps, expected)
-        let resumed = await runner.run(config, planID: light.id)
+        let resumed = await runner.run(config, planID: light.id, request: .resume(roundID: lightRound.id))
         XCTAssertTrue(resumed.isSuccess)
         XCTAssertEqual(resumed.skippedSteps, light.enabledTasks.count)
         XCTAssertEqual(runtime.launches, 1)
+    }
+
+    @MainActor
+    func testNewRoundsRepeatCompletedTasksAndRejectArchivedContinuation() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = root.appending(path: "Round Test.app")
+        try createTestApplication(at: app)
+        let client = ClientConfiguration(name: "测试客户端", kind: .official, appPath: app.path,
+                                         address: "127.0.0.1:61488", profileName: "round-test",
+                                         bundleIdentifier: "dev.automaa.tests.rounds", accounts: [AccountConfiguration(name: "测试账号")])
+        var plan = AutomationPlan.lightRoutine
+        plan.fight.enabled = false
+        plan.policy.hotUpdateBeforeRun = false
+        let config = AppConfiguration(cliPath: "/usr/bin/true", clients: [client], plans: [plan])
+        let directories = AppDirectories(root: root)
+        let store = ExecutionStateStore(directories: directories)
+        let runtime = StubClientRuntime(closesOnForce: true, opensOnWait: true)
+        let runner = WorkflowRunner(directories: directories, portProbe: runtime, gameController: runtime,
+                                   shutdownPolicy: .immediate, commandRunner: StubCommandRunner())
+        let first = await runner.run(config, planID: plan.id)
+        let old = try XCTUnwrap(store.loadSnapshot().currentRound(for: plan.id))
+        let second = await runner.run(config, planID: plan.id)
+        let current = try XCTUnwrap(store.loadSnapshot().currentRound(for: plan.id))
+        XCTAssertTrue(first.isSuccess)
+        XCTAssertTrue(second.isSuccess)
+        XCTAssertEqual(first.succeededSteps, plan.enabledTasks.count)
+        XCTAssertEqual(second.succeededSteps, plan.enabledTasks.count)
+        XCTAssertEqual(second.skippedSteps, 0)
+        XCTAssertNotEqual(old.id, current.id)
+        XCTAssertEqual(current.number, 2)
+        XCTAssertEqual(runtime.launches, 2)
+
+        let archived = await runner.run(config, planID: plan.id, request: .resume(roundID: old.id))
+        XCTAssertNotNil(archived.fatalError)
+        XCTAssertEqual(store.loadSnapshot().currentRound(for: plan.id), current)
+        let resumed = await runner.run(config, planID: plan.id, request: .resume(roundID: current.id))
+        XCTAssertTrue(resumed.isSuccess)
+        XCTAssertEqual(resumed.skippedSteps, plan.enabledTasks.count)
+        XCTAssertEqual(runtime.launches, 2)
+    }
+
+    @MainActor
+    func testContinuationKeepsSuccessfulTasksFromCurrentRound() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = root.appending(path: "Continuation Test.app")
+        try createTestApplication(at: app)
+        let client = ClientConfiguration(name: "测试客户端", kind: .official, appPath: app.path,
+                                         address: "127.0.0.1:61489", profileName: "round-continuation",
+                                         bundleIdentifier: "dev.automaa.tests.round-continuation", accounts: [AccountConfiguration(name: "测试账号")])
+        var plan = AutomationPlan.lightRoutine
+        plan.fight.enabled = false
+        plan.infrast.enabled = false
+        plan.policy.hotUpdateBeforeRun = false
+        plan.policy.maxRetries = 0
+        let config = AppConfiguration(cliPath: "/usr/bin/true", clients: [client], plans: [plan])
+        let directories = AppDirectories(root: root)
+        let runtime = StubClientRuntime(closesOnForce: true, opensOnWait: true)
+        let commands = StubCommandRunner(taskResults: [
+            CommandResult(exitCode: 0, standardOutput: "", standardError: "", timedOut: false),
+            CommandResult(exitCode: 1, standardOutput: "", standardError: "test failure", timedOut: false),
+        ])
+        let runner = WorkflowRunner(directories: directories, portProbe: runtime, gameController: runtime,
+                                   shutdownPolicy: .immediate, commandRunner: commands)
+        let first = await runner.run(config, planID: plan.id)
+        let round = try XCTUnwrap(ExecutionStateStore(directories: directories).loadSnapshot().currentRound(for: plan.id))
+        XCTAssertEqual(first.succeededSteps, 1)
+        XCTAssertEqual(first.failedSteps, 1)
+        let resumed = await runner.run(config, planID: plan.id, request: .resume(roundID: round.id))
+        XCTAssertTrue(resumed.isSuccess)
+        XCTAssertEqual(resumed.succeededSteps, 1)
+        XCTAssertEqual(resumed.skippedSteps, 1)
+        XCTAssertEqual(ExecutionStateStore(directories: directories).loadSnapshot().currentRound(for: plan.id), round)
     }
 
     @MainActor
@@ -3919,7 +4001,7 @@ final class AutoMAAKitTests: XCTestCase {
             plans: [plan]
         )
 
-        let report = await WorkflowRunner(directories: AppDirectories(root: root)).run(config, planID: plan.id, resumeToday: false)
+        let report = await WorkflowRunner(directories: AppDirectories(root: root)).run(config, planID: plan.id, request: .newRound)
 
         XCTAssertNil(report.fatalError)
         XCTAssertEqual(report.attentionMessages.count, 2)
@@ -3939,7 +4021,7 @@ final class AutoMAAKitTests: XCTestCase {
             plans: [plan]
         )
 
-        let report = await WorkflowRunner(directories: AppDirectories(root: root)).run(config, planID: plan.id, resumeToday: false)
+        let report = await WorkflowRunner(directories: AppDirectories(root: root)).run(config, planID: plan.id, request: .newRound)
 
         XCTAssertNotNil(report.fatalError)
         XCTAssertTrue(report.attentionMessages.isEmpty)
@@ -3968,7 +4050,7 @@ final class AutoMAAKitTests: XCTestCase {
         let report = await WorkflowRunner(directories: AppDirectories(root: root)).run(
             config,
             planID: plan.id,
-            resumeToday: false
+            request: .newRound
         )
 
         XCTAssertTrue(report.fatalError?.contains("账号片段不能重复") == true)
