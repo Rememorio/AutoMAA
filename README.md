@@ -12,13 +12,13 @@
 
 **[下载 AutoMAA](https://github.com/Rememorio/AutoMAA/releases/latest) · [首次配置](https://rememorio.github.io/AutoMAA/guide/getting-started) · [使用文档](https://rememorio.github.io/AutoMAA/)**
 
-<img src="./docs/assets/screenshots/overview-light.webp" width="940" alt="AutoMAA 今日总览，集中查看当前方案、待处理事项和最近三次运行结果">
+<img src="./docs/assets/screenshots/overview-light.webp" width="940" alt="AutoMAA 今日总览，集中查看当前方案、本轮结果、今日轮数和最近运行">
 
-<sub>AutoMAA v0.16.2 今日总览</sub>
+<sub>AutoMAA v0.17.0 今日总览</sub>
 
 </div>
 
-> 本文与文档站跟随主分支，包含尚未发布的执行轮次、通知反馈与软件更新界面调整。v0.16.2 用法见[正式版文档](https://github.com/Rememorio/AutoMAA/tree/v0.16.2/docs)。
+> 本文与文档站介绍 v0.17.0。对应版本说明见[正式版文档](https://github.com/Rememorio/AutoMAA/tree/v0.17.0/docs)。
 
 AutoMAA 是原生 macOS 的 [MAA](https://github.com/MaaAssistantArknights/MaaAssistantArknights) 工作流编排器。把客户端、账号和任务配置好后，它会依次启动游戏、执行日常、关闭客户端，再处理下一项；画面识别和游戏操作由 `maa-cli` 与 MaaCore 完成。
 
