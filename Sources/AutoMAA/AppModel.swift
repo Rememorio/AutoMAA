@@ -1617,7 +1617,7 @@ final class AppModel: ObservableObject {
         NotificationCenter.default.post(name: .autoMAAOpenSettings, object: nil)
     }
 
-    var applicationUpdateMenuTitle: String {
+    var applicationUpdateEntryTitle: String {
         switch applicationUpdateState {
         case .idle, .upToDate: "检查更新…"
         case .failed: "查看更新问题…"

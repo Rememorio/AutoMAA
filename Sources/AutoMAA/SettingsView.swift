@@ -77,7 +77,7 @@ struct SettingsView: View {
             HStack {
                 Text("软件更新").font(.headline)
                 Spacer()
-                ActionTextButton(title: "检查更新…", symbol: "arrow.down.circle") {
+                ActionTextButton(title: model.applicationUpdateEntryTitle, symbol: "arrow.down.circle") {
                     model.openApplicationUpdate()
                     openWindow(id: ApplicationUpdateView.windowID)
                 }

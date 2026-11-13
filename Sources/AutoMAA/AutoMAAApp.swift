@@ -85,7 +85,7 @@ private struct AutoMAACommands: Commands {
             Button("关于 AutoMAA") { showSettings(.about) }
         }
         CommandGroup(after: .appInfo) {
-            Button(model.applicationUpdateMenuTitle) {
+            Button(model.applicationUpdateEntryTitle) {
                 model.openApplicationUpdate()
                 openWindow(id: ApplicationUpdateView.windowID)
                 NSApp.activate(ignoringOtherApps: true)

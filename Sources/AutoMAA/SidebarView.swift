@@ -4,6 +4,7 @@ import SwiftUI
 
 struct SidebarView: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(spacing: 0) {
@@ -87,6 +88,10 @@ struct SidebarView: View {
             }
             footerButton("查找日志", symbol: "doc.text.magnifyingglass") {
                 NSWorkspace.shared.open(model.directories.logs)
+            }
+            footerButton(model.applicationUpdateEntryTitle, symbol: "arrow.down.circle") {
+                model.openApplicationUpdate()
+                openWindow(id: ApplicationUpdateView.windowID)
             }
             footerButton("设置", symbol: "gearshape") { model.showSettings() }
         }
