@@ -1,6 +1,6 @@
 # 首次配置
 
-> 本页跟随主分支，包含尚未发布的多轮执行与总览操作调整。截图仍为 v0.16.2，正式版用法见 [v0.16.2 指南](https://github.com/Rememorio/AutoMAA/blob/v0.16.2/docs/guide/getting-started.md)。
+> 本页跟随主分支，包含尚未发布的执行轮次、通知反馈与软件更新界面调整。截图仍为 v0.16.2，正式版用法见 [v0.16.2 指南](https://github.com/Rememorio/AutoMAA/blob/v0.16.2/docs/guide/getting-started.md)。
 
 先配置一个客户端、一个账号和一个方案，跑通后再扩展账号与定时。可以在尚未安装 MAA 时填写配置；运行前完成[MAA 运行环境安装](./installation)、游戏登录和数据下载。
 
@@ -21,6 +21,8 @@
   <img class="theme-shot theme-shot-dark" src="../assets/screenshots/overview-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="今日总览：当前方案、任务顺序、待处理事项与最近运行" />
   <figcaption>AutoMAA v0.16.2 今日总览。查看当前方案与待处理事项，点击条目回看运行结果。</figcaption>
 </figure>
+
+普通操作确认出现在所属窗口内容区右上角，约 6 秒后消失，悬停或键盘聚焦时暂停。需要修正的错误留在相关表单或页面，配置保存失败在工具栏下方提供“重试保存”；提示不会改变窗口尺寸。更新 AutoMAA 可从应用菜单“检查更新…”打开独立窗口，更新偏好在“设置 → 通用 → 软件更新”，详见[更新指南](./updates)。
 
 ## 检测 MAA 环境
 

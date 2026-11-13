@@ -97,7 +97,7 @@ struct PlanReadinessSheet: View {
                         .lineLimit(1).truncationMode(.middle)
                         .textSelection(.enabled).help(model.configuration.cliPath)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    ClipboardCopyButton(subject: "maa-cli 路径", feedback: model.feedback) { model.configuration.cliPath }
+                    ClipboardCopyButton(subject: "maa-cli 路径") { model.configuration.cliPath }
                 }
                 .padding(.leading, 26)
             }

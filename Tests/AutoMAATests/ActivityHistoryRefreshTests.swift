@@ -84,7 +84,7 @@ struct ActivityHistoryRefreshTests {
 
         model.retryFight(reviewedItem)
         #expect(!model.isWorkflowRunning)
-        #expect(model.feedback.notice?.message.contains("请重新核实结果") == true)
+        #expect(model.feedback.notice(for: .workspace, style: .toast)?.message.contains("请重新核实结果") == true)
     }
 
     @Test("reloads activity written by the background runner")

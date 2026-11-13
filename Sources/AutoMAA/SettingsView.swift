@@ -11,55 +11,37 @@ struct SettingsView: View {
     @State private var showsBetaUpdateConfirmation = false
     @State private var updateDetailsRequest: UpdateDetailsRequest?
     @State private var preferredContentHeight: CGFloat = 360
-    @State private var feedbackHeight: CGFloat = 0
 
     var body: some View {
-        VStack(spacing: 0) {
-            SettingsPresentation(selectedSection: $selectedSection, onPreferredHeight: { height, isNewPage in
-                preferredContentHeight = isNewPage ? height : max(preferredContentHeight, height)
-            }) { section in
-                VStack(alignment: .leading, spacing: 18) {
-                    switch section {
-                    case .general:
-                        notificationSection
-                        Divider()
-                        storageSection
-                        Divider()
-                        privacySection
-                    case .environment:
-                        maaSections
-                    case .updates:
-                        applicationUpdateSection
-                    case .about:
-                        AboutView(embedded: true) {
-                            updateDetailsRequest = model.applicationNotesRequest(currentVersion: true)
-                        }
+        SettingsPresentation(selectedSection: $selectedSection, onPreferredHeight: { height, isNewPage in
+            preferredContentHeight = isNewPage ? height : max(preferredContentHeight, height)
+        }) { section in
+            VStack(alignment: .leading, spacing: 18) {
+                switch section {
+                case .general:
+                    notificationSection
+                    Divider()
+                    applicationUpdatePreferences
+                    Divider()
+                    storageSection
+                    Divider()
+                    privacySection
+                case .environment:
+                    maaSections
+                case .about:
+                    AboutView(embedded: true) {
+                        updateDetailsRequest = model.applicationNotesRequest(currentVersion: true)
                     }
                 }
             }
-            VStack(spacing: 0) {
-                if let error = model.configurationSaveError {
-                    ConfigurationSaveFeedback(error: error) { model.saveNow() }
-                } else {
-                    ApplicationFeedbackRegion(center: model.feedback, window: .settings)
-                }
-            }
-            .background {
-                GeometryReader { geometry in
-                    Color.clear.preference(key: SettingsFeedbackHeightKey.self, value: geometry.size.height)
-                }
-            }
         }
-        .onPreferenceChange(SettingsFeedbackHeightKey.self) { feedbackHeight = $0 }
+        .applicationFeedback(model, destination: .settings(selectedSection))
         .frame(width: 560)
         .frame(minHeight: 220, idealHeight: 360, maxHeight: .infinity)
         .tint(.maaAccent)
         .disclosureGroupStyle(FullWidthDisclosureStyle())
         .navigationTitle("设置")
-        .background(ApplicationWindowContext(feedback: model.feedback, destination: .settings)
-            .frame(width: 0, height: 0))
-        .background(SettingsWindowSizing(contentHeight: SettingsWindowLayout.contentHeight(
-            page: preferredContentHeight, feedback: feedbackHeight), reduceMotion: reduceMotion)
+        .background(SettingsWindowSizing(contentHeight: preferredContentHeight, reduceMotion: reduceMotion)
             .frame(width: 0, height: 0))
         .sheet(item: $updateDetailsRequest) { request in
             UpdateDetailsView(model: model, request: request)
@@ -90,108 +72,16 @@ struct SettingsView: View {
         }
     }
 
-    private var applicationUpdateSection: some View {
+    private var applicationUpdatePreferences: some View {
         VStack(alignment: .leading, spacing: 14) {
-            applicationUpdateInformation
-
-            switch model.applicationUpdateState {
-            case .idle:
-                updateRow(
-                    message: "启动时自动检查更新 · \(model.applicationUpdateChannelDescription)",
-                    buttonTitle: "检查更新",
-                    action: { model.checkForApplicationUpdate() }
-                )
-            case .restoring, .checking:
-                UpdateProgressRow(
-                    message: applicationCheckMessage,
-                    startedAt: model.applicationUpdateStartedAt,
-                    limit: "上限 \(UpdatePolicy.durationDescription(UpdatePolicy.checkTimeout))，含重试",
-                    cancel: { model.cancelApplicationUpdate() }
-                )
-            case .upToDate:
-                updateRow(
-                    message: model.applicationUpdateCheckedAt.map {
-                        "\(model.applicationUpdateCurrentStatus) · \($0.formatted(date: .omitted, time: .standard)) 检查"
-                    } ?? model.applicationUpdateCurrentStatus,
-                    symbol: "checkmark.circle.fill",
-                    color: .green,
-                    buttonTitle: "再次检查",
-                    action: { model.checkForApplicationUpdate() }
-                )
-            case let .available(release):
-                HStack(alignment: .firstTextBaseline) {
-                    Text(model.isWorkflowRunning ? "当前运行结束后可下载" : "新版本可下载")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Spacer()
-                    Button("下载并校验") { model.downloadApplicationUpdate(release) }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.maaAction)
-                        .disabled(model.isWorkflowRunning)
-                }
-            case let .downloading(release):
-                UpdateProgressRow(
-                    message: model.applicationUpdateProgress?.message ?? "正在准备下载 AutoMAA v\(release.version)…",
-                    progress: model.applicationUpdateProgress?.download,
-                    startedAt: model.applicationUpdateStartedAt,
-                    limit: "上限 \(UpdatePolicy.durationDescription(UpdatePolicy.packageTimeout))，含重试与校验",
-                    cancel: { model.cancelApplicationUpdate() }
-                )
-            case .cancelling:
-                UpdateProgressRow(
-                    message: "",
-                    startedAt: model.applicationUpdateStartedAt,
-                    limit: "清理完成后即可重新操作",
-                    isCancelling: true,
-                    cancel: {}
-                )
-            case let .ready(prepared):
-                VStack(alignment: .leading, spacing: 10) {
-                    Label("v\(prepared.release.version.description) 已准备好", systemImage: "checkmark.shield.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.green)
-                    Text("保存配置后重启；安装失败时自动恢复旧版本。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    HStack {
-                        DetailDisclosure(details: "更新包已通过 SHA-256、Bundle ID、版本、架构和代码签名校验。", title: "校验详情")
-                        Spacer()
-                        Button("重启并安装") { model.restartAndInstallApplicationUpdate(prepared) }
-                            .buttonStyle(.borderedProminent)
-                            .tint(.maaAction)
-                            .disabled(model.isWorkflowRunning || model.configurationSaveError != nil)
-                    }
-                    if model.isWorkflowRunning {
-                        Text("当前运行结束后即可安装更新。")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-            case let .installing(release):
-                progressRow("正在退出并安装 v\(release.version)…")
-            case let .failed(message):
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(alignment: .firstTextBaseline) {
-                        Label("更新未完成", systemImage: "exclamationmark.triangle.fill")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.orange)
-                        Spacer()
-                        ActionTextButton(title: "重新检查", symbol: "arrow.clockwise") {
-                            model.checkForApplicationUpdate()
-                        }
-                    }
-                    Text(message)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Text("软件更新").font(.headline)
+                Spacer()
+                ActionTextButton(title: "检查更新…", symbol: "arrow.down.circle") {
+                    model.openApplicationUpdate()
+                    openWindow(id: ApplicationUpdateView.windowID)
                 }
             }
-
-            if let notice = model.applicationUpdateNotice {
-                Label(notice, systemImage: "stop.circle")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Divider()
             SettingsToggleRow(
                 title: "接收预发布更新",
                 detail: "包含 Beta、RC 等预发布版本，可能出现新问题。关闭后保留当前版本，等待更新的正式版。",
@@ -215,103 +105,6 @@ struct SettingsView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .help("从 \(model.applicationUpdateRepository) 下载所选通道的更新。MAA 与游戏包体分别维护。")
-        }
-    }
-
-    private var applicationUpdateInformation: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                if let release = model.applicationUpdateRelease {
-                    Text("当前 v\(model.currentApplicationVersion) → v\(release.version.description)")
-                        .font(.subheadline.weight(.semibold))
-                } else {
-                    Text("当前版本 v\(model.currentApplicationVersion)")
-                        .font(.subheadline.weight(.semibold))
-                }
-                Spacer()
-                if model.applicationUpdateRelease != nil {
-                    Menu {
-                        Button("新版本更新内容") { showApplicationNotes() }
-                        Button(hasUnreadNotes ? "本版本更新内容 · 未读" : "本版本更新内容") {
-                            showApplicationNotes(currentVersion: true)
-                        }
-                    } label: { releaseNotesLabel }
-                    .menuStyle(.borderlessButton).menuIndicator(.visible)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .help("查看更新内容")
-                } else {
-                    Button { showApplicationNotes(currentVersion: true) } label: { releaseNotesLabel }
-                        .buttonStyle(.borderless)
-                        .help(hasUnreadNotes ? "本版本更新内容 · 未读" : "本版本更新内容")
-                }
-            }
-            if let release = model.applicationUpdateRelease {
-                HStack(spacing: 10) {
-                    if let date = release.publishedAt {
-                        Text(date, format: .dateTime.year().month().day())
-                    }
-                    Text(ByteCountFormatter.string(fromByteCount: Int64(release.diskImage.size), countStyle: .file))
-                }.font(.caption).foregroundStyle(.secondary)
-                if release.notes.highlights.isEmpty {
-                    Text(release.releaseNotes.isEmpty ? "此版本尚未提供详细更新说明。" : "打开“更新内容”查看此版本的完整说明。")
-                        .font(.callout).foregroundStyle(.secondary)
-                } else {
-                    ForEach(Array(release.notes.highlights.prefix(3).enumerated()), id: \.offset) { _, text in
-                        HStack(alignment: .top, spacing: 6) {
-                            Text("•").accessibilityHidden(true)
-                            Text(.init(text)).lineLimit(2)
-                        }.font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-            }
-
-        }
-        .environment(\.openURL, OpenURLAction { url in
-            ReleaseNotes.safePageURL(url) == nil ? .discarded : .systemAction
-        })
-    }
-
-    private var hasUnreadNotes: Bool {
-        model.releaseNotesState.unreadVersion == model.currentApplicationVersion
-    }
-
-    private func showApplicationNotes(currentVersion: Bool = false) {
-        updateDetailsRequest = model.applicationNotesRequest(currentVersion: currentVersion)
-    }
-
-    private var releaseNotesLabel: some View {
-        ActionTextLabel(title: "更新内容", symbol: "doc.text")
-            .overlay(alignment: .topTrailing) {
-                if hasUnreadNotes { Circle().fill(Color.maaAccent).frame(width: 5, height: 5) }
-            }
-            .accessibilityLabel(hasUnreadNotes ? "更新内容，未读" : "更新内容")
-    }
-
-    private var applicationCheckMessage: String {
-        if case .restoring = model.applicationUpdateState {
-            "正在校验已下载的 AutoMAA 更新…"
-        } else {
-            "正在检查 AutoMAA 新版本…"
-        }
-    }
-
-    private func updateRow(
-        message: String,
-        symbol: String? = nil,
-        color: Color = .secondary,
-        buttonTitle: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        HStack(spacing: 10) {
-            if let symbol {
-                Image(systemName: symbol)
-                    .foregroundStyle(color)
-            }
-            Text(message)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Spacer()
-            ActionTextButton(title: buttonTitle, symbol: "arrow.clockwise", action: action)
         }
     }
 
@@ -537,7 +330,7 @@ struct SettingsView: View {
                     .truncationMode(.middle)
                     .textSelection(.enabled)
                     .help(model.directories.root.path)
-                ClipboardCopyButton(subject: "配置目录路径", feedback: model.feedback) { model.directories.root.path }
+                ClipboardCopyButton(subject: "配置目录路径") { model.directories.root.path }
                 ActionIconButton(title: "打开配置目录", symbol: "folder") {
                     NSWorkspace.shared.open(model.directories.root)
                 }

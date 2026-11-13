@@ -33,6 +33,14 @@ struct AutoMAAApp: App {
         .commands {
             AutoMAACommands(model: model)
         }
+        Window("软件更新", id: ApplicationUpdateView.windowID) {
+            ApplicationUpdateView()
+                .environmentObject(model)
+                .onAppear { applicationDelegate.model = model }
+        }
+        .defaultSize(width: 560, height: 540)
+        .defaultPosition(.center)
+        .windowResizability(.contentMinSize)
         Settings {
             SettingsView(selectedSection: $model.settingsSection)
                 .environmentObject(model)
@@ -62,6 +70,7 @@ struct AutoMAAApp: App {
 private struct AutoMAACommands: Commands {
     @ObservedObject var model: AppModel
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
     @FocusedValue(\.workspaceActive) private var workspaceActive
     @FocusedValue(\.workspaceChromeController) private var workspaceChrome
 
@@ -78,7 +87,7 @@ private struct AutoMAACommands: Commands {
         CommandGroup(after: .appInfo) {
             Button(model.applicationUpdateMenuTitle) {
                 model.openApplicationUpdate()
-                openSettings()
+                openWindow(id: ApplicationUpdateView.windowID)
                 NSApp.activate(ignoringOtherApps: true)
             }
         }

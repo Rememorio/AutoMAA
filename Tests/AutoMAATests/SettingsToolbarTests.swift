@@ -37,10 +37,10 @@ struct SettingsToolbarTests {
         controller.attach(to: window)
         let toolbar = window.toolbar
         #expect(toolbar?.selectedItemIdentifier?.rawValue == SettingsSection.about.rawValue)
-        controller.synchronizeSelection(.updates)
+        controller.synchronizeSelection(.environment)
         controller.attach(to: window)
         #expect(window.toolbar === toolbar)
-        #expect(toolbar?.selectedItemIdentifier?.rawValue == SettingsSection.updates.rawValue)
+        #expect(toolbar?.selectedItemIdentifier?.rawValue == SettingsSection.environment.rawValue)
         #expect(callbackCount == 0)
         #expect(window.title == "设置")
     }

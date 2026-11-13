@@ -179,6 +179,7 @@ struct ActivitySessionContents: View {
     let session: ActivitySession
     var section = ActivityRecordSection.results
     @State private var onlyAttention = false
+    @State private var feedbackVisibilityID = UUID()
 
     private var attentionEntries: [LogEntry] { session.entries.filter { $0.level == .warning || $0.level == .error } }
 
@@ -202,6 +203,10 @@ struct ActivitySessionContents: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onChange(of: session.runID, initial: true) { _, runID in
+            model.setActivityResultVisible(runID, viewID: feedbackVisibilityID)
+        }
+        .onDisappear { model.setActivityResultVisible(nil, viewID: feedbackVisibilityID) }
     }
 
     private var results: some View {

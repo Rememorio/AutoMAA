@@ -4,10 +4,6 @@ import SwiftUI
 
 /// Keeps the toolbar in place while fitting each settings page within the current screen.
 enum SettingsWindowLayout {
-    static func contentHeight(page: CGFloat, feedback: CGFloat) -> CGFloat {
-        max(220, ceil(page)) + ceil(max(0, feedback))
-    }
-
     static func frame(current: NSRect, contentHeight: CGFloat, chromeHeight: CGFloat, visibleFrame: NSRect) -> NSRect {
         let available = visibleFrame.insetBy(dx: 12, dy: 12)
         let height = min(max(220, ceil(contentHeight)) + chromeHeight, available.height)
@@ -18,13 +14,6 @@ enum SettingsWindowLayout {
         let centeredX = current.midX - result.width / 2
         result.origin.x = max(available.minX, min(centeredX, available.maxX - result.width))
         return result
-    }
-}
-
-struct SettingsFeedbackHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
     }
 }
 

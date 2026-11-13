@@ -53,7 +53,7 @@ struct CurrentPlanSelectionTests {
                 requested()
             }
             defer { NotificationCenter.default.removeObserver(observer) }
-            for section in [SettingsSection.environment, .updates, .about] {
+            for section in SettingsSection.allCases {
                 model.showSettings(section)
                 #expect(model.settingsSection == section)
                 #expect(model.selection == .plan(planID))

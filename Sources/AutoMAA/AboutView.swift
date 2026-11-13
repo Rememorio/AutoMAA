@@ -82,7 +82,7 @@ struct AboutView: View {
                 Text("反馈与支持").font(.subheadline.weight(.semibold))
                     .accessibilityAddTraits(.isHeader)
                 Spacer()
-                ClipboardCopyButton(subject: "诊断信息", feedback: model.feedback) { model.supportDiagnostics.text }
+                ClipboardCopyButton(subject: "诊断信息") { model.supportDiagnostics.text }
             }
             Link("前往问题反馈", destination: model.issueReportURL).font(.callout)
             Text("诊断信息不包含账号、匹配片段、本机路径或运行日志。")

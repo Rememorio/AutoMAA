@@ -132,6 +132,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var runningRunID: UUID?
     @Published private var externalRunState: ExternalRunState?
     let feedback = ApplicationFeedbackCenter()
+    private var visibleActivityRuns: [UUID: UUID] = [:]
     @Published private(set) var configurationSaveError: String?
     @Published var readinessRequest: PlanReadinessRequest?
     @Published var installedPlanIDs: Set<UUID>
@@ -144,6 +145,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var maaVersionSummary = "尚未检测"
     @Published private(set) var isCheckingMAAEnvironment = false
     @Published private(set) var applicationUpdateState: ApplicationUpdateState = .idle
+    var isApplicationUpdateWindowVisible = false
+    @Published private(set) var releaseNotesCacheError: String?
     @Published private(set) var applicationUpdateRelease: SoftwareUpdateRelease?
     @Published private(set) var applicationUpdateProgress: UpdateProgress?
     private var applicationUpdateProgressID: UUID?
@@ -698,6 +701,7 @@ final class AppModel: ObservableObject {
             let report = await runner.run(snapshot, planID: planID, request: request, retryStep: retryStep)
             guard let self else { return }
             self.lastReport = report
+            let completedRunID = self.runningRunID
             self.isRunning = false
             self.isCancellingRun = false
             self.runningPlanID = nil
@@ -707,25 +711,7 @@ final class AppModel: ObservableObject {
             self.reloadFightStageMemory()
             _ = self.saveNow(showConfirmation: false)
             await self.postImportantNotification(for: report, planID: planID)
-            if let fatalError = report.fatalError {
-                self.showFeedback(fatalError, tone: .error)
-            } else if report.cancelled {
-                self.showFeedback("流程已安全停止，当前客户端和连接已清理")
-            } else if report.isSuccess {
-                if report.notices.isEmpty {
-                    let name = snapshot.plans.first(where: { $0.id == planID })?.displayName ?? "方案"
-                    self.showFeedback(report.runSummary?.successMessage(planName: name) ?? "本轮运行已结束", tone: .success)
-                } else {
-                    self.showFeedback(self.noticeBanner(report.notices), tone: .warning)
-                }
-            } else if let summary = report.runSummary, summary.isPartial {
-                self.showFeedback("流程部分完成：\(summary.completionDescription)，请查看活动记录", tone: .warning)
-            } else if !report.attentionMessages.isEmpty {
-                self.showFeedback(self.attentionBanner(report.attentionMessages), tone: .warning)
-            } else {
-                let suffix = report.notices.isEmpty ? "" : "，另有 \(report.notices.count) 项公招结果需要确认"
-                self.showFeedback("流程完成，但有 \(report.failedSteps) 个步骤失败\(suffix)", tone: .error)
-            }
+            self.notifyWorkflowResult(report, planID: planID, runID: completedRunID)
             self.resumeAutomaticApplicationUpdateIfNeeded()
             self.resumeAutomaticMAAUpdateIfNeeded()
         }
@@ -770,7 +756,8 @@ final class AppModel: ObservableObject {
                 releaseNotesState.unreadVersion = currentApplicationVersion
                 persistReleaseNotes()
             }
-            showFeedback(result.message, tone: result.status == .success ? .success : .error)
+            showFeedback(result.message, tone: result.status == .success ? .success : .error,
+                         style: .toast, action: .applicationUpdate)
             refreshMAAStatus()
             resumeAutomaticMAAUpdateIfNeeded()
             return
@@ -809,7 +796,7 @@ final class AppModel: ObservableObject {
             } catch {
                 guard !Task.isCancelled else { return }
                 self.notificationAuthorizationState = await self.importantNotificationCenter.authorizationState()
-                self.showFeedback("无法请求通知权限：\(error.localizedDescription)", tone: .error)
+                self.showFeedback("无法请求通知权限：\(error.localizedDescription)", tone: .error, destination: .settings(.general))
             }
         }
     }
@@ -828,11 +815,11 @@ final class AppModel: ObservableObject {
     func testImportantNotification() {
         guard !isTestingImportantNotification else { return }
         guard configuration.notifications.importantEventsEnabled else {
-            showFeedback("请先开启重要通知")
+            showFeedback("请先开启重要通知", destination: .settings(.general))
             return
         }
         guard FileManager.default.isExecutableFile(atPath: runnerExecutableURL.path) else {
-            showFeedback("找不到后台 Runner，无法测试定时通知", tone: .error)
+            showFeedback("找不到后台 Runner，无法测试定时通知", tone: .error, destination: .settings(.general))
             return
         }
         isTestingImportantNotification = true
@@ -851,14 +838,14 @@ final class AppModel: ObservableObject {
                 guard !Task.isCancelled else { return }
                 self.refreshNotificationAuthorization()
                 if result.exitCode == 0 {
-                    self.showFeedback("后台测试通知已发送")
+                    self.showFeedback("后台测试通知已发送", destination: .settings(.general))
                 } else {
                     let message = result.combinedOutput.isEmpty ? "未知错误" : result.combinedOutput
-                    self.showFeedback("后台测试通知未送达：\(String(message.prefix(180)))", tone: .warning)
+                    self.showFeedback("后台测试通知未送达：\(String(message.prefix(180)))", tone: .warning, destination: .settings(.general))
                 }
             } catch {
                 guard !Task.isCancelled else { return }
-                self.showFeedback("无法测试后台通知：\(error.localizedDescription)", tone: .error)
+                self.showFeedback("无法测试后台通知：\(error.localizedDescription)", tone: .error, destination: .settings(.general))
             }
         }
     }
@@ -947,7 +934,7 @@ final class AppModel: ObservableObject {
 
     func applicationNotesRequest(currentVersion: Bool = false) -> UpdateDetailsRequest {
         let version = currentVersion ? currentApplicationVersion : applicationUpdateRelease?.version.description ?? currentApplicationVersion
-        if version == currentApplicationVersion {
+        if version == currentApplicationVersion, releaseNotesState.unreadVersion != nil {
             releaseNotesState.unreadVersion = nil
             persistReleaseNotes()
         }
@@ -1052,8 +1039,13 @@ final class AppModel: ObservableObject {
     }
 
     private func persistReleaseNotes() {
-        do { try releaseNotesCache.save(releaseNotesState) }
-        catch { showFeedback("更新说明未能保存在本机：\(error.localizedDescription)", tone: .error) }
+        do {
+            try releaseNotesCache.save(releaseNotesState)
+            releaseNotesCacheError = nil
+        } catch {
+            releaseNotesCacheError = "更新说明未能缓存在本机："
+                + SensitiveDataRedactor.redact(error.localizedDescription)
+        }
     }
 
     private func startMAAUpdate(_ component: MAAComponentUpdate, automatic: Bool = false) {
@@ -1386,6 +1378,7 @@ final class AppModel: ObservableObject {
                 restorePreparedApplicationUpdateOrCheck()
             }
         } else {
+            remindApplicationUpdateIfNeeded()
             resumeAutomaticApplicationUpdateIfNeeded()
             resumeAutomaticMAAUpdateIfNeeded()
         }
@@ -1620,14 +1613,14 @@ final class AppModel: ObservableObject {
     }
 
     func showSettings(_ section: SettingsSection = .general) {
-        feedback.activeWindow = .settings
         settingsSection = section
         NotificationCenter.default.post(name: .autoMAAOpenSettings, object: nil)
     }
 
     var applicationUpdateMenuTitle: String {
         switch applicationUpdateState {
-        case .idle, .upToDate, .failed: "检查更新…"
+        case .idle, .upToDate: "检查更新…"
+        case .failed: "查看更新问题…"
         case .restoring, .checking: "正在检查更新…"
         case .available: "发现新版本…"
         case .downloading: "查看下载进度…"
@@ -1638,9 +1631,8 @@ final class AppModel: ObservableObject {
     }
 
     func openApplicationUpdate() {
-        showSettings(.updates)
         switch applicationUpdateState {
-        case .idle, .upToDate, .failed: checkForApplicationUpdate()
+        case .idle, .upToDate: checkForApplicationUpdate()
         default: break
         }
     }
@@ -1667,35 +1659,20 @@ final class AppModel: ObservableObject {
         fightStageMemory = memory
     }
 
-    @discardableResult
-    func setFightRecoveryStage(_ stage: String, clientID: UUID, accountID: UUID) -> Bool {
+    func saveFightRecoveryStage(_ stage: String, clientID: UUID, accountID: UUID) -> String? {
         guard let stage = FightStagePolicy.regularStage(from: stage, times: 1) else {
-            showFeedback(FightStagePolicy.regularStageHint)
-            return false
+            return FightStagePolicy.regularStageHint
         }
-        return updateFightStageMemory(successMessage: "常规目标已更新为 \(stage)") { memory in
-            memory.remember(stage, clientID: clientID, accountID: accountID)
-        }
-    }
-
-    private func updateFightStageMemory(
-        successMessage: String,
-        update: (inout FightStageMemory) -> Bool
-    ) -> Bool {
-        guard !isWorkflowRunning else {
-            showFeedback("工作流运行期间不能修改关卡恢复状态")
-            return false
-        }
+        guard !isWorkflowRunning else { return "工作流运行期间不能修改关卡恢复状态" }
         do {
             var memory = try fightStageMemoryStore.load()
-            guard update(&memory) else { return false }
-            try fightStageMemoryStore.save(memory)
-            fightStageMemory = memory
-            showFeedback(successMessage)
-            return true
+            if memory.remember(stage, clientID: clientID, accountID: accountID) {
+                try fightStageMemoryStore.save(memory)
+                fightStageMemory = memory
+            }
+            return nil
         } catch {
-            showFeedback("更新关卡恢复状态失败：\(error.localizedDescription)", tone: .error)
-            return false
+            return "更新关卡恢复状态失败：" + SensitiveDataRedactor.redact(error.localizedDescription)
         }
     }
 
@@ -2161,7 +2138,8 @@ final class AppModel: ObservableObject {
             if isCancellingRun, let runID = externalRunState?.runID {
                 if let terminal = activityEntries.last(where: { $0.runID == runID }),
                    terminal.phase == .cancelled || terminal.phase == .failed {
-                    showFeedback(terminal.message, tone: terminal.phase == .failed ? .error : .information)
+                    showFeedback(terminal.message, tone: terminal.phase == .failed ? .error : .information,
+                                 style: .toast, action: .activity(runID))
                 }
             }
             externalRunState = nil
@@ -2201,19 +2179,6 @@ final class AppModel: ObservableObject {
         MAAProfileName.normalize(value)
     }
 
-    private func attentionBanner(_ messages: [String]) -> String {
-        guard let first = messages.first else { return "流程完成" }
-        let firstLine = first.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? first
-        let suffix = messages.count > 1 ? "（另有 \(messages.count - 1) 项，请查看活动记录）" : ""
-        return "需要手动处理：\(String(firstLine.prefix(180)))\(suffix)"
-    }
-
-    private func noticeBanner(_ notices: [WorkflowNotice]) -> String {
-        guard let first = notices.first else { return "流程已完成" }
-        let suffix = notices.count > 1 ? "（另有 \(notices.count - 1) 项，请查看活动记录）" : ""
-        return "\(String(first.message.prefix(180)))\(suffix)"
-    }
-
     private func uniqueProfileName() -> String {
         var index = configuration.clients.count + 1
         let used = Set(configuration.clients.map { normalizedProfile($0.profileName) })
@@ -2233,8 +2198,49 @@ final class AppModel: ObservableObject {
         return "\(candidate) \(index)"
     }
 
-    func showFeedback(_ message: String, tone: ApplicationFeedback.Tone = .information) {
-        feedback.post(message, tone: tone)
+    func showFeedback(_ message: String, tone: ApplicationFeedback.Tone = .information,
+                      destination: ApplicationFeedbackDestination = .workspace,
+                      style: ApplicationFeedback.Style? = nil, action: ApplicationFeedback.Action? = nil) {
+        let redacted = SensitiveDataRedactor.redact(message,
+            sensitiveValues: configuration.clients.flatMap { $0.accounts.map(\.accountSelector) })
+        feedback.post(redacted, tone: tone, destination: destination, style: style, action: action)
+    }
+
+    func setActivityResultVisible(_ runID: UUID?, viewID: UUID) {
+        visibleActivityRuns[viewID] = runID
+    }
+
+    func notifyWorkflowResult(_ report: WorkflowReport, planID: UUID, runID: UUID?) {
+        if let runID, visibleActivityRuns.values.contains(runID) { return }
+        if report.isSuccess, report.notices.isEmpty, selection == .overview, currentPlanID == planID { return }
+        let name = configuration.plans.first { $0.id == planID }?.displayName ?? "方案"
+        let message: String
+        let tone: ApplicationFeedback.Tone
+        if let error = report.fatalError {
+            message = runID == nil ? error : "「\(name)」运行已中止"
+            tone = .error
+        } else if report.cancelled {
+            message = "「\(name)」已安全停止"
+            tone = .information
+        } else if report.isSuccess && report.notices.isEmpty {
+            message = report.runSummary?.successMessage(planName: name) ?? "「\(name)」本轮运行已结束"
+            tone = .success
+        } else {
+            message = "「\(name)」\(report.notices.isEmpty ? "有任务未完成" : "有结果需要确认")，请查看运行记录"
+            tone = report.failedSteps > 0 ? .error : .warning
+        }
+        showFeedback(message, tone: tone, style: runID == nil ? nil : .toast, action: runID.map(ApplicationFeedback.Action.activity))
+    }
+
+    private func remindApplicationUpdateIfNeeded() {
+        guard !isApplicationUpdateWindowVisible, applicationUpdateNotice == nil else { return }
+        switch applicationUpdateState {
+        case let .available(release):
+            showFeedback("AutoMAA v\(release.version) 可用", action: .applicationUpdate)
+        case let .ready(prepared):
+            showFeedback("AutoMAA v\(prepared.release.version) 已准备好，可重启安装", action: .applicationUpdate)
+        default: break
+        }
     }
 
     private static var currentArchitecture: String {

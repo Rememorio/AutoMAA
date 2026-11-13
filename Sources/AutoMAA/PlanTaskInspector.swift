@@ -643,11 +643,8 @@ struct FightStageEditorSheet: View {
                         saveError = "运行结束后可保存。"
                         return
                     }
-                    if model.setFightRecoveryStage(normalizedStage, clientID: context.clientID, accountID: context.accountID) {
-                        dismiss()
-                    } else {
-                        saveError = model.feedback.notice?.message ?? "常规目标未能保存，请重试。"
-                    }
+                    saveError = model.saveFightRecoveryStage(normalizedStage, clientID: context.clientID, accountID: context.accountID)
+                    if saveError == nil { dismiss() }
                 } label: {
                     Text("保存").frame(minWidth: 56)
                 }

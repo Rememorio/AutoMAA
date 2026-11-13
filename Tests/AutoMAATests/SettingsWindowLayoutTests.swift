@@ -4,15 +4,6 @@ import Testing
 
 @Suite("Settings window layout")
 struct SettingsWindowLayoutTests {
-    @Test("feedback adds its own space without reducing the settings page viewport", arguments: [CGFloat(180), 300, 520])
-    func feedbackPreservesContent(page: CGFloat) {
-        let before = SettingsWindowLayout.contentHeight(page: page, feedback: 0)
-        let after = SettingsWindowLayout.contentHeight(page: page, feedback: 48)
-        #expect(after - before == 48)
-        #expect(after - 48 >= page)
-        #expect(SettingsWindowLayout.contentHeight(page: page, feedback: 0) == before)
-    }
-
     @Test("switching pages preserves width and toolbar position")
     func stableToolbar() {
         let current = NSRect(x: 200, y: 300, width: 560, height: 440)

@@ -35,7 +35,7 @@ struct MAAEnvironmentTests {
         model.configuration.cliPath = root.appending(path: "missing-maa").path
         model.refreshMAAStatus()
         #expect(model.maaVersionSummary.contains("未找到"))
-        #expect(model.feedback.notice == nil)
+        #expect(model.feedback.notices.isEmpty)
         #expect(!model.isCheckingMAAEnvironment)
     }
 
@@ -84,7 +84,7 @@ struct MAAEnvironmentTests {
         try await waitUntil { await checker.returned.contains(0) }
         await Task.yield()
         #expect(model.maaVersionSummary == "当前环境")
-        #expect(model.feedback.notice?.message == nil)
+        #expect(model.feedback.notices.isEmpty)
         #expect(!model.isCheckingMAAEnvironment)
     }
 

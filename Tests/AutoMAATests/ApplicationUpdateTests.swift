@@ -133,6 +133,95 @@ private actor StubSoftwareUpdateService: SoftwareUpdateServing {
 
 @Suite("Application updates")
 struct ApplicationUpdateTests {
+    @Test("opening the update window preserves workspace and settings context")
+    @MainActor
+    func independentWindowNavigation() async throws {
+        let fixture = try makeFixture(automaticallyDownloads: false)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        fixture.model.selection = .clients
+        fixture.model.showSettings(.environment)
+        fixture.model.isApplicationUpdateWindowVisible = true
+        fixture.model.openApplicationUpdate()
+        try await waitUntil { !fixture.model.applicationUpdateState.isBusy }
+        #expect(fixture.model.selection == .clients)
+        #expect(fixture.model.settingsSection == .environment)
+        #expect(await fixture.service.counts().checks == 1)
+        #expect(fixture.model.feedback.notices.isEmpty)
+        fixture.model.openApplicationUpdate()
+        #expect(await fixture.service.counts().checks == 1)
+    }
+
+    @Test("closing and reopening update presentation preserves a single ongoing download")
+    @MainActor
+    func windowLifetimeDoesNotCancelDownload() async throws {
+        let fixture = try makeFixture(automaticallyDownloads: false)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        fixture.model.isApplicationUpdateWindowVisible = true
+        fixture.model.openApplicationUpdate()
+        try await waitUntil { !fixture.model.applicationUpdateState.isBusy }
+        await fixture.service.delay(downloads: true)
+        fixture.model.downloadApplicationUpdate(fixture.service.release)
+        try await waitUntil { fixture.model.applicationUpdateProgress != nil }
+        fixture.model.isApplicationUpdateWindowVisible = false
+        await Task.yield()
+        fixture.model.openApplicationUpdate()
+        #expect(fixture.model.applicationUpdateState.isBusy)
+        #expect(await fixture.service.counts().checks == 1)
+        #expect(await fixture.service.counts().prepares == 1)
+        fixture.model.cancelApplicationUpdate()
+        try await waitUntil { !fixture.model.applicationUpdateState.isBusy }
+        #expect(fixture.model.applicationUpdateNotice?.contains("下载已取消") == true)
+    }
+
+    @Test("reopening a failed update preserves the error until an explicit retry")
+    @MainActor
+    func reopeningPreservesFailure() async throws {
+        let fixture = try makeFixture(automaticallyDownloads: false)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        await fixture.service.checkResult(hasUpdate: false, fails: true)
+        fixture.model.checkForApplicationUpdate()
+        try await waitUntil { !fixture.model.applicationUpdateState.isBusy }
+        fixture.model.openApplicationUpdate()
+        if case .failed = fixture.model.applicationUpdateState {} else { Issue.record("错误应留在更新窗口") }
+        #expect(await fixture.service.counts().checks == 1)
+        fixture.model.checkForApplicationUpdate()
+        try await waitUntil { !fixture.model.applicationUpdateState.isBusy }
+        #expect(await fixture.service.counts().checks == 2)
+    }
+
+    @Test("unattended update availability is discoverable from the workspace without changing settings")
+    @MainActor
+    func availabilityReminderHasOwner() async throws {
+        let fixture = try makeFixture(automaticallyDownloads: true)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        fixture.model.showSettings(.environment)
+        fixture.model.checkForApplicationUpdate()
+        try await waitUntil { !fixture.model.applicationUpdateState.isBusy }
+        let notice = try #require(fixture.model.feedback.notice(for: .workspace, style: .toast))
+        #expect(notice.action == .applicationUpdate)
+        #expect(notice.message.contains("已准备好"))
+        #expect(fixture.model.feedback.notice(for: .settings(.environment), style: .toast) == nil)
+        #expect(fixture.model.settingsSection == .environment)
+    }
+
+    @Test("release notes failure leaves a release downloadable")
+    @MainActor
+    func releaseNotesFailureDoesNotBlockUpdate() async throws {
+        let fixture = try makeFixture(automaticallyDownloads: false)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        fixture.model.isApplicationUpdateWindowVisible = true
+        fixture.model.checkForApplicationUpdate()
+        try await waitUntil { !fixture.model.applicationUpdateState.isBusy }
+        do {
+            _ = try await fixture.model.loadReleaseNotes(for: .application(fixture.service.release.version.description))
+            Issue.record("Expected an isolated offline notes service")
+        } catch {}
+        fixture.model.downloadApplicationUpdate(fixture.service.release)
+        try await waitUntil { !fixture.model.applicationUpdateState.isBusy }
+        if case .ready = fixture.model.applicationUpdateState {} else { Issue.record("说明失败不应阻止更新") }
+        #expect(await fixture.service.counts().prepares == 1)
+    }
+
     @Test("termination confirmation also defers checks after empty cache restoration")
     @MainActor
     func terminationDefersCheckAfterRestoration() async throws {
@@ -286,6 +375,7 @@ struct ApplicationUpdateTests {
     func checkResultIsInline(fails: Bool) async throws {
         let fixture = try makeFixture(automaticallyDownloads: false)
         defer { try? FileManager.default.removeItem(at: fixture.root) }
+        fixture.model.isApplicationUpdateWindowVisible = true
         await fixture.service.checkResult(hasUpdate: false, fails: fails)
         fixture.model.checkForApplicationUpdate()
         try await waitUntil { !fixture.model.applicationUpdateState.isBusy }
@@ -296,7 +386,7 @@ struct ApplicationUpdateTests {
             if case .upToDate = fixture.model.applicationUpdateState {} else { Issue.record("应显示已是最新版本") }
             #expect(fixture.model.applicationUpdateCheckedAt != nil)
         }
-        #expect(fixture.model.feedback.notice == nil)
+        #expect(fixture.model.feedback.notices.isEmpty)
     }
 
     @Test("download progress clears on cancellation and ignores callbacks from an earlier attempt")
@@ -468,7 +558,7 @@ struct ApplicationUpdateTests {
         try await waitUntil { !fixture.model.applicationUpdateState.isBusy }
         if case .idle = fixture.model.applicationUpdateState {} else { Issue.record("检查取消后未回到空闲状态") }
         #expect(fixture.model.applicationUpdateNotice?.contains("已取消检查") == true)
-        #expect(fixture.model.feedback.notice == nil)
+        #expect(fixture.model.feedback.notices.isEmpty)
         #expect(await fixture.service.counts().prepares == 0)
     }
 
@@ -477,6 +567,7 @@ struct ApplicationUpdateTests {
     func cancelledDownloadStaysPaused(lateResult: Bool) async throws {
         let fixture = try makeFixture(automaticallyDownloads: true)
         defer { try? FileManager.default.removeItem(at: fixture.root) }
+        fixture.model.isApplicationUpdateWindowVisible = true
         await fixture.service.delay(downloads: true, lateResult: lateResult)
         fixture.model.checkForApplicationUpdate()
         try await waitUntil {
@@ -488,7 +579,7 @@ struct ApplicationUpdateTests {
         #expect(fixture.model.configuration.applicationUpdates.automaticallyDownloadsUpdates)
         if case .available = fixture.model.applicationUpdateState {} else { Issue.record("取消后没有保留可下载版本") }
         #expect(fixture.model.applicationUpdateNotice?.contains("下载已取消") == true)
-        #expect(fixture.model.feedback.notice == nil)
+        #expect(fixture.model.feedback.notices.isEmpty)
         // Finishing another job and reloading history must not undo an explicit cancellation.
         var lock: ProcessLock? = try ProcessLock(url: fixture.model.directories.lock)
         #expect(lock != nil)
@@ -530,6 +621,7 @@ struct ApplicationUpdateTests {
     func enabledAutomaticDownloadsPrepareRelease() async throws {
         let fixture = try makeFixture(automaticallyDownloads: true)
         defer { try? FileManager.default.removeItem(at: fixture.root) }
+        fixture.model.isApplicationUpdateWindowVisible = true
 
         fixture.model.checkForApplicationUpdate()
         try await waitUntil {
@@ -540,7 +632,7 @@ struct ApplicationUpdateTests {
         let counts = await fixture.service.counts()
         #expect(counts.checks == 1)
         #expect(counts.prepares == 1)
-        #expect(fixture.model.feedback.notice == nil)
+        #expect(fixture.model.feedback.notices.isEmpty)
         #expect(fixture.model.applicationUpdateNotice == nil)
     }
 

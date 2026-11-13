@@ -68,7 +68,7 @@ struct ContextNavigationTests {
         #expect(model.activityNavigationRequest == nil)
         #expect(model.activitySearch == "已有条件")
         #expect(model.activityFilter == .attention)
-        #expect(model.feedback.notice?.message.contains("记录已被清除") == true)
+        #expect(model.feedback.notice(for: .workspace, style: .toast)?.message.contains("记录已被清除") == true)
     }
 
     @Test("readiness repairs target the owning settings, client or account without changing plan scope")

@@ -14,16 +14,9 @@ struct RootView: View {
                 .background(.regularMaterial)
         } content: {
             detail
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    if let error = model.configurationSaveError {
-                        ConfigurationSaveFeedback(error: error) { model.saveNow() }
-                    } else {
-                        ApplicationFeedbackRegion(center: model.feedback, window: .workspace)
-                    }
-                }
+                .applicationFeedback(model, destination: .workspace)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(ApplicationWindowContext(feedback: model.feedback, destination: .workspace).frame(width: 0, height: 0))
         .focusedSceneValue(\.workspaceActive, true)
         .focusedSceneValue(\.workspaceChromeController, chrome)
         .sheet(item: $model.entityEditor) { request in

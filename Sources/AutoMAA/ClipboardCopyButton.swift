@@ -4,11 +4,9 @@ import SwiftUI
 /// Copy actions name their content and acknowledge the result without changing their layout footprint.
 struct ClipboardCopyButton: View {
     let subject: String
-    let feedback: ApplicationFeedbackCenter
     let text: () -> String
     @State private var didCopy: Bool?
     @State private var attempt: UUID?
-    @State private var failureNoticeID: UUID?
 
     var body: some View {
         Button(action: copy) {
@@ -31,13 +29,6 @@ struct ClipboardCopyButton: View {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         didCopy = pasteboard.setString(text(), forType: .string)
-        if didCopy == false {
-            feedback.post("复制\(subject)失败，请重试。", tone: .error)
-            failureNoticeID = feedback.notice?.id
-        } else if let failureNoticeID {
-            feedback.dismiss(id: failureNoticeID)
-            self.failureNoticeID = nil
-        }
         attempt = UUID()
     }
 
