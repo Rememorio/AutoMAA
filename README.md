@@ -12,13 +12,7 @@
 
 **[下载 AutoMAA](https://github.com/Rememorio/AutoMAA/releases/latest) · [首次配置](https://rememorio.github.io/AutoMAA/guide/getting-started) · [使用文档](https://rememorio.github.io/AutoMAA/)**
 
-<img src="./docs/assets/screenshots/overview-light.webp" width="940" alt="AutoMAA 今日总览，集中查看当前方案、本轮结果、今日轮数和最近运行">
-
-<sub>AutoMAA v0.17.0 今日总览</sub>
-
 </div>
-
-> 本文与文档站介绍 v0.17.0。对应版本说明见[正式版文档](https://github.com/Rememorio/AutoMAA/tree/v0.17.0/docs)。
 
 AutoMAA 是原生 macOS 的 [MAA](https://github.com/MaaAssistantArknights/MaaAssistantArknights) 工作流编排器。把客户端、账号和任务配置好后，它会依次启动游戏、执行日常、关闭客户端，再处理下一项；画面识别和游戏操作由 `maa-cli` 与 MaaCore 完成。
 
@@ -31,8 +25,6 @@ AutoMAA 是原生 macOS 的 [MAA](https://github.com/MaaAssistantArknights/MaaAs
 
 支持[理智作战、公开招募、基建、信用购物和奖励领取](https://rememorio.github.io/AutoMAA/tasks/)。任务可使用 MAA 推荐参数，也可在界面中自定义；基建提供仅收菜、完整换班和自定义排班。
 
-当前配置协议为 schema v7，现有 v7 配置可继续使用；schema v6 及更早配置加载时先备份再恢复空配置，需要重新设置方案与定时，见[配置版本说明](https://rememorio.github.io/AutoMAA/reference/configuration#配置版本不兼容时)。
-
 ## 使用前确认
 
 - **Apple Silicon Mac，macOS 14 或更高版本。**
@@ -42,7 +34,7 @@ AutoMAA 是原生 macOS 的 [MAA](https://github.com/MaaAssistantArknights/MaaAs
 
 官服、Bilibili、繁中服和韩服支持多账号切换；韩服需要 MaaCore v6.16.8 或更高版本。国际服、日服使用游戏当前已登录的单个账号。具体配置见[首次配置](https://rememorio.github.io/AutoMAA/guide/getting-started#添加账号)。
 
-AutoMAA 仍处于 `0.x` 阶段，首次运行请有人值守。它不保存游戏密码，也不处理验证码、协议确认或游戏包体更新；遇到需要人工处理的情况会停止或跳过对应客户端。定时运行需要用户保持登录、Mac 唤醒，详见[定时条件](https://rememorio.github.io/AutoMAA/guide/scheduling)。
+首次运行请有人值守。AutoMAA 不保存游戏密码，也不处理验证码、协议确认或游戏包体更新；遇到需要人工处理的情况会停止或跳过对应客户端。定时运行需要用户保持登录、Mac 唤醒，详见[定时条件](https://rememorio.github.io/AutoMAA/guide/scheduling)。
 
 ## 开始使用
 
