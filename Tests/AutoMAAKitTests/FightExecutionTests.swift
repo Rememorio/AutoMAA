@@ -455,7 +455,8 @@ private actor FightTestCommands: CommandRunning {
     }
 
     func run(executable: String, arguments: [String], environment: [String: String], timeout: TimeInterval,
-             observeCancellation: Bool, startupScreenshotPolicy: StartupScreenshotPolicy?) async throws -> CommandResult {
+             observeCancellation: Bool, startupScreenshotPolicy: StartupScreenshotPolicy?,
+             startupUpdateTimeout: TimeInterval?) async throws -> CommandResult {
         let isStartup = try isStartupTask(arguments: arguments, environment: environment)
         if isStartup, blockStateSave {
             try FileManager.default.removeItem(at: directories.executionState)

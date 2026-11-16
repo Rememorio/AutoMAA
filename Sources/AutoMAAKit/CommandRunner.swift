@@ -15,6 +15,8 @@ public struct CommandResult: Sendable {
     var diagnosticDetails: String?
     var startupNavigationFailed = false
     var startupWaitingForUpdate = false
+    var startupUpdateWaitExtended = false
+    var effectiveTimeout: TimeInterval?
     var downloadStalled = false
 
     public init(
@@ -59,7 +61,8 @@ protocol CommandRunning: Sendable {
         environment: [String: String],
         timeout: TimeInterval,
         observeCancellation: Bool,
-        startupScreenshotPolicy: StartupScreenshotPolicy?
+        startupScreenshotPolicy: StartupScreenshotPolicy?,
+        startupUpdateTimeout: TimeInterval?
     ) async throws -> CommandResult
 }
 
@@ -83,7 +86,8 @@ public struct CommandRunner: CommandRunning, Sendable {
         environment: [String: String],
         timeout: TimeInterval,
         observeCancellation: Bool,
-        startupScreenshotPolicy: StartupScreenshotPolicy?
+        startupScreenshotPolicy: StartupScreenshotPolicy?,
+        startupUpdateTimeout: TimeInterval? = nil
     ) async throws -> CommandResult {
         guard FileManager.default.isExecutableFile(atPath: executable) else {
             throw CommandRunnerError.executableNotFound(executable)
@@ -135,13 +139,25 @@ public struct CommandRunner: CommandRunning, Sendable {
             // Foundation creates a child process group on macOS. Never signal our own group.
             let signalTarget = getpgid(processID) == processID && processID != getpgrp()
                 ? -processID : processID
-            let deadline = ContinuousClock.now.advanced(by: .seconds(timeout))
+            let startedAt = ContinuousClock.now
+            var effectiveTimeout = timeout
+            var deadline = startedAt.advanced(by: .seconds(timeout))
             var timedOut = false
             var cancelled = false
             var stopReason: CommandStopReason?
             while process.isRunning,
-                  ContinuousClock.now < deadline,
                   (!observeCancellation || !Task.isCancelled) {
+                if ContinuousClock.now >= deadline {
+                    guard effectiveTimeout == timeout,
+                          startupScreenshotPolicy != nil,
+                          let startupUpdateTimeout, startupUpdateTimeout > timeout,
+                          let root = environment["MAA_STATE_DIR"],
+                          StartupUpdateObservation.isWaitingForDownload(MAACoreLog.read(from: URL(filePath: root)))
+                    else { break }
+                    // Extend this command once, without interrupting the game's download.
+                    effectiveTimeout = startupUpdateTimeout
+                    deadline = startedAt.advanced(by: .seconds(startupUpdateTimeout))
+                }
                 if screenshotMonitor != nil {
                     let lines = (((try? stdoutTail?.readLines()) ?? []) + ((try? stderrTail?.readLines()) ?? []))
                         .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -186,7 +202,7 @@ public struct CommandRunner: CommandRunning, Sendable {
 
             let stdout = String(data: (try? Data(contentsOf: stdoutURL)) ?? Data(), encoding: .utf8) ?? ""
             let stderr = String(data: (try? Data(contentsOf: stderrURL)) ?? Data(), encoding: .utf8) ?? ""
-            return CommandResult(
+            var result = CommandResult(
                 exitCode: process.isRunning ? -Int32(SIGKILL) : process.terminationStatus,
                 standardOutput: stdout.trimmingCharacters(in: .whitespacesAndNewlines),
                 standardError: stderr.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -194,6 +210,9 @@ public struct CommandRunner: CommandRunning, Sendable {
                 cancelled: cancelled,
                 stopReason: stopReason
             )
+            result.startupUpdateWaitExtended = effectiveTimeout > timeout
+            result.effectiveTimeout = effectiveTimeout
+            return result
         }
         if observeCancellation {
             return try await withTaskCancellationHandler(

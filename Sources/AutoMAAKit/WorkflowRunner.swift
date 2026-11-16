@@ -96,6 +96,7 @@ private struct ClientShutdownState {
 
 struct MAACommandTimeoutPolicy: Sendable, Equatable {
     let startup: TimeInterval
+    let startupUpdate: TimeInterval
     let shutdown: TimeInterval
     let fight: TimeInterval
     let recruitBase: TimeInterval
@@ -109,6 +110,7 @@ struct MAACommandTimeoutPolicy: Sendable, Equatable {
 
     static let standard = MAACommandTimeoutPolicy(
         startup: 120,
+        startupUpdate: 10 * 60,
         shutdown: 60,
         fight: 7_200,
         recruitBase: 180,
@@ -1683,7 +1685,8 @@ public final class WorkflowRunner {
                 arguments: arguments,
                 timeout: timeoutPolicy.startup,
                 context: "\(clientText(client)) · \(accountText(account)) · 账号准备 · 第 \(attempt) 次",
-                startupScreenshotPolicy: .standard
+                startupScreenshotPolicy: .standard,
+                startupUpdateTimeout: timeoutPolicy.startupUpdate
             )
             guard !lastResult.cancelled, !Task.isCancelled else { throw RuntimeError.cancelled }
             let detail = shortOutput(lastResult, sensitiveValues: [selector].compactMap { $0 })
@@ -1726,7 +1729,8 @@ public final class WorkflowRunner {
                     message: message,
                     account: account,
                     details: lastResult.timedOut
-                        ? timeoutDetails(timeout: timeoutPolicy.startup, output: commandFailureDetails(lastResult))
+                        ? timeoutDetails(timeout: lastResult.effectiveTimeout ?? timeoutPolicy.startup,
+                                         output: commandFailureDetails(lastResult))
                         : commandFailureDetails(lastResult)
                 ) {
                     didRestartClient = true
@@ -2672,7 +2676,8 @@ public final class WorkflowRunner {
         arguments: [String],
         timeout: TimeInterval,
         context: String,
-        startupScreenshotPolicy: StartupScreenshotPolicy? = nil
+        startupScreenshotPolicy: StartupScreenshotPolicy? = nil,
+        startupUpdateTimeout: TimeInterval? = nil
     ) async -> CommandResult {
         let root = FileManager.default.temporaryDirectory.appending(path: "automaa-diagnostics-\(UUID())", directoryHint: .isDirectory)
         var preparationFailure: String?
@@ -2685,7 +2690,8 @@ public final class WorkflowRunner {
         let start = ContinuousClock.now
         var result = await runCommand(executable: executable, arguments: arguments, timeout: timeout,
             environment: preparationFailure == nil ? ["MAA_STATE_DIR": root.path] : [:],
-            startupScreenshotPolicy: startupScreenshotPolicy, logContext: context)
+            startupScreenshotPolicy: startupScreenshotPolicy,
+            startupUpdateTimeout: preparationFailure == nil ? startupUpdateTimeout : nil, logContext: context)
         let duration = start.duration(to: .now).components
         let elapsed = Double(duration.seconds) + Double(duration.attoseconds) / 1e18
         let startupFailed = startupScreenshotPolicy != nil
@@ -2718,7 +2724,7 @@ public final class WorkflowRunner {
                 else if result.exitCode != 0 { "命令退出码：\(result.exitCode)" }
                 else if startupFailed { "账号准备未就绪" }
                 else { "诊断采集不可用" }
-            let metadata = "\(reason) · 耗时 \(String(format: "%.1f", elapsed)) 秒 · 上限 \(Int(timeout)) 秒"
+            let metadata = "\(reason) · 耗时 \(String(format: "%.1f", elapsed)) 秒 · 上限 \(Int(result.effectiveTimeout ?? timeout)) 秒"
             result.diagnosticDetails = metadata + "\n" + summary
             if let currentRunID {
                 diagnosticLogStore.append(
@@ -2755,6 +2761,7 @@ public final class WorkflowRunner {
         configurationDirectory: URL? = nil,
         ignoreCancellation: Bool = false,
         startupScreenshotPolicy: StartupScreenshotPolicy? = nil,
+        startupUpdateTimeout: TimeInterval? = nil,
         logContext: String? = nil
     ) async -> CommandResult {
         let command = arguments.first(where: { !$0.hasPrefix("-") }) ?? URL(filePath: executable).lastPathComponent
@@ -2768,7 +2775,8 @@ public final class WorkflowRunner {
                 environment: commandEnvironment,
                 timeout: timeout,
                 observeCancellation: !ignoreCancellation,
-                startupScreenshotPolicy: startupScreenshotPolicy
+                startupScreenshotPolicy: startupScreenshotPolicy,
+                startupUpdateTimeout: startupUpdateTimeout
             )
         } catch {
             result = CommandResult(

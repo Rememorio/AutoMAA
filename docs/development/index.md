@@ -59,6 +59,8 @@ AutoMAA 提供已建模的日常任务参数；maa-cli 的 `SwitchTheme` 和 `Op
 
 `MAACoreLog` 提供有界的本次命令日志快照，`StartupNavigationObservation` 独立解析原始结构化回调。只有日志完整，且顺序确认 StartUp 与 AccountSwitchTask 开始、Settings 操作完成、返回账号选择页的 ProcessTask 失败、账号切换与任务链失败时，才允许一次受控重启；取消、账号匹配错误和明确人工处理提示不进入该恢复路径。日志截断、缺失、回调矛盾或进入其他界面时保持保守处理。恢复与连接异常、非作战超时共用每账号一次的额度，不改变任务成功和断点依据。导航与账号匹配的阶段划分已对照 MaaCore v6.18.0 与 v6.19.0 的 [AccountSwitchTask](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/v6.19.0/src/MaaCore/Task/Miscellaneous/AccountSwitchTask.cpp)；v6.19.0 调整了设置页导航资源，未改变这里使用的切号回调结构。
 
+账号准备到达普通时限时，`CommandRunner` 使用 `StartupUpdateObservation` 检查本次隔离日志。当前完整回调仍为 `StartUp / GameStartUpdateOCR` 时，原命令的时限从启动时刻起一次性延长至 10 分钟，后续回调不重置期限。取消与截图失败监测持续生效。扩展等待耗尽后交由人工确认，最终日志不完整也不能因此重新启动客户端。诊断中的时限来自实际采用的命令预算。
+
 作战类型与显示名称分开保存。`ProcessTask` 开始处理 `EndOfAction` 或 `EndOfActionAnnihilation` 时记录结算类型，再与对应的掉落结果关联；有效周奖励进度也能证明是剿灭，不要求达到上限。Core 先运行掉落插件，再转发 `SubTaskCompleted`，因此不能等待完成事件再判断前面的掉落。未知类型、无效编号和不完整结果不会覆盖常规关卡记忆。上游依据见 [StageDropsTaskPlugin](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/v6.18.0/src/MaaCore/Task/Fight/StageDropsTaskPlugin.cpp)、[AbstractTask 回调顺序](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/v6.18.0/src/MaaCore/Task/AbstractTask.cpp#L123-L151)、[StageNavigationTask](https://github.com/MaaAssistantArknights/MaaAssistantArknights/blob/v6.18.0/src/MaaCore/Task/Fight/StageNavigationTask.cpp) 和 [maa-cli 作战摘要](https://github.com/MaaAssistantArknights/maa-cli/blob/v0.7.5/crates/maa-cli/src/run/callback/summary.rs)。对应行为使用隔离回调样例与工作流测试覆盖。
 
 已有目标时，自动换关只接受作战前的 `StageNavigationTask` 失败，或已点击上次作战入口后的导航失败；进入 `FightBegin`、发现战斗画面、超时或掉线都会阻止自动换关。选关与各次尝试在 `WorkflowRunner` 中串行执行，已选兜底在派发前持久化。兜底结果与原目标分开保存，不能更新恢复记录；所有服务器共享这套判断。

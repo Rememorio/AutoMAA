@@ -90,6 +90,7 @@ private actor StubCommandRunner: CommandRunning {
         let isStartup: Bool
         let timeout: TimeInterval
         let startupScreenshotPolicy: StartupScreenshotPolicy?
+        let startupUpdateTimeout: TimeInterval?
     }
 
     private var startupResults: [CommandResult]
@@ -107,7 +108,8 @@ private actor StubCommandRunner: CommandRunning {
         environment: [String: String],
         timeout: TimeInterval,
         observeCancellation: Bool,
-        startupScreenshotPolicy: StartupScreenshotPolicy?
+        startupScreenshotPolicy: StartupScreenshotPolicy?,
+        startupUpdateTimeout: TimeInterval?
     ) async throws -> CommandResult {
         if arguments.first == "run", arguments.dropFirst().first == FightStageInspection.taskName {
             try writeInspectionFixture(.unknown, environment: environment)
@@ -115,7 +117,8 @@ private actor StubCommandRunner: CommandRunning {
         }
         let isStartup = try isStartupTask(arguments: arguments, environment: environment)
         recordedCalls.append(Call(arguments: arguments, isStartup: isStartup, timeout: timeout,
-                                  startupScreenshotPolicy: startupScreenshotPolicy))
+                                  startupScreenshotPolicy: startupScreenshotPolicy,
+                                  startupUpdateTimeout: startupUpdateTimeout))
         if isStartup {
             XCTAssertTrue(arguments.contains("--no-auto-reconnect"))
             return startupResults.isEmpty ? Self.success : startupResults.removeFirst()
@@ -154,12 +157,14 @@ private actor MaintenanceDeadlineCommandRunner: CommandRunning {
     private(set) var timeLimits: [TimeInterval] = []
 
     func run(executable: String, arguments: [String], environment: [String: String], timeout: TimeInterval,
-             observeCancellation: Bool, startupScreenshotPolicy: StartupScreenshotPolicy?) async throws -> CommandResult {
+             observeCancellation: Bool, startupScreenshotPolicy: StartupScreenshotPolicy?,
+             startupUpdateTimeout: TimeInterval?) async throws -> CommandResult {
         guard arguments.first == "hot-update" else {
             return try await CommandRunner().run(executable: executable, arguments: arguments,
                                                  environment: environment, timeout: timeout,
                                                  observeCancellation: observeCancellation,
-                                                 startupScreenshotPolicy: startupScreenshotPolicy)
+                                                 startupScreenshotPolicy: startupScreenshotPolicy,
+                                                 startupUpdateTimeout: startupUpdateTimeout)
         }
         timeLimits.append(timeout)
         if timeLimits.count == 1 {
@@ -3514,7 +3519,9 @@ final class AutoMAAKitTests: XCTestCase {
             let tasks = await commands.calls(for: "run")
             XCTAssertEqual(report.isSuccess, !repeated)
             XCTAssertTrue(startups.allSatisfy { $0.startupScreenshotPolicy == .standard })
+            XCTAssertTrue(startups.allSatisfy { $0.timeout == 120 && $0.startupUpdateTimeout == 600 })
             XCTAssertTrue(tasks.allSatisfy { $0.startupScreenshotPolicy == nil })
+            XCTAssertTrue(tasks.allSatisfy { $0.startupUpdateTimeout == nil })
             XCTAssertEqual(runtime.events.count { $0.message.contains("正在重启客户端") }, 1)
             XCTAssertTrue(runtime.events.contains { $0.message.contains("连续截图失败，已提前结束账号准备") })
             XCTAssertFalse(runtime.events.contains { $0.message.contains("准备暂未完成") })

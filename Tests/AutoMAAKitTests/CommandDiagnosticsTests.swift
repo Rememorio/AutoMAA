@@ -4,17 +4,24 @@ import Testing
 
 @Suite("Command failure diagnostics")
 struct CommandDiagnosticsTests {
-    @Test("a game resource update timeout skips the client without restarting or writing checkpoints",
-          arguments: [false, true])
+    @Test("an exhausted game update wait skips the client without restarting or writing checkpoints",
+          arguments: ["running", "stopped", "incomplete"])
     @MainActor
-    func updateTimeoutSkipsClient(stopped: Bool) async throws {
+    func updateTimeoutSkipsClient(ending: String) async throws {
         let fixture = try DiagnosticFixture(accountCount: 2)
         defer { fixture.remove() }
-        let timeout = CommandResult(exitCode: 9, standardOutput: "", standardError: "", timedOut: true)
+        var timeout = CommandResult(exitCode: 9, standardOutput: "", standardError: "", timedOut: true)
+        timeout.effectiveTimeout = 600
+        timeout.startupUpdateWaitExtended = true
+        let tail = switch ending {
+        case "stopped": "Assistant::append_callback | TaskChainStopped {\"taskchain\":\"StartUp\",\"taskid\":1}\n"
+        case "incomplete": "Assistant::append_callback | SubTaskStart {partial"
+        default: ""
+        }
         let log = callback("SubTaskStart", task: "GameStartUpdateOCR", chain: "StartUp")
             + callback("SubTaskCompleted", task: "GameStartUpdateOCR", chain: "StartUp")
             + callback("SubTaskStart", task: "GameStartUpdateOCR", chain: "StartUp")
-            + (stopped ? "Assistant::append_callback | TaskChainStopped {\"taskchain\":\"StartUp\",\"taskid\":1}\n" : "")
+            + tail
         let commands = DiagnosticCommands(startups: [.init(result: timeout, log: log), .init(result: timeout, log: log)])
         let report = await fixture.run(commands)
         #expect(!report.isSuccess)
@@ -22,7 +29,9 @@ struct CommandDiagnosticsTests {
         #expect(await commands.startupCount == 1)
         #expect(await commands.taskCount == 0)
         #expect(!fixture.runtime.entries.contains { $0.message.contains("正在重启") })
-        #expect(report.attentionMessages.contains { $0.contains("下载或解压更新数据") })
+        let guidance = ending == "incomplete" ? "游戏更新等待已超时" : "下载或解压更新数据"
+        #expect(report.attentionMessages.contains { $0.contains(guidance) })
+        #expect(fixture.runtime.entries.contains { $0.details?.contains("上限 600 秒") == true })
         #expect(!fixture.runtime.running)
         #expect(!ProcessLock.isHeld(at: fixture.directories.lock))
         #expect(ExecutionStateStore(directories: fixture.directories).loadSnapshot().completedSteps.isEmpty)
@@ -386,7 +395,8 @@ private actor DiagnosticCommands: CommandRunning {
     }
 
     func run(executable: String, arguments: [String], environment: [String: String], timeout: TimeInterval,
-             observeCancellation: Bool, startupScreenshotPolicy: StartupScreenshotPolicy?) async throws -> CommandResult {
+             observeCancellation: Bool, startupScreenshotPolicy: StartupScreenshotPolicy?,
+             startupUpdateTimeout: TimeInterval?) async throws -> CommandResult {
         if arguments.first == "dir" {
             return .init(exitCode: 1, standardOutput: "", standardError: "no test installation", timedOut: false)
         }

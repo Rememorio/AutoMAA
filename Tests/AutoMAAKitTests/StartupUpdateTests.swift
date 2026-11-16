@@ -4,6 +4,140 @@ import Testing
 
 @Suite("Startup resource update evidence")
 struct StartupUpdateTests {
+    @Test("a current game update keeps the original startup process alive beyond its normal deadline")
+    func downloadContinuesPastStartupDeadline() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "automaa-startup-download-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = root.appending(path: "debug")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data((callback("SubTaskStart", task: "GameStartUpdateOCR") + "\n").utf8)
+            .write(to: directory.appending(path: "asst.log"))
+        let result = try await CommandRunner().run(executable: "/bin/sh",
+            arguments: ["-c", "echo startup; sleep 1.8; echo ready"],
+            environment: ["MAA_STATE_DIR": root.path], timeout: 0.9,
+            observeCancellation: true, startupScreenshotPolicy: .standard, startupUpdateTimeout: 3)
+        #expect(result.exitCode == 0)
+        #expect(!result.timedOut)
+        #expect(result.standardOutput == "startup\nready")
+        #expect(result.effectiveTimeout == 3)
+        #expect(result.startupUpdateWaitExtended)
+    }
+
+    @Test("ordinary startup limits survive missing, stale, unrelated and incomplete download evidence",
+          arguments: ["missing", "text", "stale", "otherChain", "incomplete", "backup", "unmonitored"])
+    func onlyCurrentDownloadCanExtendStartup(evidence: String) async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "automaa-startup-limit-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = root.appending(path: "debug")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let update = callback("SubTaskStart", task: "GameStartUpdateOCR")
+        let text = switch evidence {
+        case "missing": ""
+        case "text": "[INF] GameStartUpdateOCR MB\n"
+        case "stale": update + "\n" + callback("SubTaskStart", task: "UnknownPopup") + "\n"
+        case "otherChain": update.replacingOccurrences(of: "StartUp\"", with: "Mall\"") + "\n"
+        case "incomplete": update + "\nAssistant::append_callback | SubTaskStart {partial"
+        default: update + "\n"
+        }
+        try Data(text.utf8).write(to: directory.appending(path: evidence == "backup" ? "asst.bak.log" : "asst.log"))
+        let result = try await CommandRunner().run(executable: "/bin/sh",
+            arguments: ["-c", "sleep 3; echo ready"], environment: ["MAA_STATE_DIR": root.path], timeout: 0.6,
+            observeCancellation: true, startupScreenshotPolicy: evidence == "unmonitored" ? nil : .standard,
+            startupUpdateTimeout: 4)
+        #expect(result.timedOut)
+        #expect(!result.cancelled)
+        #expect(result.effectiveTimeout == 0.6)
+        #expect(!result.startupUpdateWaitExtended)
+        #expect(result.standardOutput.isEmpty)
+    }
+
+    @Test("repeated download callbacks cannot renew the extended hard deadline")
+    func repeatedUpdatesKeepOneDeadline() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "automaa-startup-hard-limit-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = root.appending(path: "debug")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let line = callback("SubTaskCompleted", task: "GameStartUpdateOCR")
+        let log = directory.appending(path: "asst.log")
+        try Data((line + "\n").utf8).write(to: log)
+        let script = "for i in 1 2 3 4 5 6 7 8 9 10; do printf '%s\\n' \"$2\" >> \"$1\"; sleep 0.3; done; echo ready"
+        let result = try await CommandRunner().run(executable: "/bin/sh",
+            arguments: ["-c", script, "test", log.path, line], environment: ["MAA_STATE_DIR": root.path], timeout: 0.6,
+            observeCancellation: true, startupScreenshotPolicy: .standard, startupUpdateTimeout: 1.2)
+        #expect(result.timedOut)
+        #expect(!result.cancelled)
+        #expect(result.effectiveTimeout == 1.2)
+        #expect(result.startupUpdateWaitExtended)
+        #expect(result.standardOutput.isEmpty)
+    }
+
+    @Test("safe cancellation still interrupts an extended game update")
+    func extendedDownloadCanBeCancelled() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "automaa-startup-cancel-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = root.appending(path: "debug")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data((callback("SubTaskStart", task: "GameStartUpdateOCR") + "\n").utf8)
+            .write(to: directory.appending(path: "asst.log"))
+        let marker = root.appending(path: "waiting")
+        let pidFile = root.appending(path: "child.pid")
+        let task = Task {
+            try await CommandRunner().run(executable: "/bin/sh",
+                arguments: ["-c", "sleep 1.2; sleep 30 & echo $! > \"$2\"; touch \"$1\"; wait",
+                            "test", marker.path, pidFile.path],
+                environment: ["MAA_STATE_DIR": root.path], timeout: 0.6, observeCancellation: true,
+                startupScreenshotPolicy: .standard, startupUpdateTimeout: 4)
+        }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while !FileManager.default.fileExists(atPath: marker.path), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        task.cancel()
+        let result = try await task.value
+        #expect(FileManager.default.fileExists(atPath: marker.path))
+        #expect(result.effectiveTimeout == 4)
+        #expect(result.cancelled)
+        #expect(!result.timedOut)
+        #expect(result.stopReason == nil)
+        let pid = try #require(Int32(String(contentsOf: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)))
+        #expect(kill(pid, 0) == -1)
+        #expect(errno == ESRCH)
+    }
+
+    @Test("persistent screenshot failures can stop an extended update before its hard deadline")
+    func extendedDownloadRetainsScreenshotProtection() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "automaa-startup-update-screenshots-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = root.appending(path: "debug")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data((callback("SubTaskStart", task: "GameStartUpdateOCR") + "\n").utf8)
+            .write(to: directory.appending(path: "asst.log"))
+        let script = "sleep 1.2; while :; do echo '[ERROR] ScreencapFailed' >&2; sleep 0.1; done"
+        let result = try await CommandRunner().run(executable: "/bin/sh", arguments: ["-c", script],
+            environment: ["MAA_STATE_DIR": root.path], timeout: 0.6, observeCancellation: true,
+            startupScreenshotPolicy: .init(minimumFailures: 3, minimumDuration: .milliseconds(300), maximumGap: .seconds(3)),
+            startupUpdateTimeout: 4)
+        #expect(result.effectiveTimeout == 4)
+        #expect(result.stopReason == .startupScreenshotFailure)
+        #expect(!result.timedOut)
+        #expect(!result.cancelled)
+    }
+
+    @Test("an exhausted update wait needs review when the final download evidence is no longer complete")
+    func extendedTimeoutNeedsReview() {
+        var result = CommandResult(exitCode: 9, standardOutput: "", standardError: "", timedOut: true)
+        result.startupUpdateWaitExtended = true
+        #expect(StartupFailureClassifier.commandOutcome(result: result, output: "")
+            == .needsIntervention(.init(scope: .client,
+                guidance: "游戏更新等待已超时，请手动确认游戏已进入主界面，再继续未完成任务")))
+        for output in ["GameOffline", "ScreencapFailed"] {
+            #expect(StartupFailureClassifier.commandOutcome(result: result, output: output) == .connectionLost)
+        }
+        result = CommandResult(exitCode: 9, standardOutput: "", standardError: "", timedOut: true, cancelled: true)
+        result.startupUpdateWaitExtended = true
+        #expect(StartupFailureClassifier.commandOutcome(result: result, output: "") == .failed)
+    }
+
     @Test("only the current startup download step identifies an unfinished resource update",
           arguments: ["GameStartUpdateOCR", "StartUp@GameStartUpdateOCR"])
     func currentDownload(task: String) {

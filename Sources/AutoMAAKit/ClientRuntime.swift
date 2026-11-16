@@ -22,7 +22,8 @@ public struct PortProbe: Sendable {
             guard try await connectionIsOpen(address, value: value, observeCancellation: observeCancellation) else { return .closed }
             let owners = try await commandRunner.run(executable: "/usr/sbin/lsof",
                 arguments: ["-nP", "-a", "-iTCP:\(address.port)", "-sTCP:LISTEN", "-Fp"],
-                environment: ["LC_ALL": "C"], timeout: 3, observeCancellation: observeCancellation, startupScreenshotPolicy: nil)
+                environment: ["LC_ALL": "C"], timeout: 3, observeCancellation: observeCancellation, startupScreenshotPolicy: nil,
+                startupUpdateTimeout: nil)
             if owners.cancelled { throw RuntimeError.cancelled }
             guard !owners.timedOut, owners.standardError.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   owners.exitCode == 0 || (owners.exitCode == 1 && owners.standardOutput.isEmpty) else {
@@ -52,7 +53,8 @@ public struct PortProbe: Sendable {
     private func connectionIsOpen(_ address: PortAddress, value: String, observeCancellation: Bool) async throws -> Bool {
         let result = try await commandRunner.run(executable: "/usr/bin/nc",
             arguments: ["-zv", "-G", "1", "-w", "1", address.host, address.port],
-            environment: ["LC_ALL": "C"], timeout: 3, observeCancellation: observeCancellation, startupScreenshotPolicy: nil)
+            environment: ["LC_ALL": "C"], timeout: 3, observeCancellation: observeCancellation, startupScreenshotPolicy: nil,
+            startupUpdateTimeout: nil)
         if result.cancelled { throw RuntimeError.cancelled }
         guard !result.timedOut else { throw RuntimeError.portProbeFailed(value) }
         if result.exitCode == 0 { return true }

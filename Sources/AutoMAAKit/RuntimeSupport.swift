@@ -106,6 +106,12 @@ enum StartupFailureClassifier {
         if let diagnosis = intervention, diagnosis.scope == .client {
             return .needsIntervention(diagnosis)
         }
+        if result.timedOut, result.startupUpdateWaitExtended {
+            return .needsIntervention(.init(
+                scope: .client,
+                guidance: "游戏更新等待已超时，请手动确认游戏已进入主界面，再继续未完成任务"
+            ))
+        }
         if result.timedOut {
             return .connectionLost
         }
