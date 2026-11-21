@@ -338,7 +338,7 @@ private actor OwnershipCommands: CommandRunning {
     init(runtime: OwnershipRuntime) { self.runtime = runtime }
     func run(executable: String, arguments: [String], environment: [String: String], timeout: TimeInterval,
              observeCancellation: Bool, startupScreenshotPolicy: StartupScreenshotPolicy?,
-             startupUpdateTimeout: TimeInterval?) async throws -> CommandResult {
+             startupUpdateWait: StartupUpdateWait?) async throws -> CommandResult {
         let command = arguments.first ?? ""
         commands.append(command)
         if command == "run" || command == "closedown" {
@@ -366,7 +366,7 @@ private actor ShutdownRaceCommands: CommandRunning {
 
     func run(executable: String, arguments: [String], environment: [String: String], timeout: TimeInterval,
              observeCancellation: Bool, startupScreenshotPolicy: StartupScreenshotPolicy?,
-             startupUpdateTimeout: TimeInterval?) async throws -> CommandResult {
+             startupUpdateWait: StartupUpdateWait?) async throws -> CommandResult {
         if executable == "/usr/sbin/lsof" {
             return .init(exitCode: outcome == .foreign ? 0 : 1,
                 standardOutput: outcome == .foreign ? "p61499\n" : "", standardError: "", timedOut: false)

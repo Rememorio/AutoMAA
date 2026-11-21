@@ -58,7 +58,9 @@ struct SidebarOperationStatus: View {
     }
 
     private var stage: String {
-        model.isCancellingRun ? "正在结束并清理" : model.activePhase.displayName
+        if model.isCancellingRun { return "正在结束并清理" }
+        if model.activePhase == .switchingAccount { return model.activeStatusMessage }
+        return model.activePhase.displayName
     }
 
     private var progress: Double? {

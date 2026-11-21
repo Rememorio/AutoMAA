@@ -98,7 +98,7 @@ private struct ShutdownTestCommands: CommandRunning {
 
     func run(executable: String, arguments: [String], environment: [String: String], timeout: TimeInterval,
              observeCancellation: Bool, startupScreenshotPolicy: StartupScreenshotPolicy?,
-             startupUpdateTimeout: TimeInterval?) async throws -> CommandResult {
+             startupUpdateWait: StartupUpdateWait?) async throws -> CommandResult {
         if arguments.first == "closedown" {
             await runtime.maaShutdown()
             return .init(exitCode: timeoutMAA ? 15 : 0, standardOutput: "", standardError: "", timedOut: timeoutMAA)

@@ -54,6 +54,11 @@ public enum CommandRunnerError: LocalizedError {
     }
 }
 
+struct StartupUpdateWait: Sendable {
+    let timeout: TimeInterval
+    let onExtension: @MainActor @Sendable () -> Void
+}
+
 protocol CommandRunning: Sendable {
     func run(
         executable: String,
@@ -62,7 +67,7 @@ protocol CommandRunning: Sendable {
         timeout: TimeInterval,
         observeCancellation: Bool,
         startupScreenshotPolicy: StartupScreenshotPolicy?,
-        startupUpdateTimeout: TimeInterval?
+        startupUpdateWait: StartupUpdateWait?
     ) async throws -> CommandResult
 }
 
@@ -87,7 +92,7 @@ public struct CommandRunner: CommandRunning, Sendable {
         timeout: TimeInterval,
         observeCancellation: Bool,
         startupScreenshotPolicy: StartupScreenshotPolicy?,
-        startupUpdateTimeout: TimeInterval? = nil
+        startupUpdateWait: StartupUpdateWait? = nil
     ) async throws -> CommandResult {
         guard FileManager.default.isExecutableFile(atPath: executable) else {
             throw CommandRunnerError.executableNotFound(executable)
@@ -150,13 +155,14 @@ public struct CommandRunner: CommandRunning, Sendable {
                 if ContinuousClock.now >= deadline {
                     guard effectiveTimeout == timeout,
                           startupScreenshotPolicy != nil,
-                          let startupUpdateTimeout, startupUpdateTimeout > timeout,
+                          let startupUpdateWait, startupUpdateWait.timeout > timeout,
                           let root = environment["MAA_STATE_DIR"],
                           StartupUpdateObservation.isWaitingForDownload(MAACoreLog.read(from: URL(filePath: root)))
                     else { break }
                     // Extend this command once, without interrupting the game's download.
-                    effectiveTimeout = startupUpdateTimeout
-                    deadline = startedAt.advanced(by: .seconds(startupUpdateTimeout))
+                    effectiveTimeout = startupUpdateWait.timeout
+                    deadline = startedAt.advanced(by: .seconds(effectiveTimeout))
+                    await startupUpdateWait.onExtension()
                 }
                 if screenshotMonitor != nil {
                     let lines = (((try? stdoutTail?.readLines()) ?? []) + ((try? stderrTail?.readLines()) ?? []))

@@ -137,7 +137,7 @@ private actor ProbeCommands: CommandRunning {
     init(_ replies: [CommandResult]) { self.replies = replies }
     func run(executable: String, arguments: [String], environment: [String: String], timeout: TimeInterval,
              observeCancellation: Bool, startupScreenshotPolicy: StartupScreenshotPolicy?,
-             startupUpdateTimeout: TimeInterval?) async throws -> CommandResult {
+             startupUpdateWait: StartupUpdateWait?) async throws -> CommandResult {
         executables.append(executable)
         cancellationModes.append(observeCancellation)
         guard !replies.isEmpty else { throw RuntimeError.portProbeFailed("test") }
@@ -178,13 +178,13 @@ private actor ClosingPortCommands: CommandRunning {
 
     func run(executable: String, arguments: [String], environment: [String: String], timeout: TimeInterval,
              observeCancellation: Bool, startupScreenshotPolicy: StartupScreenshotPolicy?,
-             startupUpdateTimeout: TimeInterval?) async throws -> CommandResult {
+             startupUpdateWait: StartupUpdateWait?) async throws -> CommandResult {
         if executable == "/usr/sbin/lsof", let descriptor {
             Darwin.close(descriptor)
             self.descriptor = nil
         }
         return try await CommandRunner().run(executable: executable, arguments: arguments, environment: environment,
             timeout: timeout, observeCancellation: observeCancellation, startupScreenshotPolicy: startupScreenshotPolicy,
-            startupUpdateTimeout: startupUpdateTimeout)
+            startupUpdateWait: startupUpdateWait)
     }
 }

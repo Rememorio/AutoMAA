@@ -1686,7 +1686,10 @@ public final class WorkflowRunner {
                 timeout: timeoutPolicy.startup,
                 context: "\(clientText(client)) · \(accountText(account)) · 账号准备 · 第 \(attempt) 次",
                 startupScreenshotPolicy: .standard,
-                startupUpdateTimeout: timeoutPolicy.startupUpdate
+                startupUpdateWait: .init(timeout: timeoutPolicy.startupUpdate) {
+                    self.emit(.switchingAccount, "正在等待游戏资源更新", 0, .info, client: client, account: account,
+                              details: "本次账号准备的总时限为 \(Int(self.timeoutPolicy.startupUpdate)) 秒。")
+                }
             )
             guard !lastResult.cancelled, !Task.isCancelled else { throw RuntimeError.cancelled }
             let detail = shortOutput(lastResult, sensitiveValues: [selector].compactMap { $0 })
@@ -2677,7 +2680,7 @@ public final class WorkflowRunner {
         timeout: TimeInterval,
         context: String,
         startupScreenshotPolicy: StartupScreenshotPolicy? = nil,
-        startupUpdateTimeout: TimeInterval? = nil
+        startupUpdateWait: StartupUpdateWait? = nil
     ) async -> CommandResult {
         let root = FileManager.default.temporaryDirectory.appending(path: "automaa-diagnostics-\(UUID())", directoryHint: .isDirectory)
         var preparationFailure: String?
@@ -2691,7 +2694,7 @@ public final class WorkflowRunner {
         var result = await runCommand(executable: executable, arguments: arguments, timeout: timeout,
             environment: preparationFailure == nil ? ["MAA_STATE_DIR": root.path] : [:],
             startupScreenshotPolicy: startupScreenshotPolicy,
-            startupUpdateTimeout: preparationFailure == nil ? startupUpdateTimeout : nil, logContext: context)
+            startupUpdateWait: preparationFailure == nil ? startupUpdateWait : nil, logContext: context)
         let duration = start.duration(to: .now).components
         let elapsed = Double(duration.seconds) + Double(duration.attoseconds) / 1e18
         let startupFailed = startupScreenshotPolicy != nil
@@ -2761,7 +2764,7 @@ public final class WorkflowRunner {
         configurationDirectory: URL? = nil,
         ignoreCancellation: Bool = false,
         startupScreenshotPolicy: StartupScreenshotPolicy? = nil,
-        startupUpdateTimeout: TimeInterval? = nil,
+        startupUpdateWait: StartupUpdateWait? = nil,
         logContext: String? = nil
     ) async -> CommandResult {
         let command = arguments.first(where: { !$0.hasPrefix("-") }) ?? URL(filePath: executable).lastPathComponent
@@ -2776,7 +2779,7 @@ public final class WorkflowRunner {
                 timeout: timeout,
                 observeCancellation: !ignoreCancellation,
                 startupScreenshotPolicy: startupScreenshotPolicy,
-                startupUpdateTimeout: startupUpdateTimeout
+                startupUpdateWait: startupUpdateWait
             )
         } catch {
             result = CommandResult(

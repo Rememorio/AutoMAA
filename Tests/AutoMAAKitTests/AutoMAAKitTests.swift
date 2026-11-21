@@ -109,7 +109,7 @@ private actor StubCommandRunner: CommandRunning {
         timeout: TimeInterval,
         observeCancellation: Bool,
         startupScreenshotPolicy: StartupScreenshotPolicy?,
-        startupUpdateTimeout: TimeInterval?
+        startupUpdateWait: StartupUpdateWait?
     ) async throws -> CommandResult {
         if arguments.first == "run", arguments.dropFirst().first == FightStageInspection.taskName {
             try writeInspectionFixture(.unknown, environment: environment)
@@ -118,10 +118,12 @@ private actor StubCommandRunner: CommandRunning {
         let isStartup = try isStartupTask(arguments: arguments, environment: environment)
         recordedCalls.append(Call(arguments: arguments, isStartup: isStartup, timeout: timeout,
                                   startupScreenshotPolicy: startupScreenshotPolicy,
-                                  startupUpdateTimeout: startupUpdateTimeout))
+                                  startupUpdateTimeout: startupUpdateWait?.timeout))
         if isStartup {
             XCTAssertTrue(arguments.contains("--no-auto-reconnect"))
-            return startupResults.isEmpty ? Self.success : startupResults.removeFirst()
+            let result = startupResults.isEmpty ? Self.success : startupResults.removeFirst()
+            if result.startupUpdateWaitExtended { await startupUpdateWait?.onExtension() }
+            return result
         }
         XCTAssertFalse(arguments.contains("--no-auto-reconnect"))
         switch arguments.first {
@@ -158,13 +160,13 @@ private actor MaintenanceDeadlineCommandRunner: CommandRunning {
 
     func run(executable: String, arguments: [String], environment: [String: String], timeout: TimeInterval,
              observeCancellation: Bool, startupScreenshotPolicy: StartupScreenshotPolicy?,
-             startupUpdateTimeout: TimeInterval?) async throws -> CommandResult {
+             startupUpdateWait: StartupUpdateWait?) async throws -> CommandResult {
         guard arguments.first == "hot-update" else {
             return try await CommandRunner().run(executable: executable, arguments: arguments,
                                                  environment: environment, timeout: timeout,
                                                  observeCancellation: observeCancellation,
                                                  startupScreenshotPolicy: startupScreenshotPolicy,
-                                                 startupUpdateTimeout: startupUpdateTimeout)
+                                                 startupUpdateWait: startupUpdateWait)
         }
         timeLimits.append(timeout)
         if timeLimits.count == 1 {
@@ -3506,6 +3508,23 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertEqual(runtime.events.count { $0.message.contains("正在重启客户端") }, 1)
         XCTAssertTrue(runtime.events.contains { $0.message.contains("截图连接异常") })
         XCTAssertFalse(runtime.events.contains { $0.message.contains("准备暂未完成") })
+    }
+
+    @MainActor
+    func testExtendedStartupEmitsAccountUpdateWaitBeforeReady() async throws {
+        var result = CommandResult(exitCode: 0, standardOutput: "", standardError: "", timedOut: false)
+        result.startupUpdateWaitExtended = true
+        let commands = StubCommandRunner(startupResults: [result])
+        let (report, runtime) = try await runTaskTimeoutScenario(tasks: [.award], commandRunner: commands)
+        XCTAssertTrue(report.isSuccess)
+        let events = runtime.events.filter { $0.phase == .switchingAccount }
+        let waitIndex = try XCTUnwrap(events.firstIndex { $0.message == "正在等待游戏资源更新" })
+        let readyIndex = try XCTUnwrap(events.firstIndex { $0.log.level == .success })
+        XCTAssertLessThan(waitIndex, readyIndex)
+        XCTAssertNotNil(events[waitIndex].log.accountID)
+        XCTAssertEqual(events[waitIndex].log.clientID, events[readyIndex].log.clientID)
+        XCTAssertEqual(events[waitIndex].log.accountID, events[readyIndex].log.accountID)
+        XCTAssertTrue(events[waitIndex].log.details?.contains("600 秒") == true)
     }
 
     @MainActor
