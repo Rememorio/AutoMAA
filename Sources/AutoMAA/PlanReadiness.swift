@@ -9,6 +9,9 @@ struct PlanReadinessRequest: Identifiable {
 enum PlanReadinessDestination: Equatable {
     case configuration(ConfigurationRepairTarget)
     case newClient
+    case newAccount(clientID: UUID, planID: UUID)
+    case clients
+    case arrangement(UUID)
 }
 
 struct PlanReadinessSheet: View {
@@ -73,7 +76,7 @@ struct PlanReadinessSheet: View {
     }
 
     private func issueRow(_ issue: ReadinessIssue) -> some View {
-        let destination = PlanReadiness.repairDestination(for: issue, hasClients: !model.configuration.clients.isEmpty)
+        let destination = PlanReadiness.repairDestination(for: issue, clients: model.configuration.clients)
         return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Image(systemName: issue.severity == .error ? "exclamationmark.circle" : "info.circle")
@@ -111,6 +114,9 @@ struct PlanReadinessSheet: View {
         case .configuration(.account): "编辑账号"
         case .configuration(.plan): "编辑方案"
         case .newClient: "添加客户端"
+        case .newAccount: "添加账号"
+        case .clients: "管理客户端与账号"
+        case .arrangement: "选择执行账号"
         }
     }
 
@@ -135,6 +141,9 @@ extension PlanReadinessDestination {
         switch self {
         case let .configuration(target): target.actionTitle
         case .newClient: "添加客户端…"
+        case .newAccount: "为该客户端添加执行账号"
+        case .clients: "前往客户端与账号"
+        case .arrangement: "在执行安排中选择账号"
         }
     }
 }
@@ -177,9 +186,18 @@ struct PlanReadiness: Equatable {
         }
     }
 
-    static func repairDestination(for issue: ReadinessIssue, hasClients: Bool) -> PlanReadinessDestination? {
-        if issue.id == "plan-accounts-empty", !hasClients { return .newClient }
-        return issue.repairTarget.map(PlanReadinessDestination.configuration)
+    static func repairDestination(for issue: ReadinessIssue, clients: [ClientConfiguration]) -> PlanReadinessDestination? {
+        guard issue.id == "plan-accounts-empty", case let .plan(planID) = issue.scope else {
+            return issue.repairTarget.map(PlanReadinessDestination.configuration)
+        }
+        if clients.isEmpty { return .newClient }
+        let enabled = clients.filter(\.enabled)
+        if enabled.contains(where: { $0.accounts.contains(where: \.enabled) }) { return .arrangement(planID) }
+        if enabled.isEmpty, clients.count == 1 { return .configuration(.client(clients[0].id)) }
+        guard enabled.count == 1, let client = enabled.first else { return .clients }
+        if client.accounts.isEmpty { return .newAccount(clientID: client.id, planID: planID) }
+        if client.accounts.count == 1 { return .configuration(.account(clientID: client.id, accountID: client.accounts[0].id)) }
+        return .clients
     }
 
     var state: PlanReadinessState {

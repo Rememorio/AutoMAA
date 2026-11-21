@@ -56,7 +56,7 @@ struct DashboardView: View {
         VStack(alignment: .leading, spacing: 10) {
             SectionHeading(title: "接下来的定时")
             ForEach(plans.prefix(3)) { summary in
-                Button { model.selection = .plan(summary.id) } label: {
+                Button { model.showArrangement(for: summary.id, opensAtSchedule: true) } label: {
                     HStack(alignment: .firstTextBaseline, spacing: 10) {
                         Image(systemName: "calendar").foregroundStyle(.secondary).accessibilityHidden(true)
                         Text(summary.schedule.title(relativeTo: date)).font(.callout.monospacedDigit())
@@ -76,7 +76,7 @@ struct DashboardView: View {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 SectionHeading(title: "最近运行")
                 ActionTextButton(title: "全部记录", symbol: "clock.arrow.circlepath", help: "查看全部运行记录") {
-                    model.selection = .activity
+                    model.showAllActivity()
                 }
             }
             if sessions.isEmpty {
@@ -115,7 +115,7 @@ struct DashboardView: View {
         switch destination {
         case let .activity(id): model.showPlanActivity(id)
         case let .readiness(id): model.readinessRequest = .init(id: id)
-        case let .schedule(id): model.selection = .plan(id)
+        case let .schedule(id): model.showArrangement(for: id, opensAtSchedule: true)
         }
     }
 }

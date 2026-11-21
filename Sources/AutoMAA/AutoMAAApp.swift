@@ -78,8 +78,7 @@ private struct AutoMAACommands: Commands {
         CommandGroup(replacing: .sidebar) {
             Button("切换边栏") { workspaceChrome?.toggleSidebar(nil) }
                 .keyboardShortcut("s", modifiers: [.command, .control])
-                .disabled(workspaceActive != true || workspaceChrome == nil || model.entityEditor != nil
-                          || model.readinessRequest != nil || model.updateDetailsRequest != nil)
+                .disabled(workspaceActive != true || workspaceChrome == nil || hasWorkspaceSheet)
         }
         CommandGroup(replacing: .appInfo) {
             Button("关于 AutoMAA") { showSettings(.about) }
@@ -94,14 +93,13 @@ private struct AutoMAACommands: Commands {
         CommandGroup(after: .newItem) {
             Button(runCommandTitle) { model.runSelectedPlan() }
                 .keyboardShortcut("r", modifiers: [.command])
-                .disabled(workspaceActive != true || model.entityEditor != nil || model.readinessRequest != nil
-                          || model.updateDetailsRequest != nil || !canRunCommand)
+                .disabled(workspaceActive != true || hasWorkspaceSheet || !canRunCommand)
             Button(model.activePlanID == nil ? "取消更新" : "安全停止当前流程") { model.cancelCurrentOperation() }
                 .keyboardShortcut(".", modifiers: [.command])
                 .disabled(!model.canCancelRun && !model.applicationUpdateState.canCancel)
             Button("保存配置") { model.saveNow() }
                 .keyboardShortcut("s", modifiers: [.command])
-                .disabled(workspaceActive != true || model.entityEditor != nil || model.readinessRequest != nil || model.updateDetailsRequest != nil)
+                .disabled(workspaceActive != true || hasWorkspaceSheet)
         }
         CommandGroup(replacing: .help) {
             Button("AutoMAA 使用文档") {
@@ -111,6 +109,10 @@ private struct AutoMAACommands: Commands {
                 NSWorkspace.shared.open(model.issueReportURL)
             }
         }
+    }
+
+    private var hasWorkspaceSheet: Bool {
+        model.entityEditor != nil || model.readinessRequest != nil || model.arrangementRequest != nil || model.updateDetailsRequest != nil
     }
 
     private var runCommandTitle: String {

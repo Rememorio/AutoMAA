@@ -7,7 +7,6 @@ struct PlanEditorView: View {
     @EnvironmentObject private var model: AppModel
     @Binding var plan: AutomationPlan
     @State private var selectedTask: TaskKind?
-    @State private var showsArrangement = false
     @State private var detailSection = PlanDetailSection.settings
     @State private var showsRename = false
     @State private var confirmsDelete = false
@@ -55,16 +54,12 @@ struct PlanEditorView: View {
         .onAppear { selectInitialTask() }
         .onChange(of: model.fightSettingsPlanID) { _, _ in applyFightSettingsRequest() }
         .onChange(of: plan.id) { _, _ in
-            showsArrangement = false
             showsRename = false
             confirmsDelete = false
             selectInitialTask()
         }
         .onChange(of: isCurrentPlanRunning) { _, running in
             if running { detailSection = .activity }
-        }
-        .sheet(isPresented: $showsArrangement) {
-            PlanExecutionArrangement(plan: plan)
         }
         .sheet(isPresented: $showsRename) {
             PlanRenameSheet(name: plan.name) { name in
@@ -86,7 +81,7 @@ struct PlanEditorView: View {
     private var toolbarActions: [WorkspaceToolbarAction] {
         [
             .init(id: "plan.arrangement", title: "执行安排 · 设置账号、定时与运行策略", symbol: "calendar.badge.clock",
-                  handler: { showsArrangement = true }),
+                  handler: { model.showArrangement(for: plan.id) }),
             .init(id: "plan.more", title: "方案操作", symbol: "ellipsis", menu: [
                 .action("重命名方案…", isEnabled: !model.isWorkflowRunning) { showsRename = true },
                 .action("复制方案", isEnabled: !model.isWorkflowRunning) {
