@@ -23,15 +23,17 @@ struct PlanEditorView: View {
             switch detailSection {
             case .settings:
                 VStack(spacing: 0) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        let progress = model.continuation(for: plan.id)
-                        PlanRoundSummary(progress: progress, runState: model.planRunState(planID: plan.id))
-                        if progress.hasPendingWork {
+                    if let notice = model.continuation(for: plan.id).taskSettingsNotice(isRunning: isCurrentPlanRunning) {
+                        HStack(spacing: 12) {
+                            Label(notice, systemImage: "exclamationmark.circle")
+                                .font(.callout)
+                                .foregroundStyle(ActivityOutcome.awaitingReview.color)
+                            Spacer(minLength: 8)
                             PendingWorkLinkButton { model.showPlanActivity(plan.id) }
                         }
+                        .padding(.horizontal, 16).padding(.vertical, 4)
+                        Divider()
                     }
-                        .padding(.horizontal, 20).padding(.vertical, 14)
-                    Divider()
                     if let selectedTask {
                         PlanTaskInspector(plan: $plan, task: selectedTask)
                     } else {
@@ -97,23 +99,12 @@ struct PlanEditorView: View {
     private var taskList: some View {
         let statuses = taskStatuses
         return VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text("执行顺序")
-                        .font(.subheadline.weight(.medium))
-                    Text("\(plan.enabledTasks.count) 项已启用")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 0)
-                }
-                Text("\(accountSummary) · \(scheduleSummary)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 18)
-            .padding(.vertical, 12)
+            Text("\(accountSummary) · \(scheduleSummary)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16).padding(.vertical, 10)
             Divider()
 
             List(selection: taskSelection) {
@@ -131,52 +122,37 @@ struct PlanEditorView: View {
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
-
-            Text(model.isWorkflowRunning ? "运行结束后可调整任务与参数" : "拖动或使用右键菜单调整顺序")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 18)
-                .padding(.vertical, 10)
-                .fixedSize(horizontal: false, vertical: true)
+            .accessibilityLabel("执行顺序")
+            .accessibilityHint("可在任务菜单中上移或下移")
         }
     }
 
     private func taskRow(_ task: TaskKind, status: PlanTaskStatus) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: "line.3.horizontal")
-                .font(.system(size: 10))
-                .foregroundStyle(.tertiary)
-                .accessibilityHidden(true)
             Toggle("启用\(task.title)", isOn: enabledBinding(for: task))
                 .labelsHidden()
                 .toggleStyle(.checkbox)
                 .disabled(model.isWorkflowRunning)
-            Button {
-                selectTask(task)
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: task.symbol)
-                        .font(.system(size: 14))
-                        .foregroundStyle(plan.isEnabled(task) ? Color.maaAccent : .secondary)
-                        .frame(width: 20)
-                        .accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(task.title).font(.body.weight(.medium))
-                        Text(taskSummary(task))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .help(taskSummary(task))
-                    }
-                    Spacer(minLength: 0)
-                    PlanTaskFeedback(status: status)
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(task.title).font(.body.weight(.medium))
+                    Text(taskSummary(task))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .help(taskSummary(task))
                 }
-                .contentShape(Rectangle())
+                Spacer(minLength: 0)
+                PlanTaskFeedback(status: status)
             }
-            .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            // The list owns selection and dragging. A click on the already selected task also reopens its settings.
+            .simultaneousGesture(TapGesture().onEnded { selectTask(task) }, including: detailSection == .activity ? .all : .none)
+            .accessibilityElement(children: .ignore)
+            .accessibilityAddTraits(.isButton)
             .accessibilityLabel("\(model.isWorkflowRunning ? "查看" : "编辑")\(task.title)参数")
             .accessibilityValue([taskSummary(task), status.description].filter { !$0.isEmpty }.joined(separator: "，"))
+            .accessibilityAction { selectTask(task) }
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())

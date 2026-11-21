@@ -16,7 +16,13 @@
 
 ## 推荐参数还是自定义参数
 
-选择任务后，在右侧“参数模式”选择“MAA 推荐参数”或“自定义参数”。推荐模式使用 AutoMAA 对齐 MAA 的设置；自定义模式使用保存的参数。反复切换不会丢失此前输入，任务停用后参数也会保留。
+选择任务后，在右侧任务标题旁选择“MAA 推荐参数”或“自定义参数”。推荐模式使用 AutoMAA 对齐 MAA 的设置；自定义模式使用保存的参数。反复切换不会丢失此前输入，任务停用后参数也会保留。
+
+<figure class="guide-screenshot">
+  <img class="theme-shot theme-shot-light" src="../assets/screenshots/task-settings-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="方案页：中列按执行顺序列出任务，右栏显示理智作战及其自定义参数" />
+  <img class="theme-shot theme-shot-dark" src="../assets/screenshots/task-settings-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="深色方案页：中列按执行顺序列出任务，右栏显示理智作战及其自定义参数" />
+  <figcaption>尚未发布的方案页。任务标题旁可切换参数模式，本轮统计在“运行概况”中查看。</figcaption>
+</figure>
 
 ::: tip 只收基建产物
 选择“自定义参数”，基建模式使用“仅收菜”。切换到“MAA 推荐参数”会使用常规换班设置。

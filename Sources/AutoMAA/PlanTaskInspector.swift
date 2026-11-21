@@ -12,17 +12,18 @@ struct PlanTaskInspector: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 4) {
-                Label(task.title, systemImage: task.symbol)
-                    .font(.headline)
-                Text("第 \((plan.stepOrder.firstIndex(of: task) ?? 0) + 1) 项 · \(plan.isEnabled(task) ? "对 \(targetAccounts.count) 个账号分别执行" : "已停用，参数仍保留")")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(task.title).font(.headline).accessibilityAddTraits(.isHeader)
+                    if !plan.isEnabled(task) {
+                        Text("已停用，参数仍保留").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 8)
+                parameterMode.disabled(model.isWorkflowRunning)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16)
-            .padding(.vertical, 14)
-            Divider()
+            .padding(.top, 14)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
@@ -30,7 +31,6 @@ struct PlanTaskInspector: View {
                         Label("运行结束后可修改参数", systemImage: "lock")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    parameterMode
                     parameters
                 }
                 .padding(16)
@@ -52,6 +52,7 @@ struct PlanTaskInspector: View {
             Text("自定义参数").tag(true)
         }
         .pickerStyle(.menu)
+        .labelsHidden()
         .fixedSize(horizontal: true, vertical: false)
         .accessibilityLabel("\(task.title)参数模式")
         .help("切回推荐参数仍保留自定义值")
@@ -75,7 +76,6 @@ struct PlanTaskInspector: View {
         }
         if task == .fight {
             weeklyAnnihilation
-            fightRecovery
             fightAccountDetails
         }
     }
@@ -307,15 +307,6 @@ struct PlanTaskInspector: View {
     }
 
     @ViewBuilder
-    private var fightRecovery: some View {
-        if !model.continuation(for: plan.id).fightRecoveryItems.isEmpty {
-            PlanFormSection("需要处理") {
-                PendingWorkLinkButton { model.showPlanActivity(plan.id) }
-            }
-        }
-    }
-
-    @ViewBuilder
     private var fightAccountDetails: some View {
         if (plan.fight.weeklyAnnihilation.enabled || showsRecoveryStage), !fightStageMemoryRows.isEmpty {
             DisclosureGroup("账号状态与常规目标") {
@@ -346,10 +337,6 @@ struct PlanTaskInspector: View {
         }
     }
 
-    private var targetAccounts: [AccountConfiguration] {
-        model.configuration.clients.filter(\.enabled).flatMap { $0.accounts.filter(plan.includes) }
-    }
-
     private var fightStageMemoryRows: [FightStageMemoryRow] {
         model.configuration.clients.filter(\.enabled).flatMap { client in
             client.accounts.filter(plan.includes).map { account in
@@ -377,7 +364,7 @@ struct PlanTaskInspector: View {
             return "识别并记住常规目标，剿灭结束后恢复。"
         }
         switch plan.fight.stageStrategy {
-        case .gameCurrentOrLast: return plan.fight.stageStrategy.detail
+        case .gameCurrentOrLast: return "游戏停在剿灭关卡时，本次也可能进入剿灭。"
         case .rememberedRegular: return "优先游戏中的常规关卡；无法识别或遇到剿灭时使用记录目标。"
         case .fixed: return nil
         }

@@ -1,6 +1,15 @@
 import AutoMAAKit
 import SwiftUI
 
+extension PlanContinuation {
+    func taskSettingsNotice(isRunning: Bool) -> String? {
+        if unconfirmed > 0 { return "\(unconfirmed) 项作战结果待核实" }
+        if !fightRecoveryItems.isEmpty { return "\(fightRecoveryItems.count) 项作战需要处理" }
+        guard !isRunning, hasPendingWork else { return nil }
+        return "本轮剩余 \(pending) 项"
+    }
+}
+
 struct PlanRoundSummaryPresentation: Equatable {
     let title: String
     let scope: String?

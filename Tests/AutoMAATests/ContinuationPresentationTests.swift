@@ -5,6 +5,33 @@ import Testing
 
 @Suite("Continuation presentation")
 struct ContinuationPresentationTests {
+    @Test("task settings only interrupt editing for unfinished work or fight review")
+    func taskSettingsNotice() {
+        let account = AccountConfiguration(name: "测试账号")
+        let client = ClientConfiguration(name: "测试客户端", kind: .yoStarJP, appPath: "", address: "127.0.0.1:65492",
+            profileName: "plan-settings", bundleIdentifier: "dev.automaa.tests.plan-settings", accounts: [account])
+        let plan = AutomationPlan.lightRoutine
+        let configuration = AppConfiguration(cliPath: "/usr/bin/true", clients: [client], plans: [plan])
+        var state = ExecutionState(dateKey: ExecutionStateStore.todayKey)
+        func progress() -> PlanContinuation {
+            PlanContinuation(configuration: configuration, planID: plan.id, state: state, history: [])
+        }
+        #expect(progress().taskSettingsNotice(isRunning: false) == nil)
+        _ = state.startRound(for: plan.id, at: Date())
+        #expect(progress().taskSettingsNotice(isRunning: false) == "本轮剩余 \(plan.enabledTasks.count) 项")
+        #expect(progress().taskSettingsNotice(isRunning: true) == nil)
+
+        for task in plan.enabledTasks {
+            state.completedSteps.insert(WorkflowStep(planID: plan.id, clientID: client.id, accountID: account.id, task: task).key)
+        }
+        #expect(progress().taskSettingsNotice(isRunning: false) == nil)
+        let step = WorkflowStep(planID: plan.id, clientID: client.id, accountID: account.id, task: .fight)
+        state.record(.init(status: .failed, reason: .missingRegularTarget), for: step.key)
+        #expect(progress().taskSettingsNotice(isRunning: false) == "1 项作战需要处理")
+        state.record(.init(status: .unconfirmed, reason: .missingEvidence), for: step.key)
+        #expect(progress().taskSettingsNotice(isRunning: true) == "1 项作战结果待核实")
+    }
+
     @Test("a historical record offers one live follow-up only while related work remains")
     func historicalPendingLink() {
         let planID = UUID()
