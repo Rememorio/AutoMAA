@@ -396,7 +396,7 @@ private actor DiagnosticCommands: CommandRunning {
 
     func run(executable: String, arguments: [String], environment: [String: String], timeout: TimeInterval,
              observeCancellation: Bool, startupScreenshotPolicy: StartupScreenshotPolicy?,
-             startupUpdateTimeout: TimeInterval?) async throws -> CommandResult {
+             startupUpdateWait: StartupUpdateWait?) async throws -> CommandResult {
         if arguments.first == "dir" {
             return .init(exitCode: 1, standardOutput: "", standardError: "no test installation", timedOut: false)
         }

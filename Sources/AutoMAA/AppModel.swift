@@ -134,6 +134,7 @@ final class AppModel: ObservableObject {
     let feedback = ApplicationFeedbackCenter()
     private var visibleActivityRuns: [UUID: UUID] = [:]
     @Published private(set) var configurationSaveError: String?
+    @Published var arrangementRequest: PlanArrangementRequest?
     @Published var readinessRequest: PlanReadinessRequest?
     @Published var installedPlanIDs: Set<UUID>
     @Published private(set) var fightStageMemory: FightStageMemory
@@ -1565,6 +1566,19 @@ final class AppModel: ObservableObject {
         activityNavigationRequest = nil
         activitySelection = .plan(planID)
         activityPendingSource = .init(planID: planID, startedAt: session.startedAt, roundID: roundID)
+        selection = .activity
+    }
+
+    func showArrangement(for planID: UUID, opensAtSchedule: Bool = false) {
+        guard configuration.plans.contains(where: { $0.id == planID }) else { return }
+        selection = .plan(planID)
+        arrangementRequest = .init(id: planID, opensAtSchedule: opensAtSchedule)
+    }
+
+    func showAllActivity() {
+        activityNavigationRequest = nil
+        activitySearch = ""
+        activityFilter = .all
         selection = .activity
     }
 

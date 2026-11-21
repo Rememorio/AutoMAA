@@ -5,18 +5,51 @@ import Testing
 
 @Suite("Context navigation")
 struct ContextNavigationTests {
-    @Test("readiness offers client creation only when the account issue has no existing client")
+    @Test("an empty execution scope opens the editor that can supply an enabled account")
     func readinessEmptyConfigurationRepair() {
         let planID = UUID()
         let issue = ReadinessIssue(id: "plan-accounts-empty", severity: .error,
                                    message: "没有可执行的账号", scope: .plan(planID))
-        #expect(PlanReadiness.repairDestination(for: issue, hasClients: false) == .newClient)
-        #expect(PlanReadiness.repairDestination(for: issue, hasClients: true) == .configuration(.plan(planID)))
+        func repair(_ clients: [ClientConfiguration]) -> PlanReadinessDestination? {
+            PlanReadiness.repairDestination(for: issue, clients: clients)
+        }
+        var client = ClientConfiguration(name: "测试客户端", kind: .official, appPath: "", address: "127.0.0.1:65130",
+                                        profileName: "test", bundleIdentifier: "dev.automaa.tests.navigation", accounts: [])
+        #expect(repair([]) == .newClient)
+        #expect(repair([client]) == .newAccount(clientID: client.id, planID: planID))
+        var other = client
+        other.id = UUID()
+        #expect(repair([client, other]) == .clients)
+        client.enabled = false
+        #expect(repair([client]) == .configuration(.client(client.id)))
+        client.enabled = true
+        var account = AccountConfiguration(name: "测试账号")
+        account.enabled = false
+        client.accounts = [account]
+        #expect(repair([client]) == .configuration(.account(clientID: client.id, accountID: account.id)))
+        client.accounts[0].enabled = true
+        #expect(repair([client]) == .arrangement(planID))
+
         let environment = ReadinessIssue(id: "maa-cli-missing", severity: .error,
                                         message: "缺少 MAA", repairTarget: .settings)
-        #expect(PlanReadiness.repairDestination(for: environment, hasClients: false) == .configuration(.settings))
+        #expect(PlanReadiness.repairDestination(for: environment, clients: []) == .configuration(.settings))
         let unknown = ReadinessIssue(id: "unmapped", severity: .warning, message: "需要人工检查")
-        #expect(PlanReadiness.repairDestination(for: unknown, hasClients: false) == nil)
+        #expect(PlanReadiness.repairDestination(for: unknown, clients: []) == nil)
+    }
+
+    @Test("overview schedule links open the owning plan at its schedule")
+    @MainActor
+    func scheduleNavigation() throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = makeModel(root: root)
+        let plan = try #require(model.configuration.plans.last)
+        model.showArrangement(for: plan.id, opensAtSchedule: true)
+        #expect(model.selection == .plan(plan.id))
+        #expect(model.arrangementRequest?.id == plan.id)
+        #expect(model.arrangementRequest?.opensAtSchedule == true)
+        model.showArrangement(for: plan.id)
+        #expect(model.arrangementRequest?.opensAtSchedule == false)
     }
 
     @Test("opening an update result reveals its run while ordinary navigation retains filters")
@@ -52,6 +85,12 @@ struct ContextNavigationTests {
         #expect(model.activitySearch == "账号搜索")
         #expect(model.activityFilter == .failed)
         #expect(model.activityNavigationRequest == nil)
+
+        model.selection = .overview
+        model.showAllActivity()
+        #expect(model.selection == .activity)
+        #expect(model.activitySearch.isEmpty)
+        #expect(model.activityFilter == .all)
     }
 
     @Test("a removed context record explains the missing destination without replacing filters")

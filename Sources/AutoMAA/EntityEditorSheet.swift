@@ -4,14 +4,14 @@ import SwiftUI
 enum EntityEditorRequest: Identifiable, Equatable {
     case newClient
     case client(UUID)
-    case newAccount(UUID)
+    case newAccount(UUID, planID: UUID? = nil)
     case account(UUID, UUID)
 
     var id: String {
         switch self {
         case .newClient: "new-client"
         case let .client(id): "client-\(id)"
-        case let .newAccount(id): "new-account-\(id)"
+        case let .newAccount(id, _): "new-account-\(id)"
         case let .account(client, account): "account-\(client)-\(account)"
         }
     }
@@ -90,7 +90,8 @@ struct EntityEditorSheet: View {
         switch request {
         case .newClient: client = model.newClientDraft()
         case let .client(id): client = model.configuration.clients.first { $0.id == id }
-        case let .newAccount(clientID):
+        case let .newAccount(clientID, planID):
+            if let planID { planIDs.insert(planID) }
             client = model.configuration.clients.first { $0.id == clientID }
             account = model.newAccountDraft(clientID: clientID)
         case let .account(clientID, accountID):
@@ -98,7 +99,7 @@ struct EntityEditorSheet: View {
             account = client?.accounts.first { $0.id == accountID }
         }
         if let account {
-            planIDs = Set(model.configuration.plans.filter { $0.includesAllEnabledAccounts || $0.accountIDs.contains(account.id) }.map(\.id))
+            planIDs.formUnion(model.configuration.plans.filter { $0.includesAllEnabledAccounts || $0.accountIDs.contains(account.id) }.map(\.id))
         }
         if client == nil || (!request.isClient && account == nil) { error = "配置已被移除，请关闭后重新选择。" }
     }

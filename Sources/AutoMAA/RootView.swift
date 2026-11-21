@@ -22,6 +22,12 @@ struct RootView: View {
         .sheet(item: $model.entityEditor) { request in
             EntityEditorSheet(request: request).environmentObject(model)
         }
+        .sheet(item: $model.arrangementRequest) { request in
+            if let plan = model.configuration.plans.first(where: { $0.id == request.id }) {
+                PlanExecutionArrangement(plan: plan, opensAtSchedule: request.opensAtSchedule)
+                    .environmentObject(model)
+            }
+        }
         .sheet(item: $model.updateDetailsRequest) { request in
             UpdateDetailsView(model: model, request: request)
                 .focusedSceneValue(\.workspaceActive, false)
@@ -101,6 +107,14 @@ struct RootView: View {
         case .newClient:
             model.selection = .clients
             model.entityEditor = .newClient
+        case let .newAccount(clientID, planID):
+            model.clientsSelection = .client(clientID)
+            model.selection = .clients
+            model.entityEditor = .newAccount(clientID, planID: planID)
+        case .clients:
+            model.selection = .clients
+        case let .arrangement(planID):
+            model.showArrangement(for: planID)
         }
     }
 

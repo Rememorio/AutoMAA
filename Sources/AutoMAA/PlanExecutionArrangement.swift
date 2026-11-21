@@ -1,6 +1,11 @@
 import AutoMAAKit
 import SwiftUI
 
+struct PlanArrangementRequest: Identifiable {
+    let id: UUID
+    let opensAtSchedule: Bool
+}
+
 struct PlanExecutionArrangement: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -12,7 +17,10 @@ struct PlanExecutionArrangement: View {
     private let planID: UUID
     private let planName: String
 
-    init(plan: AutomationPlan) {
+    private let opensAtSchedule: Bool
+
+    init(plan: AutomationPlan, opensAtSchedule: Bool) {
+        self.opensAtSchedule = opensAtSchedule
         planID = plan.id
         planName = plan.displayName
         _includesAllEnabledAccounts = State(initialValue: plan.includesAllEnabledAccounts)
@@ -45,7 +53,7 @@ struct PlanExecutionArrangement: View {
                         }
                         accountSection
                         Divider()
-                        scheduleSection
+                        scheduleSection.id("schedule")
                         Divider()
                         policySection
                     }
@@ -54,6 +62,9 @@ struct PlanExecutionArrangement: View {
                     .id("formContent")
                     .toggleStyle(.checkbox)
                     .disabled(model.isWorkflowRunning)
+                }
+                .onAppear {
+                    if opensAtSchedule { reader.scrollTo("schedule", anchor: .top) }
                 }
                 .onChange(of: error) { _, message in
                     if message != nil { reader.scrollTo("formContent", anchor: .top) }
