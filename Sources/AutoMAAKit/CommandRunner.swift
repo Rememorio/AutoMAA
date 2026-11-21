@@ -56,7 +56,7 @@ public enum CommandRunnerError: LocalizedError {
 
 struct StartupUpdateWait: Sendable {
     let timeout: TimeInterval
-    let onExtension: @MainActor @Sendable () -> Void
+    let onExtension: @MainActor @Sendable () async -> Void
 }
 
 protocol CommandRunning: Sendable {
@@ -147,6 +147,7 @@ public struct CommandRunner: CommandRunning, Sendable {
             let startedAt = ContinuousClock.now
             var effectiveTimeout = timeout
             var deadline = startedAt.advanced(by: .seconds(timeout))
+            var updateNotification: Task<Void, Never>?
             var timedOut = false
             var cancelled = false
             var stopReason: CommandStopReason?
@@ -162,7 +163,8 @@ public struct CommandRunner: CommandRunning, Sendable {
                     // Extend this command once, without interrupting the game's download.
                     effectiveTimeout = startupUpdateWait.timeout
                     deadline = startedAt.advanced(by: .seconds(effectiveTimeout))
-                    await startupUpdateWait.onExtension()
+                    // A busy UI must not delay timeout, cancellation or screenshot monitoring.
+                    updateNotification = Task { @MainActor in await startupUpdateWait.onExtension() }
                 }
                 if screenshotMonitor != nil {
                     let lines = (((try? stdoutTail?.readLines()) ?? []) + ((try? stderrTail?.readLines()) ?? []))
@@ -218,6 +220,8 @@ public struct CommandRunner: CommandRunning, Sendable {
             )
             result.startupUpdateWaitExtended = effectiveTimeout > timeout
             result.effectiveTimeout = effectiveTimeout
+            // Deliver the waiting event before the caller publishes the command outcome.
+            await updateNotification?.value
             return result
         }
         if observeCancellation {

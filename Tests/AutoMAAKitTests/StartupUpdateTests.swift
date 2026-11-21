@@ -13,16 +13,20 @@ struct StartupUpdateTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try Data((callback("SubTaskStart", task: "GameStartUpdateOCR") + "\n").utf8)
             .write(to: directory.appending(path: "asst.log"))
+        let notification = root.appending(path: "wait-extended")
         var extensions = 0
         let result = try await CommandRunner().run(executable: "/bin/sh",
-            arguments: ["-c", "echo startup; sleep 1.8; echo ready"],
+            arguments: ["-c", "echo startup; until [ -f \"$1\" ]; do sleep 0.1; done; echo ready", "test", notification.path],
             environment: ["MAA_STATE_DIR": root.path], timeout: 0.9,
-            observeCancellation: true, startupScreenshotPolicy: .standard, startupUpdateWait: .init(timeout: 3) { extensions += 1 })
+            observeCancellation: true, startupScreenshotPolicy: .standard, startupUpdateWait: .init(timeout: 30) {
+                extensions += 1
+                #expect(FileManager.default.createFile(atPath: notification.path, contents: nil))
+            })
         #expect(extensions == 1)
         #expect(result.exitCode == 0)
         #expect(!result.timedOut)
         #expect(result.standardOutput == "startup\nready")
-        #expect(result.effectiveTimeout == 3)
+        #expect(result.effectiveTimeout == 30)
         #expect(result.startupUpdateWaitExtended)
     }
 
@@ -44,7 +48,7 @@ struct StartupUpdateTests {
         }
         try Data(text.utf8).write(to: directory.appending(path: evidence == "backup" ? "asst.bak.log" : "asst.log"))
         let result = try await CommandRunner().run(executable: "/bin/sh",
-            arguments: ["-c", "/bin/sleep 3 && echo ready"], environment: ["MAA_STATE_DIR": root.path], timeout: 0.6,
+            arguments: ["-c", "/bin/sleep 30 && echo ready"], environment: ["MAA_STATE_DIR": root.path], timeout: 0.6,
             observeCancellation: true, startupScreenshotPolicy: evidence == "unmonitored" ? nil : .standard,
             startupUpdateWait: .init(timeout: 4) { Issue.record("Unexpected update wait") })
         #expect(result.timedOut)
@@ -54,7 +58,7 @@ struct StartupUpdateTests {
         #expect(result.standardOutput.isEmpty)
     }
 
-    @Test("repeated download callbacks cannot renew the extended hard deadline")
+    @Test("repeated downloads and a pending update notification cannot delay the hard deadline")
     @MainActor
     func repeatedUpdatesKeepOneDeadline() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "automaa-startup-hard-limit-\(UUID())")
@@ -65,10 +69,25 @@ struct StartupUpdateTests {
         let log = directory.appending(path: "asst.log")
         try Data((line + "\n").utf8).write(to: log)
         var extensions = 0
-        let script = "for i in 1 2 3 4 5 6 7 8 9 10; do printf '%s\\n' \"$2\" >> \"$1\"; sleep 0.3; done; echo ready"
+        let stopped = root.appending(path: "stopped")
+        let script = #"""
+            trap 'touch "$3"; exit 0' TERM
+            for i in $(seq 1 100); do
+                printf '%s\n' "$2" >> "$1"
+                sleep 0.3
+            done
+            echo ready
+            """#
         let result = try await CommandRunner().run(executable: "/bin/sh",
-            arguments: ["-c", script, "test", log.path, line], environment: ["MAA_STATE_DIR": root.path], timeout: 0.6,
-            observeCancellation: true, startupScreenshotPolicy: .standard, startupUpdateWait: .init(timeout: 1.2) { extensions += 1 })
+            arguments: ["-c", script, "test", log.path, line, stopped.path], environment: ["MAA_STATE_DIR": root.path], timeout: 0.6,
+            observeCancellation: true, startupScreenshotPolicy: .standard, startupUpdateWait: .init(timeout: 1.2) {
+                extensions += 1
+                let limit = ContinuousClock.now.advanced(by: .seconds(10))
+                while !FileManager.default.fileExists(atPath: stopped.path), ContinuousClock.now < limit {
+                    try? await Task.sleep(for: .milliseconds(50))
+                }
+                #expect(FileManager.default.fileExists(atPath: stopped.path))
+            })
         #expect(extensions == 1)
         #expect(result.timedOut)
         #expect(!result.cancelled)
