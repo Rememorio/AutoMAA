@@ -9,7 +9,7 @@ public enum FightKind: String, Codable, Sendable {
 }
 
 public enum FightStopReason: String, Codable, Sendable {
-    case insufficientSanity, timesLimit, weeklyLimit, confirmedWeeklyLimit, navigationUnavailable, stageUnavailable, missingRegularTarget, unexpectedStage, interruptedBattle, missingEvidence, commandFailed
+    case insufficientSanity, timesLimit, weeklyLimit, confirmedWeeklyLimit, navigationUnavailable, stageUnavailable, missingRegularTarget, unexpectedStage, interruptedBattle, dropRecognitionFailed, missingEvidence, commandFailed
 
     public var title: String {
         switch self {
@@ -22,6 +22,7 @@ public enum FightStopReason: String, Codable, Sendable {
         case .missingRegularTarget: "未找到可用的常规关卡，尚未开始作战"
         case .unexpectedStage: "实际作战与已确认的常规目标不符；请检查游戏与 MAA 资源"
         case .interruptedBattle: "作战被中断，结果未确认；请检查游戏结果"
+        case .dropRecognitionFailed: "结算掉落未识别，作战次数待核实"
         case .missingEvidence: "未取得有效作战结果；请检查游戏后重新尝试"
         case .commandFailed: "MAA 执行失败，具体原因未确认"
         }
@@ -49,13 +50,14 @@ public struct FightResult: Codable, Equatable, Sendable {
     public var totalDrops: String?
     public var kind: FightKind?
     public var unrecognizedSettlements: Int?
+    public var missingDropRuns: Int?
     public var fallbackFrom: String?
     public var failurePhase: FightFailurePhase?
 
     public init(status: FightResultStatus, stage: String? = nil, times: Int = 0,
                 reason: FightStopReason? = nil, totalDrops: String? = nil, kind: FightKind? = nil,
                 unrecognizedSettlements: Int? = nil, fallbackFrom: String? = nil,
-                failurePhase: FightFailurePhase? = nil) {
+                failurePhase: FightFailurePhase? = nil, missingDropRuns: Int? = nil) {
         self.status = status
         self.stage = stage
         self.times = times
@@ -65,9 +67,15 @@ public struct FightResult: Codable, Equatable, Sendable {
         self.unrecognizedSettlements = unrecognizedSettlements
         self.fallbackFrom = fallbackFrom
         self.failurePhase = failurePhase
+        self.missingDropRuns = missingDropRuns
     }
 
     public var isResolved: Bool { status == .completed || status == .unnecessary || status == .manuallyHandled }
+
+    public var dropsSummary: String? {
+        guard let totalDrops, !totalDrops.isEmpty else { return nil }
+        return (missingDropRuns != nil || reason == .dropRecognitionFailed ? "已识别掉落：" : "总掉落：") + totalDrops
+    }
 
     public var description: String {
         let label = switch status {
@@ -87,7 +95,8 @@ public struct FightResult: Codable, Equatable, Sendable {
         }
         let fallback = fallbackFrom.map { " · 兜底作战（原目标：\($0.isEmpty ? "游戏当前/上次" : $0)）" } ?? ""
         let phase = !isResolved ? failurePhase.map { " · \($0.title)" } ?? "" : ""
-        return label + count + phase + (reason.map { " · \($0.title)" } ?? "") + fallback
+        let missing = missingDropRuns.map { " · 其中 \($0) 次掉落未识别" } ?? ""
+        return label + count + missing + phase + (reason.map { " · \($0.title)" } ?? "") + fallback
     }
 }
 
@@ -152,6 +161,10 @@ public struct WorkflowStep: Codable, Hashable, Sendable {
 
 /// Observations belong to one isolated maa-cli command, never a shared Core log.
 struct FightObservation: Sendable {
+    private enum DropReadback {
+        case settlement, recognitionFailed, settlementClosed, returnedToStage
+    }
+
     private(set) var stage: String?
     private(set) var times = 0
     private var awaitingSettlement = false
@@ -164,6 +177,11 @@ struct FightObservation: Sendable {
     private var kind: FightKind?
     private var nextSeries: Int?
     private var activeSeries: Int?
+    private var nextFinished: Int?
+    private var expectedFinished: Int?
+    private var dropReadback: DropReadback?
+    private var missingDropRuns = 0
+    private var hasSettlementGap = false
     private var unrecognizedSettlements = 0
     private var sanityBeforeStage: Int?
     private var insufficientAtLastCheck = false
@@ -202,6 +220,15 @@ struct FightObservation: Sendable {
             combatScreenObserved = true
         }
         if kind == "SubTaskError" {
+            if event["subtask"] as? String == "CheckStageValid" {
+                expectedFinished = nil
+                if missingDropRuns > 0 { hasSettlementGap = true }
+            }
+            if dropReadback == .settlement, event["subtask"] as? String == "RecognizeDrops",
+               event["why"] as? String == "drop recognition error" {
+                dropReadback = .recognitionFailed
+                awaitingSettlement = true
+            }
             let first = event["first"] as? [String]
             let previous = (event["pre_task"] as? String ?? "").split(separator: "@").last.map(String.init)
             if event["subtask"] as? String == "StageNavigationTask"
@@ -213,10 +240,18 @@ struct FightObservation: Sendable {
         if kind == "SubTaskStart" {
             if task == "OfflineConfirm" { offline = true }
             if task == "StartButton2" || task == "AnnihilationConfirm" {
+                if awaitingSettlement { hasSettlementGap = true }
+                dropReadback = nil
+                expectedFinished = nil
+                if task == "StartButton2", chainStarted, !chainCompleted, !hasSettlementGap,
+                   unrecognizedSettlements == 0, nextFinished == times + missingDropRuns, let nextSeries {
+                    expectedFinished = times + missingDropRuns + nextSeries
+                }
                 awaitingSettlement = true
                 settlementKind = nil
                 activeSeries = nextSeries
                 nextSeries = nil
+                nextFinished = nil
                 insufficientAtLastCheck = false
             }
             if inFightLoop, task == "NoStone" || task == "CloseStonePageExceeded" { insufficientSanity = true }
@@ -227,16 +262,40 @@ struct FightObservation: Sendable {
         }
         // Core's drop plugin runs before SubTaskCompleted is forwarded; capture the recognized settlement at start.
         if kind == "SubTaskStart", event["subtask"] as? String == "ProcessTask" {
-            if task == "EndOfActionAnnihilation" { settlementKind = .annihilation }
-            if task == "EndOfAction" { settlementKind = .regular }
+            if task == "EndOfActionAnnihilation" {
+                settlementKind = .annihilation
+                dropReadback = nil
+                expectedFinished = nil
+            }
+            if task == "EndOfAction" {
+                settlementKind = .regular
+                if inFightLoop { dropReadback = .settlement }
+            }
+        }
+        if kind == "SubTaskCompleted", task == "EndOfAction", inFightLoop,
+           event["subtask"] as? String == "ProcessTask", dropReadback == .recognitionFailed {
+            dropReadback = .settlementClosed
         }
         guard kind == "SubTaskExtraInfo" else { return }
         if event["what"] as? String == "SanityBeforeStage" {
             sanityBeforeStage = (details["current_sanity"] as? Int).flatMap { $0 >= 0 ? $0 : nil }
+            if dropReadback == .settlementClosed, sanityBeforeStage != nil { dropReadback = .returnedToStage }
             insufficientAtLastCheck = false
         }
         if event["what"] as? String == "FightTimes" {
             insufficientAtLastCheck = false
+            nextFinished = details["times_finished"] as? Int
+            // Core increments this counter at EndOfAction. Require an independent return to the stage as well.
+            if dropReadback == .returnedToStage, !chainCompleted, let expectedFinished,
+               nextFinished == expectedFinished, let activeSeries, self.kind != .annihilation {
+                missingDropRuns += activeSeries
+                self.kind = .regular
+                awaitingSettlement = false
+                self.activeSeries = nil
+                settlementKind = nil
+                dropReadback = nil
+            }
+            expectedFinished = nil
             nextSeries = (details["series"] as? Int).flatMap { (1...10).contains($0) ? $0 : nil }
             if let sanity = sanityBeforeStage, let series = nextSeries,
                let cost = details["sanity_cost"] as? Int, cost > 0, cost % series == 0 {
@@ -251,6 +310,9 @@ struct FightObservation: Sendable {
         let limit = details["annihilation_weekly_process"] as? [Int]
         let hasWeeklyProgress = limit.map { $0.count == 2 && $0[0] >= 0 && $0[1] > 0 } == true
         if details["stage"] is [String: Any], details["drops"] is [[String: Any]] {
+            if missingDropRuns > 0, !awaitingSettlement { hasSettlementGap = true }
+            dropReadback = nil
+            expectedFinished = nil
             // Pair the batch size with its settlement; a CLI start count alone is never completion evidence.
             let recognized = (details["cur_times"] as? Int).flatMap { (1...10).contains($0) ? $0 : nil }
             let count = recognized ?? activeSeries ?? (hasWeeklyProgress || settlementKind == .annihilation ? 1 : nil)
@@ -268,18 +330,27 @@ struct FightObservation: Sendable {
 
     func result(for command: CommandResult, configuredStage: String?) -> FightResult {
         let summary = MAAOutputSummaryParser.fightSummary(in: command.combinedOutput)
-        let count = times
+        let interrupted = command.cancelled || command.timedOut || chainStopped || offline
+            || StartupFailureClassifier.isGameOffline(command.combinedOutput)
+        let confirmedWithoutDrops = missingDropRuns > 0 && chainCompleted && !chainFailed && !interrupted && !hasSettlementGap
+            && command.exitCode == 0 && configuredStage.map(FightStagePolicy.isAnnihilation) != true && kind == .regular
+        let count = times + (confirmedWithoutDrops ? missingDropRuns : 0)
         let stage = count > 0 ? stage : summary?.stage ?? configuredStage
         // An explicit annihilation command can conservatively require recovery even on older callbacks.
         let kind = kind ?? (configuredStage.map(FightStagePolicy.isAnnihilation) == true ? .annihilation : nil)
         func result(_ status: FightResultStatus, _ reason: FightStopReason? = nil) -> FightResult {
             FightResult(status: status, stage: stage, times: count, reason: reason, totalDrops: summary?.totalDrops, kind: kind,
                         unrecognizedSettlements: unrecognizedSettlements > 0 ? unrecognizedSettlements : nil,
-                        failurePhase: status == .failed || status == .unconfirmed ? failurePhase : nil)
+                        failurePhase: status == .failed || status == .unconfirmed ? failurePhase : nil,
+                        missingDropRuns: confirmedWithoutDrops ? missingDropRuns : nil)
         }
-        if command.cancelled || command.timedOut || chainStopped || awaitingSettlement || offline
-            || StartupFailureClassifier.isGameOffline(command.combinedOutput) {
+        if interrupted || hasSettlementGap || (missingDropRuns > 0 && !confirmedWithoutDrops) {
             return result(.unconfirmed, .interruptedBattle)
+        }
+        if awaitingSettlement {
+            let unreadDrops = dropReadback != nil && dropReadback != .settlement
+            return result(.unconfirmed, unreadDrops && chainCompleted && !chainFailed && command.exitCode == 0
+                          ? .dropRecognitionFailed : .interruptedBattle)
         }
         if let configuredStage, !configuredStage.isEmpty, rejectedStage == configuredStage,
            !chainStarted, !enteredFightLoop, !combatScreenObserved, count == 0, (summary?.times ?? 0) == 0,

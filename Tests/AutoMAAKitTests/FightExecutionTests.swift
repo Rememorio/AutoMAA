@@ -570,6 +570,39 @@ private final class FightFixture {
 
 @MainActor
 final class FightWorkflowTests: XCTestCase {
+    func testConfirmedRegularSettlementAfterDropRecognitionErrorPersistsAndRunsAward() async throws {
+        let fixture = try FightFixture(award: true)
+        defer { fixture.cleanup() }
+        let start = callback("SubTaskStart", #"{"taskchain":"Fight","subtask":"ProcessTask","first":["FightBegin"],"details":{"task":"StartButton2"}}"#)
+        let settlement = #"{"taskchain":"Fight","subtask":"ProcessTask","first":["FightBegin"],"details":{"task":"EndOfAction"}}"#
+        let callbacks = [
+            chainStart, start, try settlementCallbacks(stage: "1-7", kind: .regular),
+            callback("SubTaskExtraInfo", #"{"taskchain":"Fight","subtask":"FightTimesTask","what":"SanityBeforeStage","details":{"current_sanity":6}}"#),
+            callback("SubTaskExtraInfo", #"{"taskchain":"Fight","subtask":"FightTimesTask","what":"FightTimes","details":{"series":1,"times_finished":1,"sanity_cost":6}}"#),
+            start,
+            callback("SubTaskStart", settlement),
+            callback("SubTaskError", #"{"taskchain":"Fight","subtask":"RecognizeDrops","why":"drop recognition error"}"#),
+            callback("SubTaskCompleted", settlement),
+            callback("SubTaskExtraInfo", #"{"taskchain":"Fight","subtask":"FightTimesTask","what":"SanityBeforeStage","details":{"current_sanity":0}}"#),
+            callback("SubTaskExtraInfo", #"{"taskchain":"Fight","subtask":"FightTimesTask","what":"FightTimes","details":{"series":1,"times_finished":2,"sanity_cost":6}}"#),
+            callback("TaskChainCompleted", #"{"taskchain":"Fight"}"#)
+        ].joined(separator: "\n")
+        let (report, calls) = await fixture.run([.init(result: command(), callbacks: callbacks)])
+        XCTAssertTrue(report.isSuccess)
+        XCTAssertEqual(report.succeededSteps, 2)
+        XCTAssertEqual(calls.count, 2)
+        XCTAssertTrue(calls.last?.name.hasSuffix("-award") == true)
+        let state = fixture.state
+        let result = try XCTUnwrap(state.fightResults?[fixture.step.key])
+        XCTAssertEqual(result.status, .completed)
+        XCTAssertEqual(result.times, 2)
+        XCTAssertTrue(result.description.contains("掉落"))
+        XCTAssertTrue(state.completedSteps.contains(fixture.step.key))
+        XCTAssertFalse(state.needsFightConfirmation(fixture.step.key))
+        let (_, repeated) = await fixture.run([])
+        XCTAssertTrue(repeated.isEmpty)
+    }
+
     func testNewRoundPreservesUnknownBattleAndRunsOtherTasks() async throws {
         let fixture = try FightFixture(award: true)
         defer { fixture.cleanup() }

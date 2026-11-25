@@ -40,6 +40,8 @@ private struct TaskRunOutcome {
             result.reason = nil
             let unrecognized = completed.reduce(0) { $0 + ($1.result.unrecognizedSettlements ?? 0) }
             result.unrecognizedSettlements = unrecognized > 0 ? unrecognized : nil
+            let missingDrops = completed.reduce(0) { $0 + ($1.result.missingDropRuns ?? 0) }
+            result.missingDropRuns = missingDrops > 0 ? missingDrops : nil
         }
         outcome.fightResult = result
         return outcome
@@ -775,7 +777,7 @@ public final class WorkflowRunner {
                             stopAfterClosingClient = true
                             break accountLoop
                         }
-                        let details = [result.totalDrops.map { "总掉落：" + $0 }, result.isResolved ? nil : outcome.failureDetails]
+                        let details = [result.dropsSummary, result.isResolved ? nil : outcome.failureDetails]
                             .compactMap { $0 }.joined(separator: "\n")
                         emit(.runningTask, "\(accountText(account))：理智作战\(outcome.fightDescription ?? result.description)",
                              Double(visitedSteps) / Double(totalSteps), result.status == .manuallyHandled ? .info : result.reason == .navigationUnavailable ? .warning : result.isResolved ? .success : result.status == .failed ? .error : .warning,
@@ -2164,7 +2166,7 @@ public final class WorkflowRunner {
         }
         if useCurrentStage, result.isResolved, result.times > 0, result.stage != stage || result.kind != .regular {
             result.status = .unconfirmed
-            result.reason = .unexpectedStage
+            result.reason = result.stage == nil && result.missingDropRuns != nil ? .missingEvidence : .unexpectedStage
             result.failurePhase = .battleOrSettlement
             outcome = TaskRunOutcome(succeeded: false, recoveredAfterRetry: false, notices: outcome.notices,
                                      failureDetails: outcome.failureDetails)
@@ -2185,7 +2187,7 @@ public final class WorkflowRunner {
         if plan.fight.weeklyAnnihilation.enabled {
             emit(.runningTask, "\(accountText(account))：\(isAnnihilation ? "剿灭" : "常规作战")\(result.description)",
                  0, result.reason == .navigationUnavailable ? .warning : .info, client: client, account: account, task: .fight,
-                 details: result.totalDrops.map { "总掉落：" + $0 })
+                 details: result.dropsSummary)
         }
         return outcome
     }
