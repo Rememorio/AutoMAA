@@ -69,6 +69,42 @@ final class SoftwareUpdateTests: XCTestCase {
         XCTAssertEqual(try SoftwareUpdateVerifier.sha256(of: file), expected)
     }
 
+    func testAssetTransferUsesDownloadInactivityTimeout() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let service = updateService(routes: ["/asset": Data([1, 2, 3])])
+        let asset = SoftwareUpdateAsset(name: "asset", size: 3, downloadURL: URL(string: "https://update.invalid/asset")!)
+        try await service.downloadOnce(asset, to: root.appending(path: "asset")) { _ in }
+        XCTAssertEqual(ReleaseUpdateURLProtocol.state.lastRequestTimeout, UpdatePolicy.downloadStallTimeout)
+    }
+
+    func testInterruptedAttachmentAlwaysDetachesAnAlreadyMountedVolume() async throws {
+        for cancelled in [false, true] {
+            let root = temporaryRoot()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let mounted = root.appending(path: "Mount/AutoMAA")
+            let commands = InterruptedMountCommands(mounted: mounted, cancelled: cancelled)
+            let service = SoftwareUpdateService(currentVersion: "1.0.0", session: .shared, commandRunner: commands)
+            do {
+                _ = try await service.stageApplication(from: root.appending(path: "test.dmg"), in: root, expectedVersion: "2.0.0")
+                XCTFail("An interrupted attachment must not stage an app")
+            } catch is CancellationError {
+                XCTAssertTrue(cancelled)
+            } catch {
+                XCTAssertFalse(cancelled)
+                XCTAssertEqual(error as? SoftwareUpdateError, .localValidationTimedOut("挂载磁盘映像"))
+            }
+            let cleanup = await commands.detachCalls
+            XCTAssertEqual(cleanup.map { Array($0.dropLast()) }, [["detach"], ["detach", "-force"]])
+            for arguments in cleanup {
+                let path = try XCTUnwrap(arguments.last)
+                let actual = URL(filePath: path).resolvingSymlinksInPath().standardizedFileURL
+                XCTAssertEqual(actual.path, mounted.resolvingSymlinksInPath().standardizedFileURL.path)
+            }
+        }
+    }
+
     func testUpdateResultStoreConsumesResultOnce() throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -364,17 +400,45 @@ private struct LocalValidationCommands: CommandRunning {
     }
 }
 
+private actor InterruptedMountCommands: CommandRunning {
+    let mounted: URL
+    let cancelled: Bool
+    private(set) var detachCalls: [[String]] = []
+
+    init(mounted: URL, cancelled: Bool) {
+        self.mounted = mounted
+        self.cancelled = cancelled
+    }
+
+    func run(executable: String, arguments: [String], environment: [String: String], timeout: TimeInterval,
+             observeCancellation: Bool, startupScreenshotPolicy: StartupScreenshotPolicy?,
+             startupUpdateWait: StartupUpdateWait?) async throws -> CommandResult {
+        XCTAssertEqual(executable, "/usr/bin/hdiutil")
+        if arguments.first == "attach" {
+            try FileManager.default.createDirectory(at: mounted, withIntermediateDirectories: true)
+            if cancelled { throw CancellationError() }
+            return .init(exitCode: 0, standardOutput: "", standardError: "", timedOut: true)
+        }
+        XCTAssertFalse(observeCancellation)
+        detachCalls.append(arguments)
+        return .init(exitCode: 0, standardOutput: "", standardError: "", timedOut: !arguments.contains("-force"))
+    }
+}
+
 private final class ReleaseUpdateProtocolState: @unchecked Sendable {
     private let lock = NSLock()
     private var routes: [String: Data] = [:]
     private var requests: [String] = []
+    private var timeout: TimeInterval?
+    var lastRequestTimeout: TimeInterval? { lock.withLock { timeout } }
 
-    func install(_ values: [String: Data]) { lock.withLock { routes = values; requests = [] } }
+    func install(_ values: [String: Data]) { lock.withLock { routes = values; requests = []; timeout = nil } }
     func response(_ request: URLRequest) -> Data? {
         lock.withLock {
             guard let url = request.url else { return nil }
             let key = url.path + (url.query.map { "?" + $0 } ?? "")
             requests.append(key)
+            timeout = request.timeoutInterval
             return routes[key]
         }
     }

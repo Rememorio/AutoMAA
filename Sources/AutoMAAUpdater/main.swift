@@ -22,7 +22,7 @@ enum AutoMAAUpdaterMain {
             } catch {
                 throw SoftwareUpdateError.workflowRunning
             }
-            _ = workflowLock
+            defer { withExtendedLifetime(workflowLock) {} }
             try await SoftwareUpdateInstaller().install(
                 SoftwareUpdateInstallationRequest(
                     currentApplicationURL: arguments.currentApplicationURL,
@@ -39,7 +39,6 @@ enum AutoMAAUpdaterMain {
                     )
                 )
             }
-            exit(EXIT_SUCCESS)
         } catch {
             let message = error.localizedDescription
             try? resultStore.save(
@@ -65,8 +64,8 @@ enum AutoMAAUpdaterMain {
 
     private static func waitForExit(pid: pid_t) async throws {
         guard pid > 1 else { return }
-        let deadline = Date().addingTimeInterval(60)
-        while processIsAlive(pid), Date() < deadline {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(60))
+        while processIsAlive(pid), ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(150))
         }
         guard !processIsAlive(pid) else { throw SoftwareUpdateError.updateTimedOut }

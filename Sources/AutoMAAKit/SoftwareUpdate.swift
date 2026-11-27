@@ -340,11 +340,13 @@ public enum SoftwareUpdateVerifier {
         throw SoftwareUpdateError.checksumFileInvalid
     }
 
-    public static func sha256(of fileURL: URL) throws -> String {
+    public static func sha256(of fileURL: URL, observeCancellation: Bool = false) throws -> String {
         let handle = try FileHandle(forReadingFrom: fileURL)
         defer { try? handle.close() }
         var hasher = SHA256()
-        while let data = try handle.read(upToCount: 1_024 * 1_024), !data.isEmpty {
+        while true {
+            if observeCancellation { try Task.checkCancellation() }
+            guard let data = try handle.read(upToCount: 1_024 * 1_024), !data.isEmpty else { break }
             hasher.update(data: data)
         }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
@@ -366,7 +368,7 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
     private let currentVersion: String
     private let repository: String
     private let session: URLSession
-    private let commandRunner = CommandRunner()
+    private let commandRunner: any CommandRunning
     private let applicationValidator: SoftwareUpdateApplicationValidator
     private let cachedValidationTimeout: TimeInterval
 
@@ -374,19 +376,22 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
         self.currentVersion = currentVersion
         self.repository = repository
         applicationValidator = SoftwareUpdateApplicationValidator()
+        commandRunner = CommandRunner()
         cachedValidationTimeout = UpdatePolicy.cachedApplicationValidationTimeout
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = UpdatePolicy.checkTimeout
+        configuration.timeoutIntervalForRequest = UpdatePolicy.downloadStallTimeout
         configuration.timeoutIntervalForResource = UpdatePolicy.packageTimeout
         session = URLSession(configuration: configuration)
     }
 
     init(currentVersion: String, session: URLSession, applicationValidator: SoftwareUpdateApplicationValidator = .init(),
+         commandRunner: any CommandRunning = CommandRunner(),
          cachedValidationTimeout: TimeInterval = UpdatePolicy.cachedApplicationValidationTimeout) {
         self.currentVersion = currentVersion
         self.repository = Self.defaultRepository
         self.session = session
         self.applicationValidator = applicationValidator
+        self.commandRunner = commandRunner
         self.cachedValidationTimeout = cachedValidationTimeout
     }
 
@@ -446,15 +451,6 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
         guard channel.allows(release, currentVersion: currentVersion) else {
             throw SoftwareUpdateError.invalidRelease("候选版本不符合当前更新通道或没有更新")
         }
-        return try await UpdateDeadline(timeout: UpdatePolicy.packageTimeout).perform(operation: "准备 AutoMAA 更新") {
-            try await self.prepareRelease(release, directories: directories, progress: progress)
-        }
-    }
-
-    private func prepareRelease(
-        _ release: SoftwareUpdateRelease, directories: AppDirectories,
-        progress: @escaping @Sendable (UpdateProgress) async -> Void
-    ) async throws -> PreparedSoftwareUpdate {
         try Task.checkCancellation()
         try directories.prepare()
         let updatesRoot = directories.root.appending(path: "Updates", directoryHint: .isDirectory)
@@ -475,8 +471,10 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
         do {
             let checksumURL = workingDirectory.appending(path: release.checksum.name)
             let diskImageURL = workingDirectory.appending(path: release.diskImage.name)
-            try await download(release.checksum, to: checksumURL, message: "正在下载校验文件…", progress: progress)
-            try await download(release.diskImage, to: diskImageURL, message: "正在下载 AutoMAA 更新包…", progress: progress)
+            try await UpdateDeadline(timeout: UpdatePolicy.packageTimeout).perform(operation: "下载 AutoMAA 更新附件") {
+                try await self.download(release.checksum, to: checksumURL, message: "正在下载校验文件…", progress: progress)
+                try await self.download(release.diskImage, to: diskImageURL, message: "正在下载 AutoMAA 更新包…", progress: progress)
+            }
             await progress(.init(message: "下载完成，正在校验更新包…"))
 
             let checksumData = try Data(contentsOf: checksumURL)
@@ -484,7 +482,7 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
                 from: checksumData,
                 fileName: release.diskImage.name
             )
-            let actual = try SoftwareUpdateVerifier.sha256(of: diskImageURL)
+            let actual = try SoftwareUpdateVerifier.sha256(of: diskImageURL, observeCancellation: true)
             guard expected == actual else { throw SoftwareUpdateError.checksumMismatch }
 
             try await verifyDiskImage(diskImageURL)
@@ -579,7 +577,7 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
         _ asset: SoftwareUpdateAsset, to destination: URL,
         progress: @escaping @Sendable (DownloadProgress) async -> Void
     ) async throws {
-        var request = URLRequest(url: asset.downloadURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: UpdatePolicy.checkTimeout)
+        var request = URLRequest(url: asset.downloadURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: UpdatePolicy.downloadStallTimeout)
         request.setValue("application/octet-stream", forHTTPHeaderField: "Accept")
         request.setValue("AutoMAA/\(currentVersion)", forHTTPHeaderField: "User-Agent")
         let temporaryURL: URL
@@ -654,62 +652,35 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
     }
 
     private func verifyDiskImage(_ diskImageURL: URL) async throws {
-        let result = try await commandRunner.run(
-            executable: "/usr/bin/hdiutil",
-            arguments: ["verify", diskImageURL.path],
-            timeout: 120
-        )
-        guard result.exitCode == 0, !result.timedOut, !result.cancelled else {
-            throw commandError("校验磁盘映像", result)
-        }
+        let result = try await runLocalCommand("/usr/bin/hdiutil", ["verify", diskImageURL.path], timeout: 120)
+        try result.requireUpdateSuccess("校验磁盘映像")
     }
 
-    private func stageApplication(
+    func stageApplication(
         from diskImageURL: URL,
         in workingDirectory: URL,
         expectedVersion: String
     ) async throws -> URL {
         let mountRoot = workingDirectory.appending(path: "Mount", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: mountRoot, withIntermediateDirectories: true)
-        let attach = try await commandRunner.run(
-            executable: "/usr/bin/hdiutil",
-            arguments: ["attach", "-nobrowse", "-readonly", "-plist", "-mountroot", mountRoot.path, diskImageURL.path],
-            timeout: 120
-        )
-        guard attach.exitCode == 0, !attach.timedOut, !attach.cancelled else {
-            throw commandError("挂载磁盘映像", attach)
-        }
-        let mountedURL: URL
+        let destination = workingDirectory.appending(path: "AutoMAA.app", directoryHint: .isDirectory)
         do {
-            mountedURL = try mountPoint(from: attach.standardOutput, under: mountRoot)
-        } catch {
-            for candidate in (try? FileManager.default.contentsOfDirectory(
-                at: mountRoot,
-                includingPropertiesForKeys: nil
-            )) ?? [] {
-                await detach(candidate)
-            }
-            throw error
-        }
-        do {
+            let attach = try await runLocalCommand("/usr/bin/hdiutil", [
+                "attach", "-nobrowse", "-readonly", "-plist", "-mountroot", mountRoot.path, diskImageURL.path
+            ], timeout: 120)
+            try attach.requireUpdateSuccess("挂载磁盘映像")
+            let mountedURL = try mountPoint(from: attach.standardOutput, under: mountRoot)
             let source = mountedURL.appending(path: "AutoMAA.app", directoryHint: .isDirectory)
             try await applicationValidator.validate(source, expectedVersion: expectedVersion)
-            let destination = workingDirectory.appending(path: "AutoMAA.app", directoryHint: .isDirectory)
-            let copy = try await commandRunner.run(
-                executable: "/usr/bin/ditto",
-                arguments: [source.path, destination.path],
-                timeout: 180
-            )
-            guard copy.exitCode == 0, !copy.timedOut, !copy.cancelled else {
-                throw commandError("暂存 AutoMAA.app", copy)
-            }
+            let copy = try await runLocalCommand("/usr/bin/ditto", [source.path, destination.path], timeout: 180)
+            try copy.requireUpdateSuccess("暂存 AutoMAA.app")
             try await applicationValidator.validate(destination, expectedVersion: expectedVersion)
-            await detach(mountedURL)
-            return destination
         } catch {
-            await detach(mountedURL)
+            try await detachVolumes(in: mountRoot)
             throw error
         }
+        try await detachVolumes(in: mountRoot)
+        return destination
     }
 
     private func mountPoint(from output: String, under mountRoot: URL) throws -> URL {
@@ -720,34 +691,47 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
         else {
             throw SoftwareUpdateError.invalidDownload("无法读取磁盘映像挂载点")
         }
-        let mountURL = URL(filePath: mountPath).standardizedFileURL
-        let rootPath = mountRoot.standardizedFileURL.path + "/"
+        let mountURL = URL(filePath: mountPath).resolvingSymlinksInPath().standardizedFileURL
+        let rootPath = mountRoot.resolvingSymlinksInPath().standardizedFileURL.path + "/"
         guard mountURL.path.hasPrefix(rootPath) else {
             throw SoftwareUpdateError.invalidDownload("磁盘映像挂载到了意外位置")
         }
         return mountURL
     }
 
-    private func detach(_ mountedURL: URL) async {
-        let result = try? await commandRunner.run(
-            executable: "/usr/bin/hdiutil",
-            arguments: ["detach", mountedURL.path],
-            timeout: 30,
-            observeCancellation: false
-        )
-        if result?.exitCode != 0 {
-            _ = try? await commandRunner.run(
-                executable: "/usr/bin/hdiutil",
-                arguments: ["detach", "-force", mountedURL.path],
-                timeout: 30,
-                observeCancellation: false
-            )
+    private func detachVolumes(in mountRoot: URL) async throws {
+        let volumes = try FileManager.default.contentsOfDirectory(at: mountRoot, includingPropertiesForKeys: nil)
+        var cleanupError: Error?
+        for volume in volumes {
+            let result = try? await runLocalCommand("/usr/bin/hdiutil", ["detach", volume.path],
+                                                    timeout: 30, observeCancellation: false)
+            if result?.succeeded == true || !FileManager.default.fileExists(atPath: volume.path) { continue }
+            do {
+                let forced = try await runLocalCommand("/usr/bin/hdiutil", ["detach", "-force", volume.path],
+                                                       timeout: 30, observeCancellation: false)
+                try forced.requireUpdateSuccess("卸载磁盘映像")
+            } catch {
+                cleanupError = error
+            }
         }
+        if let cleanupError { throw cleanupError }
     }
 
-    private func commandError(_ action: String, _ result: CommandResult) -> SoftwareUpdateError {
-        let output = result.combinedOutput.isEmpty ? "退出码 \(result.exitCode)" : String(result.combinedOutput.prefix(300))
-        return .commandFailed(action, output)
+    private func runLocalCommand(_ executable: String, _ arguments: [String], timeout: TimeInterval,
+                                 observeCancellation: Bool = true) async throws -> CommandResult {
+        try await commandRunner.run(executable: executable, arguments: arguments, environment: [:],
+            timeout: timeout, observeCancellation: observeCancellation, startupScreenshotPolicy: nil, startupUpdateWait: nil)
+    }
+}
+
+private extension CommandResult {
+    func requireUpdateSuccess(_ action: String) throws {
+        if cancelled { throw CancellationError() }
+        if timedOut { throw SoftwareUpdateError.localValidationTimedOut(action) }
+        guard succeeded else {
+            let details = combinedOutput.isEmpty ? "退出码 \(exitCode)" : String(combinedOutput.prefix(300))
+            throw SoftwareUpdateError.commandFailed(action, details)
+        }
     }
 }
 
@@ -877,9 +861,7 @@ public struct SoftwareUpdateInstaller: Sendable {
             timeout: 180,
             observeCancellation: false
         )
-        guard copy.exitCode == 0, !copy.timedOut else {
-            throw SoftwareUpdateError.commandFailed("复制新版本", copy.combinedOutput)
-        }
+        try copy.requireUpdateSuccess("复制新版本")
         try await validator.validate(replacement, expectedVersion: request.expectedVersion)
 
         try manager.moveItem(at: request.currentApplicationURL, to: backup)
@@ -894,9 +876,7 @@ public struct SoftwareUpdateInstaller: Sendable {
                     timeout: 30,
                     observeCancellation: false
                 )
-                guard opened.exitCode == 0 else {
-                    throw SoftwareUpdateError.commandFailed("重新打开 AutoMAA", opened.combinedOutput)
-                }
+                try opened.requireUpdateSuccess("重新打开 AutoMAA")
             }
             try? manager.removeItem(at: backup)
         } catch {
