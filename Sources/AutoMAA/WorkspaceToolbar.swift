@@ -163,8 +163,11 @@ final class WorkspaceChromeController: NSObject, NSToolbarDelegate {
         }
         let state = WorkspaceRunControlState(model: model)
         runPresentation = state.presentation
-        updateSegment(runGroup, index: 0, enabled: state.canStop, help: state.stopHelp)
-        updateSegment(runGroup, index: 1, enabled: state.canStart, help: state.startHelp)
+        let stopLabel = state.canStop ? state.stopHelp : "安全停止"
+        updateSegment(runGroup, index: 0, enabled: state.canStop, help: state.stopHelp, label: stopLabel)
+        updateSegment(runGroup, index: 1, enabled: state.canStart, help: state.startHelp, label: state.startLabel)
+        stopItem.label = stopLabel
+        stopItem.image?.accessibilityDescription = stopLabel
         stopItem.isEnabled = state.canStop
         stopItem.toolTip = state.stopHelp
         if expectsColumns == false { detailSplit = nil }
@@ -305,9 +308,14 @@ final class WorkspaceChromeController: NSObject, NSToolbarDelegate {
         for item in group.subitems { item.autovalidates = false }
     }
 
-    private func updateSegment(_ group: NSToolbarItemGroup, index: Int, enabled: Bool, help: String) {
-        group.subitems[index].isEnabled = enabled
-        group.subitems[index].toolTip = help
+    private func updateSegment(_ group: NSToolbarItemGroup, index: Int, enabled: Bool, help: String, label: String? = nil) {
+        let item = group.subitems[index]
+        if let label, item.label != label {
+            item.label = label
+            item.image?.accessibilityDescription = label
+        }
+        item.isEnabled = enabled
+        item.toolTip = help
         if let control = group.view as? NSSegmentedControl {
             control.setEnabled(enabled, forSegment: index)
             control.setToolTip(help, forSegment: index)
@@ -319,16 +327,15 @@ final class WorkspaceChromeController: NSObject, NSToolbarDelegate {
         let index = (sender as? NSToolbarItemGroup)?.selectedIndex
             ?? (sender as? NSSegmentedControl)?.selectedSegment ?? runGroup.selectedIndex
         if index == 0 {
-            guard WorkspaceRunControlState(model: model).canStop else { return }
-            model.cancelCurrentOperation()
+            WorkspaceRunControlState(model: model).stopWorkflow(in: model)
         } else if index == 1 {
             WorkspaceRunControlState(model: model).start(in: model)
         }
     }
 
     @objc private func stopCurrentOperation(_ sender: Any?) {
-        guard let model, WorkspaceRunControlState(model: model).canStop else { return }
-        model.cancelCurrentOperation()
+        guard let model else { return }
+        WorkspaceRunControlState(model: model).stopWorkflow(in: model)
     }
 
     @objc private func selectMode(_ sender: Any?) {

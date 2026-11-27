@@ -719,11 +719,14 @@ final class AppModel: ObservableObject {
     }
 
     var commandPlanID: UUID? {
-        if selection == .activity {
-            if case let .plan(planID) = activitySelection { return planID }
+        switch selection {
+        case .overview: return currentPlanID
+        case let .plan(id): return id
+        case .activity:
+            if case let .plan(id) = activitySelection { return id }
             return nil
+        case .client, .clients, .account: return nil
         }
-        return currentPlanID
     }
 
     func runSelectedPlan() {

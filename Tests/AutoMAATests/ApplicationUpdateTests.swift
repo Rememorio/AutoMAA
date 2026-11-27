@@ -168,7 +168,12 @@ struct ApplicationUpdateTests {
         #expect(fixture.model.applicationUpdateState.isBusy)
         #expect(await fixture.service.counts().checks == 1)
         #expect(await fixture.service.counts().prepares == 1)
-        fixture.model.cancelApplicationUpdate()
+        for scope in [OperationCommandScope.workspace, .maaEnvironment, .unavailable] {
+            #expect(!scope.canCancel(in: fixture.model))
+            scope.cancel(in: fixture.model)
+        }
+        #expect(OperationCommandScope.applicationUpdate.canCancel(in: fixture.model))
+        OperationCommandScope.applicationUpdate.cancel(in: fixture.model)
         try await waitUntil { !fixture.model.applicationUpdateState.isBusy }
         #expect(fixture.model.applicationUpdateNotice?.contains("下载已取消") == true)
     }

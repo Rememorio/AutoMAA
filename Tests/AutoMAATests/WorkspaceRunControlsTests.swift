@@ -7,6 +7,17 @@ import Testing
 @MainActor
 @Suite("Workspace run controls")
 struct WorkspaceRunControlsTests {
+    @Test("shortcuts follow the focused window and sheets block cancellation in every window")
+    func focusedCancellationScope() {
+        for scope in [OperationCommandScope.maaEnvironment, .applicationUpdate, .unavailable] {
+            #expect(OperationCommandScope.resolve(focusedScope: scope, workspaceActive: false, hasSheet: false) == scope)
+            #expect(OperationCommandScope.resolve(focusedScope: scope, workspaceActive: false, hasSheet: true) == .unavailable)
+        }
+        #expect(OperationCommandScope.resolve(focusedScope: nil, workspaceActive: true, hasSheet: false) == .workspace)
+        #expect(OperationCommandScope.resolve(focusedScope: nil, workspaceActive: true, hasSheet: true) == .unavailable)
+        #expect(OperationCommandScope.resolve(focusedScope: nil, workspaceActive: false, hasSheet: false) == .unavailable)
+    }
+
     @Test("overview keeps its toolbar free of run controls during a background workflow and cleanup")
     func overviewOmitsToolbarControls() throws {
         let fixture = makeFixture()
@@ -83,7 +94,7 @@ struct WorkspaceRunControlsTests {
         let model = fixture.model
         let (window, chrome, group) = try makeHost(model)
         defer { window.contentViewController = nil }
-        let initialFrames = try frames(window)
+        let initialFrames = try frames(window, group)
         let images = try group.subitems.map { try #require($0.image) }
         let windowFrame = window.frame
         let stop = try #require(group.subitems.first)
@@ -149,7 +160,7 @@ struct WorkspaceRunControlsTests {
         let model = fixture.model
         let (window, chrome, group) = try makeHost(model)
         defer { window.contentViewController = nil }
-        let initialFrames = try frames(window)
+        let initialFrames = try frames(window, group)
         let images = try group.subitems.map { try #require($0.image) }
         let stop = try #require(group.subitems.first)
         let play = try #require(group.subitems.last)
@@ -224,7 +235,7 @@ struct WorkspaceRunControlsTests {
         refresh(chrome, model: model, window: window)
         let stop = try #require(chrome.toolbar.items.first { $0.itemIdentifier == WorkspaceChromeController.stopID })
         let image = try #require(stop.image)
-        let stopFrame = try #require(actionElement("安全停止", in: window)).accessibilityFrame()
+        let stopFrame = try #require(actionElement(stop.label, in: window)).accessibilityFrame()
         #expect(stop.isEnabled)
         #expect(stop.toolTip?.contains(fixture.plan.name) == true)
         #expect(!chrome.toolbar.items.contains { $0 === group })
@@ -252,7 +263,7 @@ struct WorkspaceRunControlsTests {
         #expect(chrome.toolbar.items.contains { $0 === stop })
         #expect(stop.image === image)
         #expect(!stop.isEnabled)
-        #expect(try #require(actionElement("安全停止", in: window)).accessibilityFrame() == stopFrame)
+        #expect(try #require(actionElement(stop.label, in: window)).accessibilityFrame() == stopFrame)
         #expect(add.accessibilityFrame() == initial)
 
         control.finish(identity)
@@ -290,14 +301,14 @@ struct WorkspaceRunControlsTests {
         #expect(!ids.contains(WorkspaceChromeController.runID))
     }
 
-    @Test("local maintenance and its cancellation preserve the same native stop and play pair")
+    @Test("only the MAA environment may cancel maintenance and game controls remain unavailable during cleanup")
     func maintenanceUsesTheSameButtons() async throws {
         let fixture = makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let model = fixture.model
         let (window, chrome, group) = try makeHost(model)
         defer { window.contentViewController = nil }
-        let initialFrames = try frames(window)
+        let initialFrames = try frames(window, group)
         let images = try group.subitems.map { try #require($0.image) }
         let stop = try #require(group.subitems.first)
         let play = try #require(group.subitems.last)
@@ -306,15 +317,29 @@ struct WorkspaceRunControlsTests {
         #expect(model.isWorkflowRunning)
         #expect(model.activePlanID == nil)
         refresh(chrome, model: model, window: window)
-        #expect(stop.isEnabled)
+        #expect(!stop.isEnabled)
         #expect(!play.isEnabled)
-        #expect(stop.toolTip?.contains("取消更新") == true)
+        #expect(stop.toolTip?.contains("MAA 环境设置") == true)
         try expectFixedControls(group, stop: stop, play: play, window: window, frames: initialFrames, images: images)
         group.selectedIndex = 0
         let action = try #require(group.action)
         let sent = NSApp.sendAction(action, to: group.target, from: group)
         #expect(sent)
+        #expect(!model.isCancellingRun)
+        #expect(!OperationCommandScope.workspace.canCancel(in: model))
+        OperationCommandScope.workspace.cancel(in: model)
+        OperationCommandScope.applicationUpdate.cancel(in: model)
+        OperationCommandScope.unavailable.cancel(in: model)
+        #expect(!model.isCancellingRun)
+        model.selection = .activity
+        model.activitySelection = .session("history")
+        refresh(chrome, model: model, window: window)
+        #expect(!chrome.itemIdentifiers.contains(WorkspaceChromeController.stopID))
+        model.selection = .plan(fixture.plan.id)
+        #expect(OperationCommandScope.maaEnvironment.canCancel(in: model))
+        OperationCommandScope.maaEnvironment.cancel(in: model)
         #expect(model.isCancellingRun)
+        #expect(!OperationCommandScope.maaEnvironment.canCancel(in: model))
         refresh(chrome, model: model, window: window)
         #expect(!stop.isEnabled)
         #expect(!play.isEnabled)
@@ -387,14 +412,14 @@ struct WorkspaceRunControlsTests {
         #expect(group.subitems[1] === play)
         #expect(stop.image === images[0])
         #expect(play.image === images[1])
-        #expect(stop.label == "安全停止")
-        #expect(play.label == "运行方案")
-        #expect(try frames(window) == initial)
+        #expect(stop.label.contains("安全停止"))
+        #expect(play.label == play.toolTip?.components(separatedBy: "\n").first)
+        #expect(try frames(window, group) == initial)
     }
 
-    private func frames(_ window: NSWindow) throws -> [NSRect] {
-        let result = try ["安全停止", "运行方案"].map { label in
-            try #require(actionElement(label, in: window)).accessibilityFrame()
+    private func frames(_ window: NSWindow, _ group: NSToolbarItemGroup) throws -> [NSRect] {
+        let result = try group.subitems.map { item in
+            try #require(actionElement(item.label, in: window)).accessibilityFrame()
         }
         #expect(result.allSatisfy { $0.width > 0 && $0.height > 0 })
         #expect(result[0].maxX <= result[1].minX)

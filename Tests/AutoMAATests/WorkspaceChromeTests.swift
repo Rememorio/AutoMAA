@@ -44,7 +44,7 @@ struct WorkspaceChromeTests {
         let items = chrome.toolbar.items
         let addFrame = try actionFrame("添加客户端", in: window)
         let stopFrame = try actionFrame("安全停止", in: window)
-        let playFrame = try actionFrame("运行方案", in: window)
+        let initialPlayFrame = try playFrame(in: window)
 
         window.styleMask.insert(.fullSizeContentView)
         layoutWindow(window)
@@ -66,7 +66,7 @@ struct WorkspaceChromeTests {
         #expect(chrome.toolbar.items.count == items.count)
         #expect(try actionFrame("添加客户端", in: window) == addFrame)
         #expect(try actionFrame("安全停止", in: window) == stopFrame)
-        #expect(try actionFrame("运行方案", in: window) == playFrame)
+        #expect(try playFrame(in: window) == initialPlayFrame)
     }
 
     @Test("native separators follow the current columns and ignore cleanup from a previous page")
@@ -221,7 +221,7 @@ struct WorkspaceChromeTests {
                         let lastAction = try #require(actionFrames.last)
                         if let detail {
                             let stop = window.convertFromScreen(try actionFrame("安全停止", in: window))
-                            let play = window.convertFromScreen(try actionFrame("运行方案", in: window))
+                            let play = window.convertFromScreen(try playFrame(in: window))
                             #expect(stop.maxX <= play.minX, Comment(rawValue: context))
                             #expect(play.maxX < width, Comment(rawValue: context))
                             let middle = try #require(detail.splitViewItems.first?.viewController.view)
@@ -516,6 +516,13 @@ struct WorkspaceChromeTests {
 
     private func layoutWindow(_ window: NSWindow) {
         window.contentView?.superview?.layoutSubtreeIfNeeded()
+    }
+
+    private func playFrame(in window: NSWindow) throws -> NSRect {
+        let group = try #require(window.toolbar?.items.first { $0.itemIdentifier == WorkspaceChromeController.runID }
+            as? NSToolbarItemGroup)
+        let play = try #require(group.subitems.last)
+        return try actionFrame(play.label, in: window)
     }
 
     private func actionFrame(_ label: String, in element: any NSAccessibilityProtocol) throws -> NSRect {

@@ -36,6 +36,7 @@ struct AutoMAAApp: App {
         Window("软件更新", id: ApplicationUpdateView.windowID) {
             ApplicationUpdateView()
                 .environmentObject(model)
+                .focusedSceneValue(\.operationCommandScope, .applicationUpdate)
                 .onAppear { applicationDelegate.model = model }
         }
         .defaultSize(width: 560, height: 540)
@@ -46,6 +47,7 @@ struct AutoMAAApp: App {
                 .environmentObject(model)
                 .tint(.maaAccent)
                 .focusedSceneValue(\.workspaceActive, false)
+                .focusedSceneValue(\.operationCommandScope, model.settingsSection == .environment ? .maaEnvironment : .unavailable)
                 .onAppear { applicationDelegate.model = model }
         }
         .windowResizability(.contentSize)
@@ -72,6 +74,7 @@ private struct AutoMAACommands: Commands {
     @Environment(\.openSettings) private var openSettings
     @Environment(\.openWindow) private var openWindow
     @FocusedValue(\.workspaceActive) private var workspaceActive
+    @FocusedValue(\.operationCommandScope) private var focusedOperation
     @FocusedValue(\.workspaceChromeController) private var workspaceChrome
 
     var body: some Commands {
@@ -94,9 +97,9 @@ private struct AutoMAACommands: Commands {
             Button(runCommandTitle) { model.runSelectedPlan() }
                 .keyboardShortcut("r", modifiers: [.command])
                 .disabled(workspaceActive != true || hasWorkspaceSheet || !canRunCommand)
-            Button(model.activePlanID == nil ? "取消更新" : "安全停止当前流程") { model.cancelCurrentOperation() }
+            Button(operationScope.cancelTitle) { operationScope.cancel(in: model) }
                 .keyboardShortcut(".", modifiers: [.command])
-                .disabled(!model.canCancelRun && !model.applicationUpdateState.canCancel)
+                .disabled(!operationScope.canCancel(in: model))
             Button("保存配置") { model.saveNow() }
                 .keyboardShortcut("s", modifiers: [.command])
                 .disabled(workspaceActive != true || hasWorkspaceSheet)
@@ -113,6 +116,12 @@ private struct AutoMAACommands: Commands {
 
     private var hasWorkspaceSheet: Bool {
         model.entityEditor != nil || model.readinessRequest != nil || model.arrangementRequest != nil || model.updateDetailsRequest != nil
+    }
+
+    private var operationScope: OperationCommandScope {
+        guard let window = NSApp.keyWindow else { return .unavailable }
+        return OperationCommandScope.resolve(focusedScope: focusedOperation, workspaceActive: workspaceActive == true,
+            hasSheet: window.attachedSheet != nil || window.sheetParent != nil || (workspaceActive == true && hasWorkspaceSheet))
     }
 
     private var runCommandTitle: String {

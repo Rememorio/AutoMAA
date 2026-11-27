@@ -98,6 +98,7 @@ struct DashboardFocusView: View {
                         controls.stopWorkflow(in: model)
                     }
                     .disabled(!controls.canStop)
+                    .accessibilityLabel(controls.stopHelp)
                 }
             }
         }

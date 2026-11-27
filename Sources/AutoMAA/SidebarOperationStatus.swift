@@ -58,7 +58,9 @@ struct SidebarOperationStatus: View {
     }
 
     private var stage: String {
-        if model.isCancellingRun { return "正在结束并清理" }
+        if model.isCancellingRun { return model.isMAAMaintenanceRunning ? "正在取消维护并清理" : "正在安全停止" }
+        if model.isExternalRunActive && !model.canCancelRun { return "等待后台任务身份确认" }
+        if model.activePhase == .updating && !model.isMAAMaintenanceRunning { return "同步方案识别资源" }
         if model.activePhase == .switchingAccount { return model.activeStatusMessage }
         return model.activePhase.displayName
     }

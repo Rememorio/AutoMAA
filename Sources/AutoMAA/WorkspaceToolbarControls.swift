@@ -11,6 +11,8 @@ struct WorkspaceRunControlState {
     let canStop: Bool
     let stopHelp: String
 
+    var startLabel: String { String(startHelp.prefix { $0 != "\n" }) }
+
     var canStart: Bool {
         if case .unavailable = startAction { return false }
         return true
@@ -20,13 +22,18 @@ struct WorkspaceRunControlState {
         let identity = model.activePlanID.flatMap { id in
             model.configuration.plans.first { $0.id == id }?.displayName
         } ?? (model.isExternalRunActive ? "后台任务" : "MAA 维护")
-        canStop = model.isWorkflowRunning && model.canCancelRun && !model.isCancellingRun
-        if model.isCancellingRun {
+        let hasGameWorkflow = model.isWorkflowRunning && !model.isMAAMaintenanceRunning
+        canStop = OperationCommandScope.workspace.canCancel(in: model)
+        if model.isMAAMaintenanceRunning {
+            stopHelp = "MAA 维护中，可在 MAA 环境设置中查看进度"
+        } else if model.isCancellingRun {
             stopHelp = "正在停止并清理 · \(identity)"
-        } else if model.isWorkflowRunning {
-            stopHelp = "\(model.isMAAMaintenanceRunning ? "取消更新" : "安全停止") · \(identity)"
+        } else if model.isExternalRunActive && !canStop {
+            stopHelp = "后台任务尚未提供安全停止入口"
+        } else if hasGameWorkflow {
+            stopHelp = "安全停止 · \(identity)"
         } else {
-            stopHelp = "没有正在运行的操作"
+            stopHelp = "没有正在运行的游戏任务"
         }
         let planID: UUID?
         let isPending: Bool
@@ -44,10 +51,10 @@ struct WorkspaceRunControlState {
         let selectedPlan = planID.flatMap { id in model.configuration.plans.first { $0.id == id } }
         let roundID = planID.flatMap { model.activityRoundID(for: $0) }
         presentation = model.selection == .overview ? .hidden
-            : selectedPlan != nil ? .plan : (model.isWorkflowRunning ? .stop : .hidden)
+            : selectedPlan != nil ? .plan : (hasGameWorkflow ? .stop : .hidden)
         guard !model.isWorkflowRunning else {
             startAction = .unavailable
-            startHelp = "运行结束后可开始其他任务"
+            startHelp = model.isMAAMaintenanceRunning ? "MAA 维护结束后可运行方案" : "运行结束后可开始其他任务"
             return
         }
         guard let planID, let plan = selectedPlan else {
@@ -107,7 +114,42 @@ struct WorkspaceRunControlState {
     }
 
     func stopWorkflow(in model: AppModel) {
-        guard canStop, !model.isMAAMaintenanceRunning else { return }
-        model.cancelRun()
+        guard canStop else { return }
+        OperationCommandScope.workspace.cancel(in: model)
+    }
+}
+
+enum OperationCommandScope {
+    case workspace, maaEnvironment, applicationUpdate, unavailable
+
+    static func resolve(focusedScope: Self?, workspaceActive: Bool, hasSheet: Bool) -> Self {
+        guard !hasSheet else { return .unavailable }
+        return focusedScope ?? (workspaceActive ? .workspace : .unavailable)
+    }
+
+    var cancelTitle: String {
+        switch self {
+        case .workspace, .unavailable: "安全停止当前流程"
+        case .maaEnvironment: "取消 MAA 更新"
+        case .applicationUpdate: "取消软件更新"
+        }
+    }
+
+    @MainActor func canCancel(in model: AppModel) -> Bool {
+        switch self {
+        case .workspace: model.canCancelRun && !model.isMAAMaintenanceRunning
+        case .maaEnvironment: model.canCancelRun && model.isMAAMaintenanceRunning
+        case .applicationUpdate: model.applicationUpdateState.canCancel
+        case .unavailable: false
+        }
+    }
+
+    @MainActor func cancel(in model: AppModel) {
+        guard canCancel(in: model) else { return }
+        switch self {
+        case .workspace, .maaEnvironment: model.cancelRun()
+        case .applicationUpdate: model.cancelApplicationUpdate()
+        case .unavailable: break
+        }
     }
 }
