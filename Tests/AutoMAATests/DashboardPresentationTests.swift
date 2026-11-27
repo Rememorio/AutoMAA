@@ -26,8 +26,8 @@ struct DashboardPresentationTests {
         }
         let value = snapshot([summary(plan)], current: plan.id, active: plan.id,
                              activeRun: entries[5].runID, running: true, entries: entries)
-        #expect(value.recentRuns.map(\.runID) == [entries[3].runID, entries[2].runID, entries[1].runID])
-        #expect(value.recentRuns.allSatisfy { $0.hasUnfinishedActivity })
+        #expect(value.recentRuns.map(\.latest.runID) == [entries[3].runID, entries[2].runID, entries[1].runID])
+        #expect(value.recentRuns.allSatisfy { $0.latest.hasUnfinishedActivity })
     }
 
     @Test("shared configuration issues appear once and plan issues route to their owner")

@@ -104,6 +104,8 @@ final class AppModel: ObservableObject {
     }
     @Published private(set) var currentPlanID: UUID?
     @Published var settingsSection: SettingsSection = .general
+    @Published var showsMaintenanceHistory = false
+    @Published var maintenanceHistorySelection: String?
     @Published var entityEditor: EntityEditorRequest?
     @Published var activityEntries: [LogEntry]
     @Published var activitySearch = ""
@@ -928,8 +930,7 @@ final class AppModel: ObservableObject {
     }
 
     var latestMAAUpdateInformation: MAAUpdateInformation? {
-        if let activity = maaUpdateActivity { return activity.information }
-        return activityEntries.reversed().compactMap(\.updateInformation).first
+        activityEntries.lazy.reversed().compactMap(\.updateInformation).first { $0.after != nil }
     }
 
     func showApplicationNotes(currentVersion: Bool = false) {
@@ -1519,13 +1520,43 @@ final class AppModel: ObservableObject {
     }
 
     func clearActivityHistory() {
+        clearHistory(.runs)
+    }
+
+    func clearMaintenanceHistory() {
+        clearHistory(.maintenance)
+    }
+
+    private func clearHistory(_ scope: HistoryStore.Scope) {
+        let title = scope == .runs ? "运行记录" : "维护记录"
+        let destination: ApplicationFeedbackDestination = scope == .runs ? .workspace : .maintenanceHistory
         do {
-            try historyStore.clear()
-            activityEntries = []
-            showFeedback("活动记录已清除")
+            guard !isWorkflowRunning else { throw RuntimeError.alreadyRunning }
+            activityEntries = try historyStore.clear(scope)
+            if scope == .maintenance {
+                maintenanceHistorySelection = nil
+                maaUpdateActivity = nil
+            } else {
+                activityNavigationRequest = nil
+                activityPendingSource = nil
+                if case .session = activitySelection { activitySelection = nil }
+            }
+            showFeedback("\(title)已清除", destination: destination)
         } catch {
-            showFeedback("清理活动记录失败：\(error.localizedDescription)", tone: .error)
+            showFeedback("清除\(title)失败：\(error.localizedDescription)", tone: .error, destination: destination)
         }
+    }
+
+    var maintenanceSessions: [ActivitySession] {
+        ActivityHistory.sessions(from: activityEntries).filter(\.isStandaloneMaintenance)
+    }
+
+    func showMaintenanceHistory(sessionID: String? = nil) {
+        reloadActivityHistory()
+        settingsSection = .environment
+        maintenanceHistorySelection = sessionID
+        showsMaintenanceHistory = true
+        NotificationCenter.default.post(name: .autoMAAOpenSettings, object: nil)
     }
 
     func canOpenFightStageSettings(for step: WorkflowStep) -> Bool {
@@ -1586,12 +1617,16 @@ final class AppModel: ObservableObject {
     }
 
     func showCurrentActivity() {
+        if isMAAMaintenanceRunning {
+            showSettings(.environment)
+            return
+        }
         activityNavigationRequest = nil
         activityPendingSource = nil
         activitySearch = ""
         activityFilter = .all
         if isWorkflowRunning {
-            activitySelection = activePlanID.map(ActivityWorkspaceSelection.plan) ?? .maintenance
+            activitySelection = activePlanID.map(ActivityWorkspaceSelection.plan) ?? .backgroundRun
         }
         selection = .activity
     }
@@ -1599,9 +1634,13 @@ final class AppModel: ObservableObject {
     func showActivity(runID: UUID) {
         reloadActivityHistory()
         activityNavigationRequest = nil
-        guard activityEntries.contains(where: { $0.runID == runID }) else {
+        guard let session = ActivityHistory.sessions(from: activityEntries).first(where: { $0.runID == runID }) else {
             showFeedback("该次运行记录已被清除，可在活动记录中打开诊断日志目录")
             selection = .activity
+            return
+        }
+        if session.isStandaloneMaintenance {
+            showMaintenanceHistory(sessionID: session.id)
             return
         }
         activitySearch = ""
@@ -1630,6 +1669,8 @@ final class AppModel: ObservableObject {
     }
 
     func showSettings(_ section: SettingsSection = .general) {
+        showsMaintenanceHistory = false
+        maintenanceHistorySelection = nil
         settingsSection = section
         NotificationCenter.default.post(name: .autoMAAOpenSettings, object: nil)
     }

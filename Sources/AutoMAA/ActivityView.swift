@@ -4,18 +4,18 @@ import SwiftUI
 
 enum ActivityWorkspaceSelection: Hashable {
     case plan(UUID)
-    case maintenance
+    case backgroundRun
     case session(String)
 }
 
 struct ActivityView: View {
     @EnvironmentObject private var model: AppModel
     @State private var showingClearConfirmation = false
-    @State private var latestMaintenanceSessionID: String?
+    @State private var expandedGroups: Set<String> = []
     @State private var recordSection = ActivityRecordSection.results
 
     private var sessions: [ActivitySession] {
-        ActivityHistory.sessions(from: model.activityEntries)
+        ActivityHistory.sessions(from: model.activityEntries).filter { !$0.isStandaloneMaintenance }
     }
 
     private var currentPlan: AutomationPlan? {
@@ -23,8 +23,8 @@ struct ActivityView: View {
         return model.configuration.plans.first { $0.id == model.activePlanID }
     }
 
-    private var showsCurrentMaintenance: Bool {
-        model.isWorkflowRunning && currentPlan == nil
+    private var showsBackgroundRun: Bool {
+        model.isWorkflowRunning && !model.isMAAMaintenanceRunning && currentPlan == nil
     }
 
     private var historicalSessions: [ActivitySession] {
@@ -32,13 +32,17 @@ struct ActivityView: View {
         return sessions.filter { $0.runID != runID }
     }
 
-    private var displayedSessions: [ActivitySession] {
-        historicalSessions.filter { session in
-            model.activityFilter.includes(session)
-                && ActivitySearch.matches(session, query: model.activitySearch,
-                    title: title(for: session), context: context(for:))
+    private var displayedGroups: [ActivityHistoryGroup] {
+        ActivityHistoryGroup.groups(historicalSessions).compactMap { group in
+            group.matching { session in
+                model.activityFilter.includes(session)
+                    && ActivitySearch.matches(session, query: model.activitySearch,
+                        title: title(for: session), context: context(for:))
+            }
         }
     }
+
+    private var displayedSessions: [ActivitySession] { displayedGroups.flatMap(\.sessions) }
 
     private var hasActiveFilters: Bool {
         !model.activitySearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.activityFilter != .all
@@ -52,7 +56,7 @@ struct ActivityView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .workspaceToolbar(title: "运行记录", actions: recordActions, modes: recordModes)
-        .alert("清除全部运行记录？", isPresented: $showingClearConfirmation) {
+        .alert("清除方案运行记录？", isPresented: $showingClearConfirmation) {
             Button("取消", role: .cancel) {}
             Button("清除", role: .destructive) {
                 guard !model.isWorkflowRunning else { return }
@@ -60,30 +64,25 @@ struct ActivityView: View {
             }
             .disabled(model.isWorkflowRunning)
         } message: {
-            Text("运行摘要会被清除，诊断日志文件不会受影响。")
+            Text("方案运行摘要会被清除，诊断日志仍可在 Finder 中查看。")
         }
         .onAppear { restoreSelection() }
         .onChange(of: sessions.map(\.id)) { _, _ in
-            rememberCurrentMaintenanceSession()
             restoreSelection()
         }
         .onChange(of: model.configuration.plans.map(\.id)) { _, _ in restoreSelection() }
         .onChange(of: model.activitySearch) { _, _ in selectFilteredResultIfNeeded() }
         .onChange(of: model.activityFilter) { _, _ in selectFilteredResultIfNeeded() }
-        .onChange(of: model.activeRunID, initial: true) { _, _ in
-            rememberCurrentMaintenanceSession()
-        }
-        .onChange(of: model.isWorkflowRunning) { _, running in
-            if running {
-                latestMaintenanceSessionID = nil
-                rememberCurrentMaintenanceSession()
-            }
-            restoreSelection()
-        }
+        .onChange(of: displayedGroups.map(\.latest.id)) { _, _ in expandGroup(containing: model.activitySelection) }
+        .onChange(of: model.activePlanID) { _, _ in restoreSelection() }
+        .onChange(of: showsBackgroundRun) { _, _ in restoreSelection() }
+        .onChange(of: model.isWorkflowRunning) { _, _ in restoreSelection() }
     }
 
     private var recordList: some View {
-        VStack(spacing: 0) {
+        let groups = displayedGroups
+        let count = groups.reduce(0) { $0 + 1 + $1.earlier.count }
+        return VStack(spacing: 0) {
             HStack(spacing: 8) {
                 ActivitySearchField(text: $model.activitySearch)
                 Menu {
@@ -114,10 +113,10 @@ struct ActivityView: View {
                                 .tag(ActivityWorkspaceSelection.plan(currentPlan.id))
                                 .id(ActivityWorkspaceSelection.plan(currentPlan.id))
                         }
-                    } else if showsCurrentMaintenance {
+                    } else if showsBackgroundRun {
                         Section("当前") {
-                            currentMaintenanceRow.tag(ActivityWorkspaceSelection.maintenance)
-                                .id(ActivityWorkspaceSelection.maintenance)
+                            backgroundRow.tag(ActivityWorkspaceSelection.backgroundRun)
+                                .id(ActivityWorkspaceSelection.backgroundRun)
                         }
                     }
 
@@ -131,16 +130,13 @@ struct ActivityView: View {
                         }
                     }
 
-                    ForEach(ActivityDay.groups(displayedSessions)) { day in
+                    ForEach(ActivityDay.days(groups)) { day in
                         Section(ActivityRecordPresentation.dayTitle(day.date)) {
-                            ForEach(day.sessions) { session in
-                                historyRow(session).tag(ActivityWorkspaceSelection.session(session.id))
-                                    .id(ActivityWorkspaceSelection.session(session.id))
-                            }
+                            ForEach(day.groups) { group in historyGroup(group) }
                         }
                     }
 
-                    if displayedSessions.isEmpty, !model.configuration.plans.isEmpty || showsCurrentMaintenance {
+                    if groups.isEmpty, !model.configuration.plans.isEmpty || showsBackgroundRun {
                         Section("历史") {
                             Text(hasActiveFilters ? "没有匹配的记录" : "还没有运行记录")
                                 .font(.caption).foregroundStyle(.secondary)
@@ -151,7 +147,7 @@ struct ActivityView: View {
                 .listStyle(.inset)
                 .scrollContentBackground(.hidden)
                 .overlay {
-                    if model.configuration.plans.isEmpty, !showsCurrentMaintenance, displayedSessions.isEmpty {
+                    if model.configuration.plans.isEmpty, !showsBackgroundRun, groups.isEmpty {
                         ActivityEmptyState(
                             title: hasActiveFilters ? "没有匹配的记录" : "还没有运行记录",
                             symbol: hasActiveFilters ? "magnifyingglass" : "clock.arrow.circlepath",
@@ -164,6 +160,7 @@ struct ActivityView: View {
                     await navigateToRequestedRun(using: proxy)
                 }
                 .task(id: model.activitySelection) {
+                    expandGroup(containing: model.activitySelection)
                     await Task.yield()
                     guard !Task.isCancelled, model.activityNavigationRequest == nil,
                           let selected = model.activitySelection else { return }
@@ -172,7 +169,7 @@ struct ActivityView: View {
             }
 
             HStack {
-                Text("\(displayedSessions.count) 次历史运行" + (model.activityFilter == .all ? "" : " · \(model.activityFilter.title)"))
+                Text("\(count) 次历史运行" + (model.activityFilter == .all ? "" : " · \(model.activityFilter.title)"))
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 if hasActiveFilters {
@@ -190,7 +187,7 @@ struct ActivityView: View {
                 NSWorkspace.shared.open(model.directories.logs)
             },
             .separator,
-            .action("清除运行记录…", isEnabled: !model.activityEntries.isEmpty && !model.isWorkflowRunning) {
+            .action("清除运行记录…", isEnabled: !sessions.isEmpty && !model.isWorkflowRunning) {
                 showingClearConfirmation = true
             }
         ])]
@@ -225,31 +222,67 @@ struct ActivityView: View {
         .help(plan.displayName)
     }
 
-    private var currentMaintenanceRow: some View {
+    private var backgroundRow: some View {
         HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "wrench.and.screwdriver")
+            Image(systemName: "clock")
                 .foregroundStyle(.secondary).frame(width: 18).padding(.top, 2)
             VStack(alignment: .leading, spacing: 4) {
-                Text(model.activePlanID == nil ? "MAA 维护" : "当前运行").font(.callout.weight(.medium))
-                Text("维护日志").font(.caption).foregroundStyle(.secondary)
+                Text("后台运行").font(.callout.weight(.medium))
+                Text("实时记录").font(.caption).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
         }
         .padding(.vertical, 5)
     }
 
-    private func historyRow(_ session: ActivitySession) -> some View {
+    @ViewBuilder
+    private func historyGroup(_ group: ActivityHistoryGroup) -> some View {
+        let expanded = expandedGroups.contains(group.id)
+        HStack(spacing: 5) {
+            if !group.earlier.isEmpty {
+                Button {
+                    if expanded {
+                        if case let .session(id) = model.activitySelection, group.earlier.contains(where: { $0.id == id }) {
+                            model.activitySelection = .session(group.latest.id)
+                        }
+                        expandedGroups.remove(group.id)
+                    } else {
+                        expandedGroups.insert(group.id)
+                    }
+                } label: {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.caption.weight(.semibold)).frame(width: 18, height: 24)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(expanded ? "收起启动尝试" : "展开启动尝试")
+                .accessibilityValue("\(group.sessions.count) 次，\(expanded ? "已展开" : "已收起")")
+                .help(expanded ? "收起启动尝试" : "展开每次启动尝试")
+            }
+            historyRow(group.latest, attempts: group.earlier.count + 1)
+        }
+        .tag(ActivityWorkspaceSelection.session(group.latest.id))
+        .id(ActivityWorkspaceSelection.session(group.latest.id))
+        if expanded {
+            ForEach(group.earlier) { session in
+                historyRow(session, showsSeconds: true).padding(.leading, 23)
+                    .tag(ActivityWorkspaceSelection.session(session.id))
+                    .id(ActivityWorkspaceSelection.session(session.id))
+            }
+        }
+    }
+
+    private func historyRow(_ session: ActivitySession, attempts: Int = 1, showsSeconds: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(title(for: session)).font(.callout.weight(.medium)).lineLimit(2)
                 Spacer(minLength: 0)
-                Text(session.startedAt, format: .dateTime.hour().minute())
+                Text(session.startedAt, format: showsSeconds || attempts > 1 ? .dateTime.hour().minute().second() : .dateTime.hour().minute())
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
             HStack(spacing: 5) {
                 ActivityOutcomeLabel(outcome: session.outcome, isSelected: model.activitySelection == .session(session.id))
                 Text("·").accessibilityHidden(true)
-                Text(ActivityRecordPresentation.listSummary(session))
+                Text(ActivityRecordPresentation.listSummary(session, attempts: attempts))
                     .lineLimit(1)
             }
             .font(.caption).foregroundStyle(.secondary)
@@ -265,8 +298,8 @@ struct ActivityView: View {
         case let .plan(planID):
             PlanActivityView(planID: planID, isPendingDetail: true)
                 .id(planID)
-        case .maintenance:
-            ActivityCurrentRunView()
+        case .backgroundRun:
+            if showsBackgroundRun { ActivityCurrentRunView() }
         case let .session(id):
             if let session = sessions.first(where: { $0.id == id }) {
                 ActivityRecordDetail(session: session, title: title(for: session), section: recordSection,
@@ -294,17 +327,12 @@ struct ActivityView: View {
             switch selection {
             case let .plan(id) where model.configuration.plans.contains(where: { $0.id == id }): return
             case let .session(id) where sessions.contains(where: { $0.id == id }): return
-            case .maintenance where showsCurrentMaintenance: return
-            case .maintenance:
-                if let id = latestMaintenanceSessionID, sessions.contains(where: { $0.id == id }) {
-                    model.activitySelection = .session(id)
-                    return
-                }
+            case .backgroundRun where showsBackgroundRun: return
             default: break
             }
         }
         if let currentPlan { model.activitySelection = .plan(currentPlan.id) }
-        else if showsCurrentMaintenance { model.activitySelection = .maintenance }
+        else if showsBackgroundRun { model.activitySelection = .backgroundRun }
         else if hasActiveFilters { model.activitySelection = displayedSessions.first.map { .session($0.id) } }
         else if let id = model.currentPlanID, model.configuration.plans.contains(where: { $0.id == id }) {
             model.activitySelection = .plan(id)
@@ -312,11 +340,10 @@ struct ActivityView: View {
         else { model.activitySelection = model.configuration.plans.first.map { .plan($0.id) } }
     }
 
-    private func rememberCurrentMaintenanceSession() {
-        guard showsCurrentMaintenance else { return }
-        latestMaintenanceSessionID = model.activeRunID.flatMap { runID in
-            sessions.first { $0.runID == runID }?.id
-        }
+    private func expandGroup(containing selection: ActivityWorkspaceSelection?) {
+        guard case let .session(id) = selection,
+              let group = displayedGroups.first(where: { $0.earlier.contains(where: { $0.id == id }) }) else { return }
+        expandedGroups.insert(group.id)
     }
 
     private func selectFilteredResultIfNeeded() {
@@ -333,10 +360,11 @@ struct ActivityView: View {
               let session = sessions.first(where: { $0.runID == request.runID }) else { return }
         let target: ActivityWorkspaceSelection
         if model.isWorkflowRunning, model.activeRunID == request.runID {
-            target = currentPlan.map { .plan($0.id) } ?? .maintenance
+            target = currentPlan.map { .plan($0.id) } ?? .backgroundRun
         } else {
             target = .session(session.id)
         }
+        expandGroup(containing: target)
         model.activitySelection = target
         await Task.yield()
         guard !Task.isCancelled, model.activityNavigationRequest == request else { return }

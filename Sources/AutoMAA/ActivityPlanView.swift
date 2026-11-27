@@ -173,21 +173,14 @@ struct ActivityCurrentRunView: View {
 
     private var session: ActivitySession? {
         guard model.isWorkflowRunning, let runID = model.activeRunID else { return nil }
-        return ActivityHistory.sessions(from: model.activityEntries).first { $0.runID == runID }
+        return ActivityHistory.sessions(from: model.activityEntries).first { $0.runID == runID && !$0.isStandaloneMaintenance }
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(model.activePlanID == nil ? "MAA 维护" : "当前运行").font(.headline)
-                Spacer()
-                if let information = session?.updateInformation {
-                    ActionTextButton(title: "更新内容", symbol: "doc.text", help: "查看本次 MAA 更新内容") {
-                        model.updateDetailsRequest = .maa(information)
-                    }
-                }
-            }
-            .padding(20)
+            Text("后台运行").font(.headline)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(20)
             Divider()
             ActivityOperationSummary()
                 .padding(.horizontal, 20).padding(.vertical, 14)
@@ -207,10 +200,6 @@ struct ActivityOperationSummary: View {
             Text(model.activeStatusMessage)
                 .font(.callout).foregroundStyle(.secondary)
                 .lineLimit(3).textSelection(.enabled).help(model.activeStatusMessage)
-            if model.activePlanID == nil, let activity = model.maaUpdateActivity {
-                Text("已用时 \(activity.startedAt, style: .timer) · 上限 \(UpdatePolicy.durationDescription(activity.timeout))")
-                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-            }
             if model.isExternalRunActive, !model.canCancelRun, !model.isCancellingRun {
                 Label("定时任务在后台运行", systemImage: "clock.badge.checkmark")
                     .font(.caption).foregroundStyle(.secondary)

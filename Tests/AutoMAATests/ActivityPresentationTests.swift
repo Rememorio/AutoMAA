@@ -167,9 +167,9 @@ struct ActivityPresentationTests {
         let after = ActivitySession(id: "after", runID: UUID(), entries: [
             .init(timestamp: start.addingTimeInterval(180), level: .success, message: "另一轮")
         ])
-        let groups = ActivityDay.groups([before, after], calendar: calendar)
-        #expect(groups.map { $0.sessions.map(\.id) } == [["after"], ["before"]])
-        #expect(groups[1].sessions[0].entries.count == 2)
+        let groups = ActivityDay.days(ActivityHistoryGroup.groups([after, before], calendar: calendar), calendar: calendar)
+        #expect(groups.map { $0.groups.map(\.id) } == [["after"], ["before"]])
+        #expect(groups[1].groups[0].latest.entries.count == 2)
     }
 
     @Test("account summaries retain final fallback outcomes and do not invent completion")

@@ -82,7 +82,7 @@ struct DashboardSnapshot {
     let focusedPlan: DashboardPlanSummary?
     let attention: [DashboardAttentionItem]
     let upcoming: [DashboardPlanSummary]
-    let recentRuns: [ActivitySession]
+    let recentRuns: [ActivityHistoryGroup]
 
     init(plans: [DashboardPlanSummary], currentPlanID: UUID?, activePlanID: UUID?, activeRunID: UUID?,
          isRunning: Bool, entries: [LogEntry]) {
@@ -96,9 +96,8 @@ struct DashboardSnapshot {
                 guard case let .scheduled(left) = $0.schedule, case let .scheduled(right) = $1.schedule else { return false }
                 return left < right
             }
-        recentRuns = Array(ActivityHistory.sessions(from: entries).filter {
-            $0.planID != nil && !(isRunning && activeRunID != nil && $0.runID == activeRunID)
-        }.prefix(3))
+        let history = ActivityHistory.sessions(from: entries).filter { !(isRunning && activeRunID != nil && $0.runID == activeRunID) }
+        recentRuns = Array(ActivityHistoryGroup.groups(history).filter { $0.latest.planID != nil }.prefix(3))
     }
 
     private static func attentionItems(_ plans: [DashboardPlanSummary]) -> [DashboardAttentionItem] {

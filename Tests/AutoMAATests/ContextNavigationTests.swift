@@ -52,45 +52,64 @@ struct ContextNavigationTests {
         #expect(model.arrangementRequest?.opensAtSchedule == false)
     }
 
-    @Test("opening an update result reveals its run while ordinary navigation retains filters")
+    @Test("standalone maintenance opens its settings history and preserves workspace filters")
     @MainActor
     func updateResultNavigation() throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let model = makeModel(root: root)
-        let runID = UUID()
+        let maintenanceID = UUID(), planRunID = UUID()
+        let plan = try #require(model.configuration.plans.first)
         let history = HistoryStore(directories: model.directories)
-        history.append(.init(level: .success, message: "MAA 更新完成", runID: runID, phase: .completed))
-        history.append(.init(level: .error, message: "其他运行失败", runID: UUID(), phase: .failed))
+        history.append(.init(level: .info, message: "维护", runID: maintenanceID, phase: .updating))
+        history.append(.init(level: .success, message: "已完成", runID: maintenanceID, phase: .completed))
+        history.append(.init(level: .info, message: "运行前更新", runID: planRunID, phase: .updating, planID: plan.id))
         model.activitySearch = "账号搜索"
         model.activityFilter = .failed
-
-        model.showActivity(runID: runID)
-
-        #expect(model.selection == .activity)
-        #expect(model.activitySearch.isEmpty)
-        #expect(model.activityFilter == .all)
-        let request = try #require(model.activityNavigationRequest)
-        #expect(request.runID == runID)
-        #expect(ActivityHistory.sessions(from: model.activityEntries).contains { $0.runID == request.runID })
-        model.finishActivityNavigation(request)
-        #expect(model.activityNavigationRequest == nil)
-
-        model.activitySearch = "账号搜索"
-        model.activityFilter = .failed
-        model.showSettings()
-        #expect(model.selection == .activity)
         model.selection = .clients
-        model.selection = .activity
+        model.showActivity(runID: maintenanceID)
+        #expect(model.selection == .clients)
+        #expect(model.settingsSection == .environment)
+        #expect(model.showsMaintenanceHistory)
+        #expect(model.maintenanceHistorySelection == model.maintenanceSessions.first?.id)
+        #expect(model.maintenanceSessions.map(\.runID) == [maintenanceID])
         #expect(model.activitySearch == "账号搜索")
         #expect(model.activityFilter == .failed)
         #expect(model.activityNavigationRequest == nil)
 
-        model.selection = .overview
-        model.showAllActivity()
+        model.showSettings(.general)
+        #expect(!model.showsMaintenanceHistory)
+        model.showActivity(runID: planRunID)
         #expect(model.selection == .activity)
         #expect(model.activitySearch.isEmpty)
         #expect(model.activityFilter == .all)
+        #expect(model.activityNavigationRequest?.runID == planRunID)
+    }
+
+    @Test("history clearing preserves the other scope, logs and active work", arguments: [false, true])
+    @MainActor
+    func clearsOnlySelectedHistory(maintenance: Bool) throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = makeModel(root: root)
+        let store = HistoryStore(directories: model.directories)
+        let maintenanceID = UUID(), runID = UUID(), planID = UUID()
+        store.append(.init(level: .info, message: "更新", runID: maintenanceID, phase: .updating))
+        store.append(.init(level: .error, message: "失败", runID: maintenanceID, phase: .failed))
+        store.append(.init(level: .success, message: "方案内更新", runID: runID, phase: .updating, planID: planID))
+        let logStore = DiagnosticLogStore(directories: model.directories)
+        logStore.begin(runID: maintenanceID)
+        model.reloadActivityHistory()
+        let scope: HistoryStore.Scope = maintenance ? .maintenance : .runs
+        try withExtendedLifetime(ProcessLock(url: model.directories.lock)) {
+            #expect(throws: RuntimeError.self) { _ = try store.clear(scope) }
+            #expect(store.load().count == 3)
+        }
+        if maintenance { model.clearMaintenanceHistory() }
+        else { model.clearActivityHistory() }
+        #expect(Set(model.activityEntries.compactMap(\.runID)) == [maintenance ? runID : maintenanceID])
+        #expect(model.activityEntries == store.load())
+        #expect(FileManager.default.fileExists(atPath: logStore.url(for: maintenanceID).path))
     }
 
     @Test("a removed context record explains the missing destination without replacing filters")

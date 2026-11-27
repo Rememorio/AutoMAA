@@ -150,7 +150,7 @@ extension ActivityOutcome {
     var color: Color {
         switch self {
         case .completed: .green
-        case .partial, .partiallyHandled, .incomplete, .awaitingReview, .weeklyPending, .unfinished:
+        case .partial, .partiallyHandled, .incomplete, .awaitingReview, .weeklyPending, .unfinished, .blocked:
             LogMessagePalette.warning
         case .failed: LogMessagePalette.error
         case .handled, .cancelled, .recorded: .secondary

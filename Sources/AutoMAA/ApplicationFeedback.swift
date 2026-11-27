@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-enum ApplicationFeedbackDestination: Hashable { case workspace, settings(SettingsSection), applicationUpdate }
+enum ApplicationFeedbackDestination: Hashable { case workspace, settings(SettingsSection), maintenanceHistory, applicationUpdate }
 
 struct ApplicationFeedback: Identifiable, Equatable {
     enum Tone: Sendable {

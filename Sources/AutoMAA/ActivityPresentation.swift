@@ -19,9 +19,13 @@ enum ActivityPendingLink: Equatable {
     init?(session: ActivitySession, progress: PlanContinuation) {
         let summary = session.runSummary
         let needsFollowUp = summary?.isPartial == true || (summary?.pendingWeeklyAnnihilation ?? 0) > 0
-            || [.failed, .awaitingReview, .unfinished, .cancelled].contains(session.outcome)
+            || [.failed, .blocked, .awaitingReview, .unfinished, .cancelled].contains(session.outcome)
         guard needsFollowUp else { return nil }
-        guard let roundID = session.roundID, roundID == progress.roundID else { self = .expired; return }
+        guard let roundID = session.roundID, roundID == progress.roundID else {
+            if session.startBlocker != nil { return nil }
+            self = .expired
+            return
+        }
         if progress.hasPendingWork {
             var parts: [String] = []
             if progress.pending > 0 { parts.append("剩余 \(progress.pending) 项") }
@@ -35,7 +39,13 @@ enum ActivityPendingLink: Equatable {
 }
 
 extension LogEntry {
+    var accountResultMessage: String {
+        guard accountID != nil, message.hasPrefix("账号「"), let end = message.range(of: "」：") else { return message }
+        return String(message[end.upperBound...])
+    }
+
     var terminalOutcome: ActivityOutcome? {
+        if startBlocker != nil { return .blocked }
         guard task == nil, clientID == nil, accountID == nil,
               phase == .completed || phase == .failed || phase == .cancelled else { return nil }
         return ActivitySession(id: id.uuidString, runID: runID, entries: [self]).outcome
@@ -80,7 +90,7 @@ enum ActivityFilter: String, CaseIterable, Identifiable {
 
 enum ActivityOutcome {
     case completed, handled, partial, partiallyHandled, incomplete, awaitingReview, weeklyPending
-    case failed, cancelled, unfinished, recorded
+    case failed, blocked, cancelled, unfinished, recorded
 
     var title: String {
         switch self {
@@ -91,6 +101,7 @@ enum ActivityOutcome {
         case .incomplete: "未完成"
         case .awaitingReview: "待核实"
         case .weeklyPending: "本轮结束"
+        case .blocked: "未启动"
         case .failed: "失败"
         case .cancelled: "已停止"
         case .unfinished: "未记录结束"
@@ -106,6 +117,7 @@ enum ActivityOutcome {
         case .incomplete: "circle.dashed"
         case .awaitingReview: "exclamationmark.circle"
         case .weeklyPending: "calendar.badge.clock"
+        case .blocked: "pause.circle"
         case .failed: "xmark.circle"
         case .cancelled: "stop.circle"
         case .unfinished: "questionmark.circle"
@@ -116,6 +128,7 @@ enum ActivityOutcome {
 
 extension ActivitySession {
     var outcome: ActivityOutcome {
+        if startBlocker != nil { return .blocked }
         if hasUnfinishedActivity { return .unfinished }
         if finalPhase == .failed { return .failed }
         if finalPhase == .cancelled { return .cancelled }
@@ -146,14 +159,45 @@ extension ActivitySession {
     }
 }
 
+/// One visible row may represent adjacent attempts. Each attempt keeps its original identity and entries.
+struct ActivityHistoryGroup: Identifiable {
+    let latest: ActivitySession
+    var earlier: [ActivitySession] = []
+    var id: String { earlier.last?.id ?? latest.id }
+    var sessions: [ActivitySession] { [latest] + earlier }
+
+    static func groups(_ ordered: [ActivitySession], calendar: Calendar = .current) -> [Self] {
+        var result: [Self] = []
+        for session in ordered where !session.isStandaloneMaintenance {
+            if let latest = result.last?.latest, let blocker = session.startBlocker,
+               session.roundID != nil, session.roundID == latest.roundID,
+               session.planID == latest.planID, latest.startBlocker == blocker,
+               latest.entries.last?.message == session.entries.last?.message,
+               calendar.isDate(latest.startedAt, inSameDayAs: session.startedAt),
+               latest.startedAt.timeIntervalSince(session.startedAt) <= 300 {
+                result[result.count - 1].earlier.append(session)
+            } else {
+                result.append(Self(latest: session))
+            }
+        }
+        return result
+    }
+
+    func matching(_ includes: (ActivitySession) -> Bool) -> Self? {
+        let matches = sessions.filter(includes)
+        guard let first = matches.first else { return nil }
+        return Self(latest: first, earlier: Array(matches.dropFirst()))
+    }
+}
+
 struct ActivityDay: Identifiable {
     let date: Date
-    let sessions: [ActivitySession]
+    let groups: [ActivityHistoryGroup]
     var id: Date { date }
 
-    static func groups(_ sessions: [ActivitySession], calendar: Calendar = .current) -> [Self] {
-        Dictionary(grouping: sessions) { calendar.startOfDay(for: $0.startedAt) }
-            .map { Self(date: $0.key, sessions: $0.value.sorted { $0.startedAt > $1.startedAt }) }
+    static func days(_ groups: [ActivityHistoryGroup], calendar: Calendar = .current) -> [Self] {
+        Dictionary(grouping: groups) { calendar.startOfDay(for: $0.latest.startedAt) }
+            .map { Self(date: $0.key, groups: $0.value) }
             .sorted { $0.date > $1.date }
     }
 }
@@ -196,14 +240,19 @@ struct ActivityResultSummary {
 
     init(session: ActivitySession) {
         accounts = ActivityAccountSummary.groups(in: session)
-        let displayedIDs = Set(accounts.isEmpty
-            ? session.entries.last.map { [$0.id] } ?? []
-            : accounts.flatMap { account in
-                account.outcomes.isEmpty ? [account.lastEvent.id] : account.outcomes.map(\.id)
-            })
-        notices = session.entries.filter {
-            ($0.level == .warning || $0.level == .error)
-                && $0.phase != .completed && !displayedIDs.contains($0.id)
+        var shown = accounts.isEmpty ? Array(session.entries.suffix(1)) : accounts.flatMap { account in
+            account.outcomes.isEmpty ? [account.lastEvent] : account.outcomes
+        }
+        notices = session.entries.filter { entry in
+            guard entry.level == .warning || entry.level == .error, entry.phase != .completed else { return false }
+            if shown.contains(where: { previous in
+                previous.clientID == entry.clientID && previous.accountID == entry.accountID
+                    && previous.task == entry.task && previous.phase == entry.phase && previous.level == entry.level
+                    && previous.message == entry.message && previous.details == entry.details
+                    && previous.fightResult == entry.fightResult
+            }) { return false }
+            shown.append(entry)
+            return true
         }
     }
 }

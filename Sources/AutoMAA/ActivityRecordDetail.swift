@@ -7,7 +7,7 @@ enum ActivityRecordPresentation {
         if let planID = session.planID {
             return plans.first { $0.id == planID }?.displayName ?? "已移除的方案"
         }
-        return session.runID == nil ? "较早的运行记录" : "MAA 维护"
+        return session.isStandaloneMaintenance ? "MAA 维护" : "较早的运行记录"
     }
 
     static func context(_ entry: LogEntry, clients: [ClientConfiguration]) -> String? {
@@ -31,7 +31,10 @@ enum ActivityRecordPresentation {
             + (progress.unconfirmed > 0 ? " · \(progress.unconfirmed) 项待确认" : "")
     }
 
-    static func listSummary(_ session: ActivitySession) -> String {
+    static func listSummary(_ session: ActivitySession, attempts: Int = 1) -> String {
+        if let blocker = session.startBlocker {
+            return attempts > 1 ? "\(blocker.title) · \(attempts) 次尝试" : blocker.title
+        }
         var parts: [String] = []
         if let summary = session.runSummary {
             let resolved = summary.completedSteps + summary.unnecessarySteps + summary.manuallyHandledSteps
@@ -53,6 +56,7 @@ enum ActivityRecordPresentation {
     }
 
     static func summary(_ session: ActivitySession) -> String {
+        if let blocker = session.startBlocker { return "未启动 · " + blocker.title }
         var parts: [String] = []
         if let summary = session.runSummary {
             parts.append("\(summary.completedSteps + summary.unnecessarySteps + summary.manuallyHandledSteps)/\(summary.totalSteps) 项已处理")
@@ -65,8 +69,11 @@ enum ActivityRecordPresentation {
         } else {
             parts.append("\(session.entries.count) 条记录")
         }
-        if session.warningCount > 0 { parts.append("\(session.warningCount) 条提醒") }
-        if session.errorCount > 0, (session.runSummary?.failedSteps ?? 0) == 0 { parts.append("\(session.errorCount) 条错误") }
+        let notices = ActivityResultSummary(session: session).notices
+        let warnings = notices.filter { $0.level == .warning }.count
+        let errors = notices.filter { $0.level == .error }.count
+        if warnings > 0 { parts.append("\(warnings) 条提醒") }
+        if errors > 0 { parts.append("\(errors) 条错误") }
         if session.endedAt > session.startedAt { parts.append(duration(from: session.startedAt, to: session.endedAt)) }
         return parts.joined(separator: " · ")
     }
@@ -135,7 +142,6 @@ struct ActivityRecordDetail: View {
 }
 
 struct ActivityRecordHeader: View {
-    @EnvironmentObject private var model: AppModel
     let session: ActivitySession
     let title: String
     var showFullHistory: (() -> Void)? = nil
@@ -144,11 +150,6 @@ struct ActivityRecordHeader: View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text(title).font(.headline).textSelection(.enabled)
-                if let information = session.updateInformation {
-                    ActionTextButton(title: "更新内容", symbol: "doc.text", help: "查看本次 MAA 更新内容") {
-                        model.updateDetailsRequest = .maa(information)
-                    }
-                }
                 if let showFullHistory {
                     ActionTextButton(title: "完整记录", symbol: "clock.arrow.circlepath",
                                      help: "查看本方案的完整运行记录", action: showFullHistory)
@@ -187,7 +188,11 @@ struct ActivitySessionContents: View {
         VStack(alignment: .leading, spacing: 16) {
             if section == .process {
                 HStack {
-                    Text("完整日志").font(.subheadline.weight(.semibold))
+                    if let information = session.updateInformation {
+                        ActionTextButton(title: "更新内容", symbol: "doc.text", help: "查看本次运行的 MAA 更新内容") {
+                            model.updateDetailsRequest = .maa(information)
+                        }
+                    }
                     Spacer(minLength: 12)
                     Toggle("只看警告与错误", isOn: $onlyAttention)
                         .toggleStyle(.checkbox).font(.caption).fixedSize()
@@ -226,7 +231,7 @@ struct ActivitySessionContents: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     ActivityLogRows(entries: account.outcomes.isEmpty ? [account.lastEvent] : account.outcomes,
-                                    showsContext: false)
+                                    showsContext: false, groupsByAccount: true)
                 }
                 if account.id != accounts.last?.id { Divider() }
             }
@@ -292,6 +297,7 @@ struct ActivityLogRows: View {
     @EnvironmentObject private var model: AppModel
     let entries: [LogEntry]
     var showsContext = true
+    var groupsByAccount = false
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 0) {
@@ -304,7 +310,7 @@ struct ActivityLogRows: View {
             .accessibilityAddTraits(.isHeader)
             Divider()
             ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
-                ActivityEventRow(entry: entry,
+                ActivityEventRow(entry: entry, message: groupsByAccount ? entry.accountResultMessage : entry.message,
                     context: showsContext
                         ? ActivityRecordPresentation.context(entry, clients: model.configuration.clients) : nil)
                     .padding(.horizontal, 10).padding(.vertical, 8)
@@ -318,6 +324,7 @@ struct ActivityLogRows: View {
 
 struct ActivityEventRow: View {
     let entry: LogEntry
+    let message: String
     let context: String?
 
     var body: some View {
@@ -332,7 +339,7 @@ struct ActivityEventRow: View {
                             .foregroundStyle(outcome.color)
                             .accessibilityHidden(true)
                     }
-                    Text(entry.message).font(.callout).textSelection(.enabled)
+                    Text(message).font(.callout).textSelection(.enabled)
                         .foregroundStyle(entry.messageColor)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityHint(entry.level.displayName)

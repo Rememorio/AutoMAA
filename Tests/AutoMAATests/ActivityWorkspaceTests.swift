@@ -67,10 +67,17 @@ struct ActivityWorkspaceTests {
         model.activityFilter = .failed
         let selectedPlan = model.currentPlanID
         model.showCurrentActivity()
-        #expect(model.selection == .activity)
-        #expect(model.activitySelection == (maintenance ? .maintenance : .plan(planID)))
-        #expect(model.activitySearch.isEmpty)
-        #expect(model.activityFilter == .all)
+        if maintenance {
+            #expect(model.settingsSection == .environment)
+            #expect(model.activitySelection == .session("previous-selection"))
+            #expect(model.activitySearch == "old record")
+            #expect(model.activityFilter == .failed)
+        } else {
+            #expect(model.selection == .activity)
+            #expect(model.activitySelection == .plan(planID))
+            #expect(model.activitySearch.isEmpty)
+            #expect(model.activityFilter == .all)
+        }
         #expect(model.currentPlanID == selectedPlan)
         #expect(model.activityNavigationRequest == nil)
 

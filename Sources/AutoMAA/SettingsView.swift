@@ -45,12 +45,21 @@ struct SettingsView: View {
             .frame(width: 0, height: 0))
         .sheet(item: $updateDetailsRequest) { request in
             UpdateDetailsView(model: model, request: request)
+                .focusedSceneValue(\.operationCommandScope, .unavailable)
+        }
+        .sheet(isPresented: $model.showsMaintenanceHistory) {
+            MaintenanceHistoryView()
+                .environmentObject(model)
+                .focusedSceneValue(\.operationCommandScope, .unavailable)
         }
         .onChange(of: model.configuration) { _, _ in
             model.scheduleSave()
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { model.refreshNotificationAuthorization() }
+            if phase == .active {
+                model.refreshNotificationAuthorization()
+                model.reloadActivityHistory()
+            }
         }
         .onAppear { model.refreshNotificationAuthorization() }
         .onReceive(NotificationCenter.default.publisher(for: .autoMAAOpenSettings)) { _ in
@@ -200,7 +209,7 @@ struct SettingsView: View {
                     Button("MAA Beta 发布说明") { updateDetailsRequest = .maaLatest(.beta) }
                     if let information = model.latestMAAUpdateInformation {
                         Divider()
-                        Button(model.maaUpdateActivity == nil ? "最近更新详情" : "本次更新详情") {
+                        Button("最近启用的更新详情") {
                             updateDetailsRequest = .maa(information)
                         }
                     }
@@ -237,6 +246,9 @@ struct SettingsView: View {
             HStack(alignment: .firstTextBaseline) {
                 Text("维护").font(.headline)
                 Spacer()
+                ActionTextButton(title: "维护记录", symbol: "clock.arrow.circlepath", help: "浏览 MAA 环境维护记录") {
+                    model.showMaintenanceHistory()
+                }
                 ActionTextMenu(title: "更新 MAA", symbol: "arrow.down.circle", help: "选择 MAA 更新内容") {
                     Button("更新 MAA 稳定版") { model.updateMAACore() }
                     Button("仅更新识别数据") { model.hotUpdate() }
@@ -272,11 +284,10 @@ struct SettingsView: View {
                             DetailDisclosure(details: details)
                                 .id(details)
                         }
-                        if let runID = activity.runID {
-                            ActionTextButton(title: "本次记录", symbol: "clock.arrow.circlepath", help: "查看本次更新记录") {
-                                model.showActivity(runID: runID)
-                                openWindow(id: "main")
-                                NSApp.activate(ignoringOtherApps: true)
+                        if let runID = activity.runID,
+                           let session = model.maintenanceSessions.first(where: { $0.runID == runID }) {
+                            ActionTextButton(title: "本次记录", symbol: "clock.arrow.circlepath", help: "查看本次维护记录") {
+                                model.showMaintenanceHistory(sessionID: session.id)
                             }
                             .font(.caption)
                         }
