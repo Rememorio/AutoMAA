@@ -1,6 +1,5 @@
 # 首次配置
 
-> 本页说明待发布的界面调整，截图来自已发布版本。[v0.17.3 使用指南](https://github.com/Rememorio/AutoMAA/blob/v0.17.3/docs/guide/getting-started.md)。
 
 先配置一个客户端、一个账号和一个方案，跑通后再扩展账号与定时。可以在尚未安装 MAA 时填写配置；运行前完成[MAA 运行环境安装](./installation)、游戏登录和数据下载。
 
@@ -8,7 +7,7 @@
 
 左侧切换今日总览、自动化方案、客户端与账号、运行记录。选择方案后，中间调整任务顺序，右侧编辑所选任务；右侧顶栏切换“任务设置”与“运行概况”，中列日历图标打开执行安排，详情列左侧播放按钮运行方案。图标悬停时显示操作名称。
 
-任务列表顶部的“执行 N 个账号”表示方案范围，已设置的定时在旁边显示。当前运行状态集中显示在侧栏底部、帮助与公告上方；方案页的停止和播放在顶栏固定成组显示，只改变可用性，不替换图标或文字；客户端与历史记录空闲时不显示运行按钮，游戏任务运行期间提供独立停止入口。工具栏的侧栏按钮或 `Control-Command-S` 可收起、展开导航；方案增多时列表和总览可滚动。
+任务列表顶部的账号数表示方案范围，已设置的定时在旁边显示。当前运行状态集中显示在侧栏底部、帮助与公告上方；方案页的停止和播放在顶栏固定成组显示，只改变可用性，不替换图标或文字；客户端与历史记录空闲时不显示运行按钮，游戏任务运行期间提供独立停止入口。工具栏的侧栏按钮或 `Control-Command-S` 可收起、展开导航；方案增多时列表和总览可滚动。
 
 任务行右侧会在运行过程中更新。转圈表示正在执行，绿勾表示全部目标账号均已完成该项，红叉表示失败，灰色斜线表示取消，橙色提醒表示有结果待处理。在方案的“运行概况”可按账号核实作战或继续本轮剩余任务。
 
@@ -17,9 +16,9 @@
 “需要处理”和“最近运行”采用同样的分组布局。前者列出待确认结果、作战恢复、配置错误和定时异常，后者保留最近三次方案结果。点击整行即可查看对应详情。点击“下次定时”中的时间或“定时需检查”，会直接打开该方案的定时设置。
 
 <figure class="guide-screenshot">
-  <img class="theme-shot theme-shot-light" src="../assets/screenshots/overview-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="今日总览：当前方案、任务顺序、今日轮数与最近运行" />
-  <img class="theme-shot theme-shot-dark" src="../assets/screenshots/overview-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="今日总览：当前方案、任务顺序、今日轮数与最近运行" />
-  <figcaption>AutoMAA v0.17.0 今日总览。查看当前方案、本轮结果与今日轮数，点击最近运行回看详情。</figcaption>
+  <img class="theme-shot theme-shot-light" src="../assets/screenshots/overview-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="今日总览中的当前方案、作战核实入口和最近运行" />
+  <img class="theme-shot theme-shot-dark" src="../assets/screenshots/overview-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="今日总览中的当前方案、作战核实入口和最近运行" />
+  <figcaption>v0.17.4 今日总览。单项作战可以就地核实，点击最近运行可查看当次结果。</figcaption>
 </figure>
 
 普通操作确认出现在所属窗口内容区右上角，约 6 秒后消失，悬停或键盘聚焦时暂停。需要修正的错误留在相关表单或页面，配置保存失败在工具栏下方提供“重试保存”；提示不会改变窗口尺寸。更新 AutoMAA 可从左下角或应用菜单的“检查更新…”打开独立窗口，更新偏好在“设置 → 通用 → 软件更新”，详见[更新指南](./updates)。
@@ -56,6 +55,12 @@
 ## 添加账号
 
 在中列选中客户端，再点击详情顶栏的人物加号“添加账号”，填写便于辨认的名称及方案归属，再点击“添加”。保存后选中新账号；铅笔图标编辑当前对象，更多菜单或列表右键菜单提供排序和删除。取消编辑保留原选择，不会创建账号。
+
+<figure class="guide-screenshot">
+  <img class="theme-shot theme-shot-light" src="../assets/screenshots/client-settings-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="客户端与账号中的日服账号、登录方式和参与方案" />
+  <img class="theme-shot theme-shot-dark" src="../assets/screenshots/client-settings-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="深色外观下的日服账号、登录方式和参与方案" />
+  <figcaption>在中列选择账号，右侧可以查看登录方式和参与的方案。</figcaption>
+</figure>
 
 能否自动切换账号取决于服务器：
 

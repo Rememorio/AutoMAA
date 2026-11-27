@@ -21,7 +21,7 @@
 <figure class="guide-screenshot">
   <img class="theme-shot theme-shot-light" src="../assets/screenshots/task-settings-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="方案页：中列按执行顺序列出任务，右栏显示理智作战及其自定义参数" />
   <img class="theme-shot theme-shot-dark" src="../assets/screenshots/task-settings-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="深色方案页：中列按执行顺序列出任务，右栏显示理智作战及其自定义参数" />
-  <figcaption>v0.17.3 方案页。任务标题旁可切换参数模式，本轮统计在“运行概况”中查看。</figcaption>
+  <figcaption>v0.17.4 方案页。任务标题旁可切换参数模式，本轮统计在“运行概况”中查看。</figcaption>
 </figure>
 
 ::: tip 只收基建产物

@@ -21,14 +21,13 @@ description: macOS 上的 MAA 工作流编排器。配置客户端、账号与�
   </section>
 
   <figure class="home-preview">
-    <img class="theme-shot theme-shot-light" src="./assets/screenshots/overview-light.webp" width="2360" height="1560" decoding="async" alt="今日总览：当前方案、任务顺序、今日轮数与最近运行" />
-    <img class="theme-shot theme-shot-dark" src="./assets/screenshots/overview-dark.webp" width="2360" height="1560" decoding="async" alt="今日总览：当前方案、任务顺序、今日轮数与最近运行" />
+    <img class="theme-shot theme-shot-light" src="./assets/screenshots/overview-light.webp" width="2360" height="1560" decoding="async" alt="今日总览中的当前方案、作战核实入口和最近运行" />
+    <img class="theme-shot theme-shot-dark" src="./assets/screenshots/overview-dark.webp" width="2360" height="1560" decoding="async" alt="今日总览中的当前方案、作战核实入口和最近运行" />
     <figcaption>
       <div class="home-preview-summary">
-        <span>AutoMAA v0.17.0 今日总览<span class="home-caption-detail"> · 方案、进度与待办，一处查看</span></span>
+        <span>AutoMAA v0.17.4 今日总览<span class="home-caption-detail"> · 选择方案、核实作战、查看最近结果</span></span>
         <a href="./guide/getting-started#认识主窗口">认识主窗口<span aria-hidden="true"> →</span></a>
       </div>
-      <p>文档包含待发布的界面调整。<a href="https://github.com/Rememorio/AutoMAA/tree/v0.17.3/docs">查看正式版 v0.17.3 文档</a>。</p>
     </figcaption>
   </figure>
 
