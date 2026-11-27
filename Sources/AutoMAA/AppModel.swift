@@ -847,8 +847,10 @@ final class AppModel: ObservableObject {
                 )
                 guard !Task.isCancelled else { return }
                 self.refreshNotificationAuthorization()
-                if result.exitCode == 0 {
+                if result.succeeded {
                     self.showFeedback("后台测试通知已发送", destination: .settings(.general))
+                } else if result.timedOut {
+                    self.showFeedback("等待后台 Runner 超时，未能确认通知是否送达", tone: .warning, destination: .settings(.general))
                 } else {
                     let message = result.combinedOutput.isEmpty ? "未知错误" : result.combinedOutput
                     self.showFeedback("后台测试通知未送达：\(String(message.prefix(180)))", tone: .warning, destination: .settings(.general))
@@ -905,11 +907,14 @@ final class AppModel: ObservableObject {
                 guard self.maaEnvironmentRequestID == requestID, self.configuration.cliPath == path else { return }
                 let output = SensitiveDataRedactor.redact(result.combinedOutput)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
-                if result.exitCode == 0, !output.isEmpty {
+                if result.timedOut || result.cancelled {
+                    self.maaVersionSummary = result.timedOut ? "检测失败：检测超时" : "检测已取消"
+                    self.maaEnvironmentDiagnostic = output.isEmpty ? nil : output
+                } else if result.succeeded, !output.isEmpty {
                     self.maaVersionSummary = output
                     self.maaEnvironmentDiagnostic = nil
                 } else {
-                    let reason = result.timedOut ? "检测超时" : result.exitCode == 0 ? "未返回版本" : "退出码 \(result.exitCode)"
+                    let reason = result.exitCode == 0 ? "未返回版本" : "退出码 \(result.exitCode)"
                     self.recordMAAEnvironmentFailure(output, reason: reason)
                 }
             } catch {

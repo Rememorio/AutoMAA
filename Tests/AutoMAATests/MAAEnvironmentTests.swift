@@ -18,9 +18,9 @@ private actor ControlledEnvironmentCheck {
 
     func isPending(_ id: Int) -> Bool { pending[id] != nil }
 
-    func complete(_ id: Int, output: String, exitCode: Int32 = 0) {
+    func complete(_ id: Int, output: String, exitCode: Int32 = 0, timedOut: Bool = false) {
         pending.removeValue(forKey: id)?.resume(returning: .init(
-            exitCode: exitCode, standardOutput: output, standardError: "", timedOut: false))
+            exitCode: exitCode, standardOutput: output, standardError: "", timedOut: timedOut))
     }
 }
 
@@ -117,6 +117,22 @@ struct MAAEnvironmentTests {
         #expect(model.maaVersionSummary == "当前环境")
         #expect(model.feedback.notices.isEmpty)
         #expect(!model.isCheckingMAAEnvironment)
+    }
+
+    @Test("a version line printed before timeout remains diagnostic even with a zero exit status")
+    @MainActor
+    func timedOutPartialVersion() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let checker = ControlledEnvironmentCheck()
+        let model = makeModel(root: root, checker: checker)
+        model.configuration.cliPath = "/usr/bin/true"
+        model.refreshMAAStatus()
+        try await waitUntil { await checker.isPending(0) }
+        await checker.complete(0, output: "maa-cli v1.0", timedOut: true)
+        try await waitUntil { !model.isCheckingMAAEnvironment }
+        #expect(model.maaVersionSummary == "检测失败：检测超时")
+        #expect(model.maaEnvironmentDiagnostic == "maa-cli v1.0")
     }
 
     private func temporaryRoot() -> URL {

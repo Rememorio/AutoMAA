@@ -19,6 +19,8 @@ public struct CommandResult: Sendable {
     var effectiveTimeout: TimeInterval?
     var downloadStalled = false
 
+    public var succeeded: Bool { exitCode == 0 && !timedOut && !cancelled && stopReason == nil }
+
     public init(
         exitCode: Int32,
         standardOutput: String,

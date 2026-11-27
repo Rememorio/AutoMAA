@@ -269,7 +269,7 @@ public final class CaffeinateLease: @unchecked Sendable {
 
     public init?() {
         process.executableURL = URL(filePath: "/usr/bin/caffeinate")
-        process.arguments = ["-dimsu"]
+        process.arguments = ["-dimsu", "-w", String(getpid())]
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         do {

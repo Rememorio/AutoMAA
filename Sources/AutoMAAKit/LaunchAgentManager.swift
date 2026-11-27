@@ -5,6 +5,7 @@ public enum LaunchAgentError: LocalizedError, Equatable {
     case invalidSchedule(plan: String, problem: PlanScheduleProblem)
     case duplicateSchedule(first: String, second: String, slot: WeeklyScheduleSlot)
     case transientRunner
+    case systemTimeout(String)
 
     public var errorDescription: String? {
         switch self {
@@ -14,6 +15,8 @@ public enum LaunchAgentError: LocalizedError, Equatable {
             "「\(first)」与「\(second)」都设置为\(slot.weekday.title) \(PlanScheduleFormatter.time(hour: slot.hour, minute: slot.minute))，请错开运行时间"
         case .transientRunner:
             "AutoMAARunner 位于临时目录，不能注册系统定时任务；请先将 AutoMAA 移到稳定位置"
+        case let .systemTimeout(operation):
+            "系统定时服务\(operation)超时，请重试同步"
         }
     }
 }
@@ -21,7 +24,7 @@ public enum LaunchAgentError: LocalizedError, Equatable {
 public struct LaunchAgentManager: Sendable {
     public static let labelPrefix = "com.rememorio.AutoMAA.runner"
 
-    private let commandRunner = CommandRunner()
+    private var service: LaunchAgentService?
     private let directories: AppDirectories
     private let launchAgentsDirectory: URL
     private let systemIntegrationEnabled: Bool
@@ -36,9 +39,21 @@ public struct LaunchAgentManager: Sendable {
         self.directories = directories
         self.systemIntegrationEnabled = systemIntegrationEnabled
         self.runnerIdentity = runnerIdentity
+        if systemIntegrationEnabled {
+            service = LaunchAgentService { arguments in
+                try await CommandRunner().run(executable: "/bin/launchctl", arguments: arguments,
+                                              environment: ["LC_ALL": "C"], timeout: 10)
+            }
+        }
         self.launchAgentsDirectory = launchAgentsDirectory
             ?? FileManager.default.homeDirectoryForCurrentUser
                 .appending(path: "Library/LaunchAgents", directoryHint: .isDirectory)
+    }
+
+    init(directories: AppDirectories, launchAgentsDirectory: URL,
+         launchctl: @escaping @Sendable ([String]) async throws -> CommandResult) {
+        self.init(directories: directories, launchAgentsDirectory: launchAgentsDirectory, systemIntegrationEnabled: false)
+        self.service = LaunchAgentService(run: launchctl)
     }
 
     public func label(planID: UUID) -> String {
@@ -55,24 +70,23 @@ public struct LaunchAgentManager: Sendable {
         try directories.prepare()
         try FileManager.default.createDirectory(at: launchAgentsDirectory, withIntermediateDirectories: true)
         let plistURL = plistURL(planID: plan.id)
-        let data = try PropertyListSerialization.data(
-            fromPropertyList: propertyList(runnerURL: runnerURL, plan: plan),
-            format: .xml,
-            options: 0
-        )
-        try data.write(to: plistURL, options: .atomic)
-        guard systemIntegrationEnabled else { return }
-
-        let domain = launchdDomain
-        try await bootOut(plistURL: plistURL)
-        let result = try await commandRunner.run(
-            executable: "/bin/launchctl",
-            arguments: ["bootstrap", domain, plistURL.path],
-            timeout: 10
-        )
-        guard result.exitCode == 0 else {
-            try? FileManager.default.removeItem(at: plistURL)
-            throw CommandRunnerError.launchFailed(result.combinedOutput)
+        var definition = propertyList(runnerURL: runnerURL, plan: plan)
+        func writeDefinition() throws {
+            let data = try PropertyListSerialization.data(fromPropertyList: definition, format: .xml, options: 0)
+            try data.write(to: plistURL, options: .atomic)
+        }
+        try await service?.bootOut(label: label(planID: plan.id))
+        try writeDefinition()
+        if let service {
+            do {
+                let result = try await service.command(["bootstrap", service.domain, plistURL.path], operation: "注册")
+                guard result.succeeded else { throw CommandRunnerError.launchFailed(result.combinedOutput) }
+            } catch {
+                // launchd may already have received the request. Keep the label discoverable for removal or retry.
+                definition["Disabled"] = true
+                try writeDefinition()
+                throw error
+            }
         }
     }
 
@@ -106,12 +120,7 @@ public struct LaunchAgentManager: Sendable {
         try await uninstallLegacyAgentIfNeeded()
         for plan in plans where plan.schedule.enabled {
             let current = isCurrent(runnerURL: runnerURL, plan: plan)
-            let loaded: Bool
-            if systemIntegrationEnabled {
-                loaded = await isLoaded(label: label(planID: plan.id))
-            } else {
-                loaded = true
-            }
+            let loaded = try await service?.isLoaded(label: label(planID: plan.id)) ?? true
             if !current || !loaded {
                 try await install(runnerURL: runnerURL, plan: plan)
             }
@@ -203,41 +212,36 @@ public struct LaunchAgentManager: Sendable {
     }
 
     private func uninstall(plistURL: URL) async throws {
-        if systemIntegrationEnabled {
-            try await bootOut(plistURL: plistURL)
-        }
+        try await service?.bootOut(label: plistURL.deletingPathExtension().lastPathComponent)
         if FileManager.default.fileExists(atPath: plistURL.path) {
             try FileManager.default.removeItem(at: plistURL)
         }
     }
+}
 
-    private var launchdDomain: String {
-        "gui/\(getuid())"
-    }
+private struct LaunchAgentService: Sendable {
+    let run: @Sendable ([String]) async throws -> CommandResult
+    var domain: String { "gui/\(getuid())" }
 
-    private func bootOut(plistURL: URL) async throws {
-        let label = plistURL.deletingPathExtension().lastPathComponent
-        do {
-            let result = try await commandRunner.run(
-                executable: "/bin/launchctl",
-                arguments: ["bootout", launchdDomain, plistURL.path],
-                timeout: 10
-            )
-            if result.exitCode != 0, await isLoaded(label: label) {
-                throw CommandRunnerError.launchFailed(result.combinedOutput)
-            }
-        } catch {
-            if await isLoaded(label: label) { throw error }
+    func bootOut(label: String) async throws {
+        let result = try await command(["bootout", "\(domain)/\(label)"], operation: "卸载")
+        if !result.succeeded, try await isLoaded(label: label) {
+            throw CommandRunnerError.launchFailed(result.combinedOutput)
         }
     }
 
-    private func isLoaded(label: String) async -> Bool {
-        guard let result = try? await commandRunner.run(
-            executable: "/bin/launchctl",
-            arguments: ["print", "\(launchdDomain)/\(label)"],
-            timeout: 10
-        ) else { return false }
-        return result.exitCode == 0
+    func isLoaded(label: String) async throws -> Bool {
+        let result = try await command(["print", "\(domain)/\(label)"], operation: "查询")
+        if result.succeeded { return true }
+        if result.combinedOutput.contains("Could not find service \"\(label)\"") { return false }
+        throw CommandRunnerError.launchFailed(result.combinedOutput)
+    }
+
+    func command(_ arguments: [String], operation: String) async throws -> CommandResult {
+        let result = try await run(arguments)
+        if result.cancelled { throw CancellationError() }
+        if result.timedOut { throw LaunchAgentError.systemTimeout(operation) }
+        return result
     }
 }
 
