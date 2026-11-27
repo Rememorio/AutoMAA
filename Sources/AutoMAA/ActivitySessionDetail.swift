@@ -1,11 +1,20 @@
 import AutoMAAKit
 import SwiftUI
 
+extension LogEntry {
+    var recordedDropsSummary: String? {
+        // Older carry-forward events embedded the previous run's entire fight result.
+        if task == .fight, phase == .runningTask, fightResult?.status == .unconfirmed,
+           message.hasSuffix("保留待确认作战，继续其他任务；请在活动记录的当前待办中处理") { return nil }
+        return fightResult?.dropsSummary
+    }
+}
+
 struct ActivityEntryDetails: View {
     let entry: LogEntry
 
     var body: some View {
-        if let summary = entry.fightResult?.dropsSummary {
+        if let summary = entry.recordedDropsSummary {
             Text(summary)
                 .font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)

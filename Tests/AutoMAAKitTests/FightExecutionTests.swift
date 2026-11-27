@@ -1477,7 +1477,7 @@ final class FightWorkflowTests: XCTestCase {
     }
 
     func testUnconfirmedRegularSummaryRetainsCompletedPhaseWithoutResolvingCheckpoint() async throws {
-        let fixture = try FightFixture(priority: true)
+        let fixture = try FightFixture(priority: true, award: true)
         defer { fixture.cleanup() }
         let (report, _) = await fixture.run([
             .init(result: command("Fight Annihilation 1 times, drops:\ntotal drops: 合成玉 × 370")),
@@ -1491,6 +1491,15 @@ final class FightWorkflowTests: XCTestCase {
         XCTAssertTrue(event.message.contains("常规结果未确认"))
         XCTAssertTrue(event.log.details?.contains("剿灭：合成玉 × 370") == true)
         XCTAssertEqual(event.log.fightResult?.status, .unconfirmed)
+
+        let prior = fixture.state.fightResults?[fixture.step.key]
+        let (_, calls) = await fixture.run([], request: .newRound)
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertTrue(calls.first?.name.hasSuffix("-award") == true)
+        let retained = try XCTUnwrap(fixture.runtime.events.last { $0.log.task == .fight && $0.log.fightResult != nil })
+        XCTAssertTrue(retained.message.contains("本次跳过"))
+        XCTAssertNil(retained.log.fightResult?.totalDrops)
+        XCTAssertEqual(fixture.state.fightResults?[fixture.step.key], prior)
     }
 
     func testPriorityFreezesRegularStageAndKeepsResourceLimitsInRegularPhase() async throws {

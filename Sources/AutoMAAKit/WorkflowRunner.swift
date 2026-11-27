@@ -688,9 +688,11 @@ public final class WorkflowRunner {
 
                     if retryStep == nil, state.needsFightConfirmation(key) {
                         visitedSteps += 1
-                        emit(.runningTask, "\(accountText(account))：保留待确认作战，继续其他任务；请在活动记录的当前待办中处理",
+                        var previousFight = state.fightResults?[key]
+                        previousFight?.totalDrops = nil
+                        emit(.runningTask, "\(accountText(account))：上次作战结果待核实，本次跳过作战并继续其他任务",
                              Double(visitedSteps) / Double(totalSteps), .warning, client: client, account: account,
-                             task: task, fightResult: state.fightResults?[key])
+                             task: task, fightResult: previousFight)
                         continue
                     }
                     let outcome: TaskRunOutcome

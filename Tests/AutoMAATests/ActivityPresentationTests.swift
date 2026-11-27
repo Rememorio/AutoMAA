@@ -5,6 +5,16 @@ import Testing
 
 @Suite("Activity presentation")
 struct ActivityPresentationTests {
+    @Test("carried fights in old history do not display drops earned in the original run")
+    func carriedFightDrops() {
+        let result = FightResult(status: .unconfirmed, totalDrops: "剿灭：合成玉 × 370")
+        var entry = LogEntry(level: .warning, message: "账号：保留待确认作战，继续其他任务；请在活动记录的当前待办中处理",
+                             phase: .runningTask, task: .fight, fightResult: result)
+        #expect(entry.recordedDropsSummary == nil)
+        entry.message = "理智作战：剿灭已完成；常规结果未确认"
+        #expect(entry.recordedDropsSummary == result.dropsSummary)
+    }
+
     @Test("terminal log markers reflect structured whole-run results and exclude routine events")
     func terminalLogOutcomes() {
         let partial = LogEntry(level: .warning, message: "部分完成", phase: .completed,
