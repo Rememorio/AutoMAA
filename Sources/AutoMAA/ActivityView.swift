@@ -6,6 +6,11 @@ enum ActivityWorkspaceSelection: Hashable {
     case plan(UUID)
     case backgroundRun
     case session(String)
+
+    static func restored(_ selected: Self?, current: Self?, history: [String]) -> Self? {
+        if case let .session(id) = selected, history.contains(id) { return selected }
+        return current ?? history.first.map(Self.session)
+    }
 }
 
 struct ActivityView: View {
@@ -42,20 +47,24 @@ struct ActivityView: View {
         }
     }
 
-    private var displayedSessions: [ActivitySession] { displayedGroups.flatMap(\.sessions) }
-
     private var hasActiveFilters: Bool {
         !model.activitySearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.activityFilter != .all
     }
 
     var body: some View {
-        WorkspaceColumns {
-            recordList
+        let groups = displayedGroups
+        let visibleIDs = groups.flatMap { $0.sessions.map(\.id) }
+        let current = currentPlan.map { ActivityWorkspaceSelection.plan($0.id) }
+            ?? (showsBackgroundRun ? .backgroundRun : nil)
+        let restored = ActivityWorkspaceSelection.restored(model.activitySelection, current: current,
+                                                           history: visibleIDs)
+        return WorkspaceColumns {
+            recordList(groups: groups)
         } detail: {
             selectedDetail
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .workspaceToolbar(title: "运行记录", actions: recordActions, modes: recordModes)
+        .workspaceToolbar(for: .activity, title: "运行记录", actions: recordActions, modes: recordModes)
         .alert("清除方案运行记录？", isPresented: $showingClearConfirmation) {
             Button("取消", role: .cancel) {}
             Button("清除", role: .destructive) {
@@ -66,21 +75,15 @@ struct ActivityView: View {
         } message: {
             Text("方案运行摘要会被清除，诊断日志仍可在 Finder 中查看。")
         }
-        .onAppear { restoreSelection() }
-        .onChange(of: sessions.map(\.id)) { _, _ in
-            restoreSelection()
+        .onChange(of: [model.activitySelection, restored], initial: true) { _, _ in
+            if model.activityNavigationRequest == nil, model.activitySelection != restored {
+                model.activitySelection = restored
+            }
         }
-        .onChange(of: model.configuration.plans.map(\.id)) { _, _ in restoreSelection() }
-        .onChange(of: model.activitySearch) { _, _ in selectFilteredResultIfNeeded() }
-        .onChange(of: model.activityFilter) { _, _ in selectFilteredResultIfNeeded() }
-        .onChange(of: displayedGroups.map(\.latest.id)) { _, _ in expandGroup(containing: model.activitySelection) }
-        .onChange(of: model.activePlanID) { _, _ in restoreSelection() }
-        .onChange(of: showsBackgroundRun) { _, _ in restoreSelection() }
-        .onChange(of: model.isWorkflowRunning) { _, _ in restoreSelection() }
+        .onChange(of: groups.map(\.latest.id)) { _, _ in expandGroup(containing: model.activitySelection) }
     }
 
-    private var recordList: some View {
-        let groups = displayedGroups
+    private func recordList(groups: [ActivityHistoryGroup]) -> some View {
         let count = groups.reduce(0) { $0 + 1 + $1.earlier.count }
         return VStack(spacing: 0) {
             HStack(spacing: 8) {
@@ -100,7 +103,7 @@ struct ActivityView: View {
                 .tint(model.activityFilter == .all ? .secondary : .maaAccent)
                 .accessibilityLabel("筛选历史运行")
                 .accessibilityValue(model.activityFilter.title)
-                .help("历史运行：\(model.activityFilter.title)。当前运行和待办始终保留")
+                .help("筛选历史运行")
             }
             .padding(12)
             Divider()
@@ -109,7 +112,7 @@ struct ActivityView: View {
                 List(selection: $model.activitySelection) {
                     if let currentPlan {
                         Section("当前") {
-                            planRow(currentPlan, isCurrent: true)
+                            planRow(currentPlan)
                                 .tag(ActivityWorkspaceSelection.plan(currentPlan.id))
                                 .id(ActivityWorkspaceSelection.plan(currentPlan.id))
                         }
@@ -120,42 +123,15 @@ struct ActivityView: View {
                         }
                     }
 
-                    let todayPlans = model.configuration.plans.filter { $0.id != currentPlan?.id }
-                    if !todayPlans.isEmpty {
-                        Section("待办") {
-                            ForEach(todayPlans) { plan in
-                                planRow(plan, isCurrent: false).tag(ActivityWorkspaceSelection.plan(plan.id))
-                                    .id(ActivityWorkspaceSelection.plan(plan.id))
-                            }
-                        }
-                    }
-
                     ForEach(ActivityDay.days(groups)) { day in
                         Section(ActivityRecordPresentation.dayTitle(day.date)) {
                             ForEach(day.groups) { group in historyGroup(group) }
                         }
                     }
 
-                    if groups.isEmpty, !model.configuration.plans.isEmpty || showsBackgroundRun {
-                        Section("历史") {
-                            Text(hasActiveFilters ? "没有匹配的记录" : "还没有运行记录")
-                                .font(.caption).foregroundStyle(.secondary)
-                                .padding(.vertical, 8)
-                        }
-                    }
                 }
                 .listStyle(.inset)
                 .scrollContentBackground(.hidden)
-                .overlay {
-                    if model.configuration.plans.isEmpty, !showsBackgroundRun, groups.isEmpty {
-                        ActivityEmptyState(
-                            title: hasActiveFilters ? "没有匹配的记录" : "还没有运行记录",
-                            symbol: hasActiveFilters ? "magnifyingglass" : "clock.arrow.circlepath",
-                            detail: hasActiveFilters ? "调整关键词或清除筛选。" : "运行方案或更新 MAA 后可在这里查看。"
-                        )
-                        .allowsHitTesting(false)
-                    }
-                }
                 .task(id: model.activityNavigationRequest?.id) {
                     await navigateToRequestedRun(using: proxy)
                 }
@@ -168,15 +144,17 @@ struct ActivityView: View {
                 }
             }
 
-            HStack {
-                Text("\(count) 次历史运行" + (model.activityFilter == .all ? "" : " · \(model.activityFilter.title)"))
-                    .font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                if hasActiveFilters {
-                    Button("清除筛选", action: clearFilters).buttonStyle(.link).font(.caption)
+            if count > 0 || hasActiveFilters {
+                HStack {
+                    Text("\(count) 次历史运行" + (model.activityFilter == .all ? "" : " · \(model.activityFilter.title)"))
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    if hasActiveFilters {
+                        Button("清除筛选", action: clearFilters).buttonStyle(.link).font(.caption)
+                    }
                 }
+                .padding(.horizontal, 12).padding(.vertical, 9)
             }
-            .padding(.horizontal, 12).padding(.vertical, 9)
         }
     }
 
@@ -203,19 +181,12 @@ struct ActivityView: View {
         }
     }
 
-    private func planRow(_ plan: AutomationPlan, isCurrent: Bool) -> some View {
-        let progress = model.continuation(for: plan.id)
-        let needsRecovery = !progress.fightRecoveryItems.isEmpty
-        return HStack(alignment: .top, spacing: 8) {
-            Image(systemName: needsRecovery ? "exclamationmark.circle" : "calendar")
+    private func planRow(_ plan: AutomationPlan) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "play.circle")
                 .foregroundStyle(.secondary)
                 .frame(width: 18).padding(.top, 2).accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(plan.displayName).font(.callout.weight(.medium)).lineLimit(2)
-                Text(isCurrent ? "本次运行" : ActivityRecordPresentation.roundSummary(progress))
-                    .font(.caption).foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
+            Text(plan.displayName).font(.callout.weight(.medium)).lineLimit(2)
             Spacer(minLength: 0)
         }
         .padding(.vertical, 5)
@@ -226,10 +197,7 @@ struct ActivityView: View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "clock")
                 .foregroundStyle(.secondary).frame(width: 18).padding(.top, 2)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("后台运行").font(.callout.weight(.medium))
-                Text("实时记录").font(.caption).foregroundStyle(.secondary)
-            }
+            Text("后台运行").font(.callout.weight(.medium))
             Spacer(minLength: 0)
         }
         .padding(.vertical, 5)
@@ -278,12 +246,13 @@ struct ActivityView: View {
                 Spacer(minLength: 0)
                 Text(session.startedAt, format: showsSeconds || attempts > 1 ? .dateTime.hour().minute().second() : .dateTime.hour().minute())
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: true, vertical: false)
             }
-            HStack(spacing: 5) {
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
                 ActivityOutcomeLabel(outcome: session.outcome, isSelected: model.activitySelection == .session(session.id))
                 Text("·").accessibilityHidden(true)
                 Text(ActivityRecordPresentation.listSummary(session, attempts: attempts))
-                    .lineLimit(1)
+                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)
             }
             .font(.caption).foregroundStyle(.secondary)
             .accessibilityElement(children: .combine)
@@ -296,63 +265,29 @@ struct ActivityView: View {
     private var selectedDetail: some View {
         switch model.activitySelection {
         case let .plan(planID):
-            PlanActivityView(planID: planID, isPendingDetail: true)
-                .id(planID)
+            if let currentPlan, currentPlan.id == planID {
+                ActivityCurrentRunView(title: currentPlan.displayName)
+            }
         case .backgroundRun:
             if showsBackgroundRun { ActivityCurrentRunView() }
         case let .session(id):
             if let session = sessions.first(where: { $0.id == id }) {
-                ActivityRecordDetail(session: session, title: title(for: session), section: recordSection,
-                                     pendingLink: pendingLink(for: session)) { model.showPendingWork(from: session) }
+                ActivityRecordDetail(session: session, title: title(for: session), section: recordSection)
                     .id(session.id)
             } else {
                 ActivityEmptyState(title: "该记录已被清除", symbol: "clock.arrow.circlepath", detail: "从左侧选择其他记录。")
             }
         case nil:
-            ActivityEmptyState(title: hasActiveFilters ? "没有匹配的记录" : "选择运行记录",
-                               symbol: "list.bullet.rectangle", detail: "从左侧选择方案待办或历史记录。")
+            ActivityEmptyState(title: hasActiveFilters ? "没有匹配的记录" : "还没有运行记录",
+                               symbol: hasActiveFilters ? "magnifyingglass" : "clock.arrow.circlepath",
+                               detail: hasActiveFilters ? "调整关键词或清除筛选。" : nil)
         }
-    }
-
-    private func pendingLink(for session: ActivitySession) -> ActivityPendingLink? {
-        guard let planID = session.planID,
-              model.configuration.plans.contains(where: { $0.id == planID }) else { return nil }
-        let progress = model.continuation(for: planID, roundID: session.roundID)
-        return ActivityPendingLink(session: session, progress: progress)
-    }
-
-    private func restoreSelection() {
-        guard model.activityNavigationRequest == nil else { return }
-        if let selection = model.activitySelection {
-            switch selection {
-            case let .plan(id) where model.configuration.plans.contains(where: { $0.id == id }): return
-            case let .session(id) where sessions.contains(where: { $0.id == id }): return
-            case .backgroundRun where showsBackgroundRun: return
-            default: break
-            }
-        }
-        if let currentPlan { model.activitySelection = .plan(currentPlan.id) }
-        else if showsBackgroundRun { model.activitySelection = .backgroundRun }
-        else if hasActiveFilters { model.activitySelection = displayedSessions.first.map { .session($0.id) } }
-        else if let id = model.currentPlanID, model.configuration.plans.contains(where: { $0.id == id }) {
-            model.activitySelection = .plan(id)
-        } else if let session = displayedSessions.first { model.activitySelection = .session(session.id) }
-        else { model.activitySelection = model.configuration.plans.first.map { .plan($0.id) } }
     }
 
     private func expandGroup(containing selection: ActivityWorkspaceSelection?) {
         guard case let .session(id) = selection,
               let group = displayedGroups.first(where: { $0.earlier.contains(where: { $0.id == id }) }) else { return }
         expandedGroups.insert(group.id)
-    }
-
-    private func selectFilteredResultIfNeeded() {
-        if case let .session(id) = model.activitySelection,
-           !displayedSessions.contains(where: { $0.id == id }) {
-            model.activitySelection = displayedSessions.first.map { .session($0.id) }
-        } else if model.activitySelection == nil {
-            model.activitySelection = displayedSessions.first.map { .session($0.id) }
-        }
     }
 
     private func navigateToRequestedRun(using proxy: ScrollViewProxy) async {

@@ -24,12 +24,26 @@ extension ExecutionState {
 }
 
 extension ExecutionStateStore {
+    public func handleRegularWithoutRetry(_ item: FightRecoveryItem, clients: [ClientConfiguration],
+                                          at date: Date = Date()) throws -> ExecutionState {
+        try handleRegularWithoutRetry(item.step, expected: item.result, clients: clients, at: date, review: item)
+    }
+
     public func handleRegularWithoutRetry(_ step: WorkflowStep, expected: FightResult,
                                           clients: [ClientConfiguration], at date: Date = Date()) throws -> ExecutionState {
+        try handleRegularWithoutRetry(step, expected: expected, clients: clients, at: date, review: nil)
+    }
+
+    private func handleRegularWithoutRetry(_ step: WorkflowStep, expected: FightResult, clients: [ClientConfiguration],
+                                           at date: Date, review: FightRecoveryItem?) throws -> ExecutionState {
         try directories.prepare()
         let lock = try ProcessLock(url: directories.lock)
         return try withExtendedLifetime(lock) {
             var state = try loadForExecution().forGameDays(of: clients, at: date)
+            if let review {
+                guard review.canHandleRegularWithoutRetry, let client = clients.first(where: { $0.id == step.clientID }),
+                      review.matches(state, client: client, at: date) else { throw FightManualHandlingError.staleResult }
+            }
             try state.handleRegularWithoutRetry(step, expected: expected, at: date)
             try save(state)
             return state

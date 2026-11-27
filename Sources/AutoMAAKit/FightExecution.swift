@@ -27,6 +27,19 @@ public enum FightStopReason: String, Codable, Sendable {
         case .commandFailed: "MAA 执行失败，具体原因未确认"
         }
     }
+
+    /// The cause as recorded at the time of a run, without instructions for a later review.
+    public var recordedTitle: String {
+        switch self {
+        case .navigationUnavailable: "未能确认剿灭入口"
+        case .stageUnavailable: "无法进入目标关卡"
+        case .unexpectedStage: "实际关卡与常规目标不符"
+        case .interruptedBattle: "作战中断"
+        case .dropRecognitionFailed: "结算掉落未识别"
+        case .missingEvidence: "缺少结算证据"
+        default: title
+        }
+    }
 }
 
 public enum FightFailurePhase: String, Codable, Sendable {
@@ -77,7 +90,10 @@ public struct FightResult: Codable, Equatable, Sendable {
         return (missingDropRuns != nil || reason == .dropRecognitionFailed ? "已识别掉落：" : "总掉落：") + totalDrops
     }
 
-    public var description: String {
+    public var description: String { description(reasonTitle: reason?.title) }
+    public var recordedDescription: String { description(reasonTitle: reason?.recordedTitle) }
+
+    private func description(reasonTitle: String?) -> String {
         let label = switch status {
         case .completed: "已完成"
         case .unnecessary: reason == .navigationUnavailable ? "本次跳过" : "无需作战"
@@ -96,7 +112,7 @@ public struct FightResult: Codable, Equatable, Sendable {
         let fallback = fallbackFrom.map { " · 兜底作战（原目标：\($0.isEmpty ? "游戏当前/上次" : $0)）" } ?? ""
         let phase = !isResolved ? failurePhase.map { " · \($0.title)" } ?? "" : ""
         let missing = missingDropRuns.map { " · 其中 \($0) 次掉落未识别" } ?? ""
-        return label + count + missing + phase + (reason.map { " · \($0.title)" } ?? "") + fallback
+        return label + count + missing + phase + (reasonTitle.map { " · \($0)" } ?? "") + fallback
     }
 }
 
@@ -453,10 +469,11 @@ public struct PlanContinuation: Equatable, Sendable {
     public var hasExpiredScope = false
     public var pendingItems: [PendingWorkflowItem] = []
     public var fightRecoveryItems: [FightRecoveryItem] = []
-    public var hasPendingWork: Bool { (hasStarted && pending > 0) || !fightRecoveryItems.isEmpty }
+    public var resumableRoundID: UUID? { hasStarted && pending > 0 ? roundID : nil }
+    public var hasPendingWork: Bool { resumableRoundID != nil || !fightRecoveryItems.isEmpty }
 
     public init(configuration: AppConfiguration, planID: UUID, state: ExecutionState, history: [LogEntry],
-                weeklyAnnihilation: WeeklyAnnihilationState = .init(),
+                weeklyAnnihilation: WeeklyAnnihilationState = .init(), stageMemory: FightStageMemory = .init(),
                 now: Date = Date(), calendar: Calendar = .current, roundID: UUID? = nil) {
         guard let plan = configuration.plans.first(where: { $0.id == planID }) else { return }
         let round = state.currentRound(for: planID)
@@ -484,6 +501,9 @@ public struct PlanContinuation: Equatable, Sendable {
                     let progress = state.fightProgress?[key]
                     let result = state.fightResults?[key]
                     let needsReview = state.needsFightConfirmation(key)
+                    let missingTargetResolved = result?.reason == .missingRegularTarget
+                        && FightStagePolicy.canResumeWithoutSettingRegularTarget(
+                            in: plan.fight, memory: stageMemory, clientID: client.id, accountID: account.id, progress: progress)
                     if needsReview { unconfirmed += 1 }
                     if includesDay {
                         hasStarted = hasStarted || result != nil || progress != nil
@@ -517,18 +537,21 @@ public struct PlanContinuation: Equatable, Sendable {
                         let lastAttempt = clientHistory.last {
                             $0.clientID == client.id && $0.accountID == account.id && $0.task == task
                         }
-                        pendingItems.append(.init(step: step, targets: targets, reason: reason,
-                                                  lastFailure: lastAttempt?.level == .error ? lastAttempt?.message : nil))
+                        pendingItems.append(.init(step: step, targets: targets, reason: missingTargetResolved ? nil : reason,
+                                                  lastFailure: !missingTargetResolved && lastAttempt?.level == .error ? lastAttempt?.message : nil))
                     }
                     if task == .fight {
                         let canConfirm = includesWeek && plan.fight.weeklyAnnihilation.enabled
                             && weeklyAnnihilation.canConfirmComplete(client: client, accountID: account.id, at: now)
-                        let needsAttention = needsReview || (includesDay && result?.status == .failed)
+                        let needsAttention = needsReview || (includesDay && result?.status == .failed && !missingTargetResolved)
                         if let result = needsAttention ? result : canConfirm ? entry?.result : nil {
                             let retryStage = FightProgress.needsAnnihilation(progress, weeklyStatus: weeklyStatus)
                                 ? "Annihilation" : progress?.pendingStage ?? ""
                             fightRecoveryItems.append(.init(
-                                step: step, result: result, canConfirmWeeklyCompletion: canConfirm, retryStage: retryStage,
+                                step: step, result: result, roundID: round?.id, clientKind: client.kind,
+                                gameDayStart: GameDay.start(for: client.kind, at: now),
+                                weeklyAttempt: plan.fight.weeklyAnnihilation.enabled ? entry : nil,
+                                canConfirmWeeklyCompletion: canConfirm, retryStage: retryStage,
                                 canHandleRegularWithoutRetry: state.canHandleRegularWithoutRetry(key, expected: result)
                             ))
                         }
@@ -574,11 +597,22 @@ public struct PendingWorkflowItem: Equatable, Identifiable, Sendable {
 public struct FightRecoveryItem: Equatable, Identifiable, Sendable {
     public let step: WorkflowStep
     public let result: FightResult
+    public let roundID: UUID?
+    public let clientKind: ClientKind
+    public let gameDayStart: Date
+    public let weeklyAttempt: WeeklyAnnihilationEntry?
     public let canConfirmWeeklyCompletion: Bool
     public let retryStage: String
     public let canHandleRegularWithoutRetry: Bool
 
     public var id: String { step.key }
+    func matches(_ state: ExecutionState, client: ClientConfiguration, at date: Date) -> Bool {
+        client.enabled && client.id == step.clientID && client.kind == clientKind
+            && client.accounts.contains { $0.id == step.accountID && $0.enabled }
+            && state.currentRound(for: step.planID)?.id == roundID
+            && GameDay.start(for: client.kind, at: date) == gameDayStart
+    }
+
     public var title: String {
         if result.reason == .navigationUnavailable { return "剿灭周进度待核实" }
         return result.status == .failed ? "理智作战未完成" : "理智作战结果待确认"

@@ -21,10 +21,12 @@ private struct TaskRunOutcome {
     let failureDetails: String?
     var fightResult: FightResult? = nil
     var fightDescription: String? = nil
+    var executedFightPhases: [FightResult] = []
 
     func summarizingFightPhases(_ phases: [(kind: FightKind, result: FightResult)]) -> Self {
-        guard phases.count > 1, var result = fightResult else { return self }
         var outcome = self
+        outcome.executedFightPhases = phases.map(\.result)
+        guard phases.count > 1, var result = fightResult else { return outcome }
         func title(_ kind: FightKind) -> String { kind == .annihilation ? "剿灭" : "常规" }
         outcome.fightDescription = "：" + phases.map { title($0.kind) + $0.result.description }.joined(separator: "；")
         let drops = phases.compactMap { phase in
@@ -130,9 +132,9 @@ struct MAACommandTimeoutPolicy: Sendable, Equatable {
         case .fight:
             fight
         case .recruit:
-            min(recruitMaximum, recruitBase + recruitPerSlot * Double(max(0, plan.recruit.times)))
+            min(recruitMaximum, recruitBase + recruitPerSlot * Double(max(0, plan.recruit.effectiveTimes)))
         case .infrast:
-            switch plan.infrast.mode {
+            switch plan.infrast.effectiveMode {
             case .collectOnly: infrastCollectOnly
             case .fullShift: infrastFullShift
             case .customSchedule: infrastCustomSchedule
@@ -255,13 +257,14 @@ public final class WorkflowRunner {
         _ configuration: AppConfiguration,
         planID: UUID,
         request: WorkflowRunRequest = .newRound,
-        retryStep: WorkflowStep? = nil
+        retryStep: WorkflowStep? = nil,
+        reviewedFight: FightRecoveryItem? = nil
     ) async -> WorkflowReport {
         let runID = UUID()
         let control = WorkflowRunControl(directories: directories)
         let task = Task {
             await runWorkflow(configuration, planID: planID, request: request,
-                              retryStep: retryStep, runID: runID)
+                              retryStep: retryStep ?? reviewedFight?.step, reviewedFight: reviewedFight, runID: runID)
         }
         let monitor = Task {
             while !Task.isCancelled {
@@ -289,6 +292,7 @@ public final class WorkflowRunner {
         planID: UUID,
         request: WorkflowRunRequest,
         retryStep: WorkflowStep?,
+        reviewedFight: FightRecoveryItem?,
         runID: UUID
     ) async -> WorkflowReport {
         var report = WorkflowReport()
@@ -328,18 +332,9 @@ public final class WorkflowRunner {
             plan.accountIDs = [retryStep.accountID]
             plan.stepOrder = [retryStep.task]
         }
-        var fightStageMemory: FightStageMemory
-        do {
-            fightStageMemory = try fightStageMemoryStore.load()
-        } catch {
-            report.fatalError = "无法读取常规关卡记录：\(error.localizedDescription)"
-            emit(.failed, report.fatalError ?? "常规关卡记录无法读取", 0, .error)
-            return report
-        }
         if let problem = ConfigurationValidator.readinessProblems(
             in: configuration,
-            planID: plan.id,
-            fightStageMemory: fightStageMemory
+            planID: plan.id
         ).first(where: { $0.severity == .error }) {
             report.fatalError = problem.message
             emit(.failed, problem.message, 0, .error)
@@ -378,6 +373,14 @@ public final class WorkflowRunner {
         _ = lease
 
         let runDate = now()
+        var fightStageMemory: FightStageMemory
+        do {
+            fightStageMemory = try fightStageMemoryStore.load()
+        } catch {
+            report.fatalError = "无法读取常规关卡记录：\(error.localizedDescription)"
+            emit(.failed, report.fatalError ?? "常规关卡记录无法读取", 0, .error)
+            return report
+        }
         var state: ExecutionState
         var weeklyAnnihilation: WeeklyAnnihilationState
         do {
@@ -389,13 +392,22 @@ public final class WorkflowRunner {
             emit(.failed, report.fatalError!, 0, .error)
             return report
         }
+        if let reviewedFight {
+            let current = PlanContinuation(configuration: configuration, planID: planID, state: state,
+                                           history: [], weeklyAnnihilation: weeklyAnnihilation, stageMemory: fightStageMemory, now: runDate)
+            guard retryStep == reviewedFight.step, current.fightRecoveryItems.contains(reviewedFight) else {
+                report.fatalError = FightManualHandlingError.staleResult.localizedDescription
+                emit(.failed, report.fatalError!, 0, .error)
+                return report
+            }
+        }
         let round: ExecutionRound
         switch request {
         case .newRound:
             round = state.startRound(for: planID, at: runDate)
         case let .resume(roundID):
             guard let current = state.currentRound(for: planID), current.id == roundID else {
-                report.fatalError = "本轮续跑已结束，请查看当前待办"
+                report.fatalError = "本轮续跑已结束，请查看方案的「运行概况」"
                 emit(.failed, report.fatalError!, 0, .error)
                 return report
             }
@@ -406,7 +418,7 @@ public final class WorkflowRunner {
                 && GameDay.contains(round.startedAt, for: client.kind, at: runDate)
         }
         guard !activeClients.isEmpty else {
-            report.fatalError = "本轮续跑已结束，请查看当前待办"
+            report.fatalError = "本轮续跑已结束，请查看方案的「运行概况」"
             emit(.failed, report.fatalError!, 0, .error)
             return report
         }
@@ -414,7 +426,7 @@ public final class WorkflowRunner {
         state.prepareWeeklyAnnihilation(plan: plan, clients: activeClients, weekly: weeklyAnnihilation, at: runDate)
         if let retryStep {
             guard !state.isResolved(retryStep.key) else {
-                report.fatalError = "本项本轮已处理完成，请刷新活动记录"
+                report.fatalError = "本项在本轮已处理"
                 emit(.failed, report.fatalError!, 0, .error)
                 return report
             }
@@ -547,7 +559,7 @@ public final class WorkflowRunner {
                 }
             }) {
                 visitedSteps += clientStepCount
-                emit(.runningTask, "\(clientText(client))没有可自动续跑的任务，请处理活动记录中的待确认结果",
+                emit(.runningTask, "\(clientText(client))仅剩待确认作战，请在方案的「运行概况」核实",
                      Double(visitedSteps) / Double(totalSteps), .warning, client: client)
                 continue
             }
@@ -693,7 +705,7 @@ public final class WorkflowRunner {
                         previousFight?.totalDrops = nil
                         emit(.runningTask, "\(accountText(account))：上次作战结果待核实，本次跳过作战并继续其他任务",
                              Double(visitedSteps) / Double(totalSteps), .warning, client: client, account: account,
-                             task: task, fightResult: previousFight)
+                             task: task, fightResult: previousFight, carriedForwardFight: true)
                         continue
                     }
                     let outcome: TaskRunOutcome
@@ -786,7 +798,7 @@ public final class WorkflowRunner {
                              Double(visitedSteps) / Double(totalSteps), result.status == .manuallyHandled ? .info : result.reason == .navigationUnavailable ? .warning : result.isResolved ? .success : result.status == .failed ? .error : .warning,
                              client: client, account: account, task: task,
                              details: details.isEmpty ? nil : details,
-                             fightResult: result)
+                             fightResult: result, executedFightPhases: outcome.executedFightPhases)
                         if result.status == .unconfirmed { break accountLoop }
                     }
                     if outcome.succeeded {
@@ -821,7 +833,8 @@ public final class WorkflowRunner {
                                 client: client,
                                 account: account,
                                 task: task,
-                                details: outcome.failureDetails
+                                details: outcome.failureDetails,
+                                executedFightPhases: task == .fight ? outcome.executedFightPhases : nil
                             )
                         }
                         if plan.policy.continueAfterStepFailure {
@@ -1165,8 +1178,7 @@ public final class WorkflowRunner {
         let timeoutMessage = UpdateTimeoutError(operation: operation, timeout: deadline.timeout).localizedDescription
             + "；当前安装未更改"
         guard !Task.isCancelled else { return .cancelled }
-        emit(.updating, "正在准备\(component.title)更新", 0, .info,
-             details: "本次更新上限：\(UpdatePolicy.durationDescription(deadline.timeout))，包括重试与校验")
+        emit(.updating, "正在准备\(component.title)更新", 0, .info)
         guard let paths = await maaInstallationPaths(cliPath: cliPath) else {
             if Task.isCancelled { return .cancelled }
             return .failed("无法定位 MaaCore、基础资源或热更新目录；当前安装没有更改")
@@ -1243,7 +1255,7 @@ public final class WorkflowRunner {
         information.manifestURL = downloadCache.flatMap { ReleaseNotes.safeSourceURL($0.manifestURL) }
         guard !Task.isCancelled else { return .cancelled }
         guard deadline.remaining > 0 else { return .failed(timeoutMessage) }
-        emit(.updating, component.includesCore ? "正在获取 MAA 下载信息与同步识别数据…" : "正在同步识别数据（此阶段不提供下载量）…", 0, .info, updateInformation: information)
+        emit(.updating, component.includesCore ? "正在获取 MAA 下载信息与同步识别数据…" : "正在同步识别数据…", 0, .info, updateInformation: information)
         let outcome = await runMaintenanceCommand(
             executable: cliPath,
             arguments: component.arguments,
@@ -1968,10 +1980,8 @@ public final class WorkflowRunner {
         let weeklyStatus = weekly.status(for: plan.fight.weeklyAnnihilation, client: client, accountID: account.id, at: now())
         let previous = state.fightProgress?[key]
         let needsAnnihilation = FightProgress.needsAnnihilation(previous, weeklyStatus: weeklyStatus)
-        let needsRegularTarget = previous?.isRegularManuallyHandled != true
-            && (FightStagePolicy.requiresExplicitRegularStage(in: plan.fight)
-                || (previous?.annihilation != nil && previous?.regular?.isResolved != true))
-        let resolution = FightStagePolicy.resolve(plan.fight, memory: memory, clientID: client.id, accountID: account.id)
+        let needsRegularTarget = FightStagePolicy.requiresExplicitRegularStage(in: plan.fight, progress: previous)
+        let resolution = FightStagePolicy.resolve(plan.fight, memory: memory, clientID: client.id, accountID: account.id, progress: previous)
         var stage: String
         var useCurrentStage = false
         let remembered = memory.stage(clientID: client.id, accountID: account.id)
@@ -2083,7 +2093,7 @@ public final class WorkflowRunner {
                 )
             }
             lastOutcome = outcome
-            guard let result = outcome.fightResult else { return outcome }
+            guard let result = outcome.fightResult else { return outcome.summarizingFightPhases(phases) }
             phases.append((isAnnihilation ? .annihilation : .regular, result))
             if memory.recordSuccessfulFight(result, clientID: client.id, accountID: account.id) {
                 do { try fightStageMemoryStore.save(memory) }
@@ -2098,7 +2108,8 @@ public final class WorkflowRunner {
         if let handled = progress.handledRegularResult {
             return TaskRunOutcome(succeeded: true, recoveredAfterRetry: false, notices: lastOutcome?.notices ?? [],
                                   failureDetails: nil, fightResult: handled,
-                                  fightDescription: "：" + (phases.map { "剿灭" + $0.result.description } + ["常规" + handled.description]).joined(separator: "；"))
+                                  fightDescription: "：" + (phases.map { "剿灭" + $0.result.description } + ["常规" + handled.description]).joined(separator: "；"),
+                                  executedFightPhases: phases.map(\.result))
         }
         if let lastOutcome { return lastOutcome.summarizingFightPhases(phases) }
         let result = progress.regular ?? FightResult(status: .unconfirmed, reason: .missingEvidence)
@@ -2190,7 +2201,8 @@ public final class WorkflowRunner {
         if plan.fight.weeklyAnnihilation.enabled {
             emit(.runningTask, "\(accountText(account))：\(isAnnihilation ? "剿灭" : "常规作战")\(result.description)",
                  0, result.reason == .navigationUnavailable ? .warning : .info, client: client, account: account, task: .fight,
-                 details: result.dropsSummary)
+                 details: result.dropsSummary,
+                 executedFightPhases: result.status == .completed && result.times > 0 ? [result] : nil)
         }
         return outcome
     }
@@ -2652,7 +2664,7 @@ public final class WorkflowRunner {
         guard let first = messages.first else { return "流程完成" }
         let firstLine = first.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? first
         let concise = String(firstLine.prefix(240))
-        let suffix = messages.count > 1 ? "（另有 \(messages.count - 1) 项，请查看活动记录）" : ""
+        let suffix = messages.count > 1 ? "（另有 \(messages.count - 1) 项，详见运行记录）" : ""
         return "需要手动处理：\(concise)\(suffix)"
     }
 
@@ -2870,12 +2882,14 @@ public final class WorkflowRunner {
         details: String? = nil,
         runSummary: WorkflowRunSummary? = nil,
         updateInformation: MAAUpdateInformation? = nil,
-        fightResult: FightResult? = nil
+        fightResult: FightResult? = nil,
+        executedFightPhases: [FightResult]? = nil,
+        carriedForwardFight: Bool? = nil
     ) {
         let normalizedProgress = runProgress.advance(to: proposedProgress)
         let message = SensitiveDataRedactor.redact(message, sensitiveValues: currentSensitiveValues)
         let details = details.map { SensitiveDataRedactor.redact($0, sensitiveValues: currentSensitiveValues) }
-        let fightResult = fightResult.map { original in
+        func redact(_ original: FightResult) -> FightResult {
             var result = original
             result.stage = original.stage.map { SensitiveDataRedactor.redact($0, sensitiveValues: currentSensitiveValues) }
             result.totalDrops = original.totalDrops.map { SensitiveDataRedactor.redact($0, sensitiveValues: currentSensitiveValues) }
@@ -2890,6 +2904,7 @@ public final class WorkflowRunner {
             runID: currentRunID,
             phase: phase,
             startBlocker: startBlocker,
+            carriedForwardFight: carriedForwardFight,
             progress: normalizedProgress,
             planID: currentPlanID,
             clientID: client?.id,
@@ -2897,7 +2912,8 @@ public final class WorkflowRunner {
             task: task,
             runSummary: runSummary,
             updateInformation: updateInformation,
-            fightResult: fightResult,
+            fightResult: fightResult.map(redact),
+            executedFightPhases: executedFightPhases?.map(redact),
             roundID: currentRoundID
         )
         historyStore.append(log)

@@ -5,71 +5,72 @@ import SwiftUI
 struct DashboardFocusView: View {
     @EnvironmentObject private var model: AppModel
     let summary: DashboardPlanSummary?
+    let blocker: String?
 
     var body: some View {
-        Panel {
-            HStack(alignment: .center, spacing: 24) {
-                VStack(alignment: .leading, spacing: 16) {
-                    if model.isWorkflowRunning {
-                        running
-                    } else if let summary {
-                        ready(summary)
-                    } else {
-                        Text("从一份日常方案开始").font(.headline)
-                        Text("配置任务和账号，准备好后即可运行。")
-                            .font(.callout).foregroundStyle(.secondary)
-                        Button("使用轻量日常模板") { model.addPlan(.lightRoutine) }
-                            .buttonStyle(.borderedProminent).tint(.maaAction)
+        if model.isWorkflowRunning {
+            running
+        } else if model.configuration.clients.isEmpty {
+            HStack(spacing: 18) {
+                DashboardIllustration().frame(width: 72, height: 72)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("选择要运行的游戏客户端").font(.title3.weight(.semibold))
+                    Button("添加客户端…") {
+                        model.selection = .clients
+                        model.entityEditor = .newClient
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                DashboardIllustration().frame(width: 140, height: 118)
+                Spacer()
             }
-            .padding(8)
-        }
-    }
-
-    private func ready(_ summary: DashboardPlanSummary) -> some View {
-        VStack(alignment: .leading, spacing: 15) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("当前方案").font(.caption).foregroundStyle(.secondary)
-                if model.configuration.plans.count > 1 {
-                    Menu {
-                        Picker("当前方案", selection: Binding(get: { summary.id }, set: { model.selectCurrentPlan($0) })) {
-                            ForEach(model.configuration.plans) { plan in Text(plan.displayName).tag(plan.id) }
-                        }
-                        .pickerStyle(.inline)
-                    } label: {
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Text(summary.plan.displayName).font(.title3.weight(.semibold))
-                                .lineLimit(2).fixedSize(horizontal: false, vertical: true)
-                            Image(systemName: "chevron.up.chevron.down")
-                                .font(.caption2).foregroundStyle(.secondary).accessibilityHidden(true)
-                        }
-                        .foregroundStyle(.primary)
+        } else if let summary {
+            HStack(alignment: .center, spacing: 16) {
+                DashboardIllustration().frame(width: 68, height: 68)
+                VStack(alignment: .leading, spacing: 7) {
+                    planPicker(summary)
+                    Text(summary.scope).font(.callout).foregroundStyle(.secondary)
+                    if let blocker {
+                        Text(blocker).font(.callout).foregroundStyle(ActivityOutcome.blocked.color)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel("切换当前方案：\(summary.plan.displayName)")
-                    .help("切换当前方案")
-                } else {
-                    Text(summary.plan.displayName).font(.title3.weight(.semibold))
-                        .fixedSize(horizontal: false, vertical: true).accessibilityAddTraits(.isHeader)
                 }
-                Text(summary.scope).font(.caption).foregroundStyle(.secondary)
-            }
-            Text(summary.plan.enabledTasks.isEmpty ? "尚未启用任务" : summary.plan.enabledTasks.map(\.title).joined(separator: "  →  "))
-                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            PlanRoundSummary(progress: summary.progress, runState: summary.runState, showsGuidance: false)
-            HStack(spacing: 12) {
-                PlanRunControl(planID: summary.id, showsTitle: true)
+                Spacer(minLength: 0)
                 if case let .warnings(count) = summary.readiness.state {
                     ActionTextButton(title: "\(count) 项运行提醒", symbol: "exclamationmark.circle",
-                                     tint: ActivityOutcome.awaitingReview.color, help: "查看本方案的运行前提醒") {
+                                     tint: ActivityOutcome.awaitingReview.color, help: "查看运行前提醒") {
                         model.readinessRequest = .init(id: summary.id)
                     }
                 }
-                Spacer(minLength: 8)
+                PlanRunControl(summary: summary)
             }
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("创建日常方案").font(.title3.weight(.semibold))
+                Button("使用轻量日常模板") { model.addPlan(.lightRoutine) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func planPicker(_ summary: DashboardPlanSummary) -> some View {
+        if model.configuration.plans.count > 1 {
+            Menu {
+                Picker("当前方案", selection: Binding(get: { summary.id }, set: { model.selectCurrentPlan($0) })) {
+                    ForEach(model.configuration.plans) { plan in Text(plan.displayName).tag(plan.id) }
+                }
+                .pickerStyle(.inline)
+            } label: {
+                HStack(spacing: 6) {
+                    Text(summary.plan.displayName).font(.title2.weight(.semibold)).lineLimit(2)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption2).foregroundStyle(.secondary).accessibilityHidden(true)
+                }
+                .foregroundStyle(.primary)
+            }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize(horizontal: false, vertical: true)
+            .accessibilityLabel("切换当前方案：\(summary.plan.displayName)")
+            .help("切换当前方案")
+        } else {
+            Text(summary.plan.displayName).font(.title2.weight(.semibold)).accessibilityAddTraits(.isHeader)
         }
     }
 
@@ -78,8 +79,10 @@ struct DashboardFocusView: View {
         let controls = WorkspaceRunControlState(model: model)
         return VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 6) {
-                Text(maintenance ? (model.maaUpdateActivity?.automatic == true ? "自动维护" : "环境维护") : "当前运行")
-                    .font(.caption).foregroundStyle(.secondary)
+                if maintenance {
+                    Text(model.maaUpdateActivity?.automatic == true ? "自动维护" : "环境维护")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Text(maintenance ? (model.maaUpdateActivity?.component.title ?? "MAA 维护") : (summary?.plan.displayName ?? "后台任务"))
                     .font(.title3.weight(.semibold)).accessibilityAddTraits(.isHeader)
             }

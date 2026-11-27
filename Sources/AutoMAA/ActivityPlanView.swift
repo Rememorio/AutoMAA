@@ -23,11 +23,6 @@ struct ActivityPlanSnapshot {
 struct PlanActivityView: View {
     @EnvironmentObject private var model: AppModel
     let planID: UUID
-    var isPendingDetail = false
-
-    private var plan: AutomationPlan? { model.configuration.plans.first { $0.id == planID } }
-    private var source: ActivityPendingSource? { isPendingDetail ? model.activityPendingSource : nil }
-    private var progress: PlanContinuation { model.continuation(for: planID, roundID: source?.roundID) }
     private var snapshot: ActivityPlanSnapshot {
         ActivityPlanSnapshot(planID: planID,
             sessions: ActivityHistory.sessions(from: model.activityEntries),
@@ -35,134 +30,79 @@ struct PlanActivityView: View {
             isWorkflowRunning: model.isWorkflowRunning)
     }
 
-    private var showsPendingWork: Bool { isPendingDetail && progress.hasPendingWork }
-
     var body: some View {
-        if let plan {
-            VStack(spacing: 0) {
-                header(plan)
-                    .padding(20)
-                Divider()
-                if snapshot.isCurrent { liveContent }
-                else if snapshot.latestSession == nil, !progress.hasStarted, progress.fightRecoveryItems.isEmpty {
-                    ActivityEmptyState(title: "还没有运行记录", symbol: "clock.arrow.circlepath",
-                                       detail: "运行后会显示这份方案的结果与完整日志。")
-                } else { idleContent }
+        if let plan = model.configuration.plans.first(where: { $0.id == planID }) {
+            let activity = snapshot
+            if activity.isCurrent {
+                ActivityLiveLog(entries: activity.displayedSession?.entries ?? [])
+                    .id(model.activeRunID)
+                    .padding(16)
+            } else {
+                overview(plan: plan, progress: model.continuation(for: planID), latest: activity.displayedSession)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ActivityEmptyState(title: "方案已被移除", symbol: "tray", detail: "历史结果仍可在运行记录中查看。")
         }
     }
 
-    private var liveContent: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if showsPendingWork {
-                ScrollView {
-                    pendingWork
-                        .padding(.horizontal, 20).padding(.vertical, 12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(height: 150)
-                Divider()
-            }
-            ActivityLiveLog(entries: snapshot.currentSession?.entries ?? [])
-                .id(model.activeRunID)
-                .padding(20)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-
-    private var idleContent: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                if showsPendingWork {
-                    pendingWork
-                    if snapshot.latestSession != nil { Divider() }
-                }
-                if let session = snapshot.latestSession {
-                    VStack(alignment: .leading, spacing: 16) {
-                        ActivityRecordHeader(session: session, title: "最近运行", showFullHistory: showFullHistory)
-                        ActivitySessionContents(session: session).id(session.id)
+    private func overview(plan: AutomationPlan, progress: PlanContinuation, latest: ActivitySession?) -> some View {
+        let runState = model.planRunState(planID: plan.id)
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if progress.hasPendingWork {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("需要处理").font(.headline).accessibilityAddTraits(.isHeader)
+                        Spacer(minLength: 8)
+                        if let roundID = progress.resumableRoundID {
+                            if runState == .configurationIncomplete {
+                                ActionTextButton(title: "检查配置", symbol: "exclamationmark.circle") {
+                                    model.readinessRequest = .init(id: planID)
+                                }
+                            } else {
+                                ActionTextButton(title: "继续本轮", symbol: "play.fill",
+                                                 help: model.runHelp(for: planID, request: .resume(roundID: roundID))) {
+                                    model.runPlan(planID, request: .resume(roundID: roundID))
+                                }
+                                .disabled(runState != .ready)
+                            }
+                        }
+                    }
+                    PendingWorkList(items: progress.resumableRoundID == nil ? [] : progress.pendingItems,
+                                    recovery: progress.fightRecoveryItems)
+                    if progress.hasExpiredScope, progress.resumableRoundID != nil {
+                        Text("仅续跑仍在当前游戏日的账号。").font(.caption).foregroundStyle(.secondary)
+                    }
+                    if let latest {
+                        Divider()
+                        let date = latest.startedAt.formatted(.dateTime.year().month().day().hour().minute())
+                        ActionTextButton(title: "最近运行 · \(date)", symbol: "clock.arrow.circlepath",
+                                         help: "在运行记录中查看该次结果和日志") { openRecord(latest) }
                     }
                 } else {
-                    ActivityEmptyState(title: "还没有运行记录", symbol: "clock.arrow.circlepath",
-                                       detail: "运行后会显示这份方案的结果与完整日志。")
-                        .frame(minHeight: 160)
+                    PlanRoundSummary(progress: progress, runState: runState)
+                    if !progress.hasStarted, model.isPlanScheduleCurrent(plan),
+                       let next = PlanScheduleFormatter.nextRunLabel(plan.schedule) {
+                        Text("下次 \(next)").font(.caption).foregroundStyle(.secondary)
+                    }
+                    if let latest {
+                        Divider()
+                        ActivityRecordHeader(session: latest, title: "最近运行") { openRecord(latest) }
+                        ActivitySessionContents(session: latest).id(latest.id)
+                    }
                 }
             }
-            .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
         }
     }
 
-    private var pendingWork: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("待办").font(.subheadline.weight(.semibold))
-            PendingWorkList(items: progress.hasStarted ? progress.pendingItems : [], recovery: progress.fightRecoveryItems)
-        }
-    }
-
-    private func header(_ plan: AutomationPlan) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            if isPendingDetail || snapshot.isCurrent {
-                Text(isPendingDetail ? plan.displayName : "本次运行")
-                    .font(.headline).fixedSize(horizontal: false, vertical: true)
-            }
-            if let source {
-                Text("续跑 · \(source.startedAt.formatted(.dateTime.month().day().hour().minute()))")
-                    .font(.caption).monospacedDigit().foregroundStyle(.secondary)
-            }
-            if !snapshot.isCurrent { roundSummary(plan) }
-            if !isPendingDetail, progress.hasPendingWork {
-                PendingWorkLinkButton { model.showPlanActivity(planID) }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func roundSummary(_ plan: AutomationPlan) -> some View {
-        let runState = model.planRunState(planID: planID)
-        return VStack(alignment: .leading, spacing: 5) {
-            if progress.hasExpiredScope, progress.pending == 0, progress.unconfirmed == 0 {
-                Text("本轮续跑已结束").font(.caption).foregroundStyle(.secondary)
-                ActionTextButton(title: "查看当前待办", symbol: "chevron.right", symbolAfterTitle: true) {
-                    model.showPlanActivity(planID)
-                }
-            } else {
-                PlanRoundSummary(progress: progress, runState: runState, showsGuidance: !isPendingDetail)
-                if isPendingDetail, progress.hasStarted, progress.pending > 0, runState == .ready {
-                    let accounts = Set(progress.pendingItems.map(\.step.accountID))
-                    Text("点击顶部播放，继续 \(accounts.count) 个账号的待办。")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                if progress.hasExpiredScope {
-                    Text("已刷新服务器的日常续跑已结束。")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            if progress.manuallyHandled > 0 {
-                Text("\(progress.manuallyHandled) 项作战已人工处理，今天不再重试")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            if source == nil, !progress.hasStarted, model.isPlanScheduleCurrent(plan),
-               let next = PlanScheduleFormatter.nextRunLabel(plan.schedule) {
-                Text("下次 \(next)").font(.caption).foregroundStyle(.secondary)
-            }
-        }
-        .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private func showFullHistory() {
-        if let runID = snapshot.displayedSession?.runID {
+    private func openRecord(_ session: ActivitySession) {
+        if let runID = session.runID {
             model.showActivity(runID: runID)
-        } else if let session = snapshot.displayedSession {
+        } else {
             model.activitySearch = ""
             model.activityFilter = .all
             model.activitySelection = .session(session.id)
-            model.selection = .activity
-        } else {
-            model.activitySelection = .plan(planID)
             model.selection = .activity
         }
     }
@@ -170,41 +110,37 @@ struct PlanActivityView: View {
 
 struct ActivityCurrentRunView: View {
     @EnvironmentObject private var model: AppModel
+    var title = "后台运行"
 
     private var session: ActivitySession? {
         guard model.isWorkflowRunning, let runID = model.activeRunID else { return nil }
-        return ActivityHistory.sessions(from: model.activityEntries).first { $0.runID == runID && !$0.isStandaloneMaintenance }
+        return ActivityHistory.sessions(from: model.activityEntries).first {
+            $0.runID == runID && !$0.isStandaloneMaintenance && (model.activePlanID == nil || $0.planID == model.activePlanID)
+        }
     }
 
     var body: some View {
+        let session = self.session
         VStack(spacing: 0) {
-            Text("后台运行").font(.headline)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(20)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title).font(.headline)
+                if session?.entries.last?.message != model.activeStatusMessage {
+                    Text(model.activeStatusMessage)
+                        .font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                }
+                if model.isExternalRunActive, !model.canCancelRun, !model.isCancellingRun {
+                    Text(WorkspaceRunControlState(model: model).stopHelp)
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(20)
             Divider()
-            ActivityOperationSummary()
-                .padding(.horizontal, 20).padding(.vertical, 14)
             ActivityLiveLog(entries: session?.entries ?? [])
                 .id(model.activeRunID)
                 .padding(20)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-struct ActivityOperationSummary: View {
-    @EnvironmentObject private var model: AppModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(model.activeStatusMessage)
-                .font(.callout).foregroundStyle(.secondary)
-                .lineLimit(3).textSelection(.enabled).help(model.activeStatusMessage)
-            if model.isExternalRunActive, !model.canCancelRun, !model.isCancellingRun {
-                Label("定时任务在后台运行", systemImage: "clock.badge.checkmark")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

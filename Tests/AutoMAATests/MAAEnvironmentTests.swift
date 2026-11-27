@@ -18,9 +18,9 @@ private actor ControlledEnvironmentCheck {
 
     func isPending(_ id: Int) -> Bool { pending[id] != nil }
 
-    func complete(_ id: Int, output: String) {
+    func complete(_ id: Int, output: String, exitCode: Int32 = 0) {
         pending.removeValue(forKey: id)?.resume(returning: .init(
-            exitCode: 0, standardOutput: output, standardError: "", timedOut: false))
+            exitCode: exitCode, standardOutput: output, standardError: "", timedOut: false))
     }
 }
 
@@ -57,6 +57,37 @@ struct MAAEnvironmentTests {
 
         #expect(model.maaVersionSummary == "尚未检测")
         #expect(!model.isCheckingMAAEnvironment)
+    }
+
+    @Test("checking keeps the previous version visible and a failed check separates its long diagnostic")
+    @MainActor
+    func environmentCheckDiagnostic() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let checker = ControlledEnvironmentCheck()
+        let model = makeModel(root: root, checker: checker)
+        model.configuration.cliPath = "/usr/bin/true"
+        let versions = "maa-cli v0.8.1\nMaaCore v6.23.2"
+        let diagnostic = "无法读取版本\n未收到响应"
+        model.refreshMAAStatus()
+        try await waitUntil { await checker.isPending(0) }
+        await checker.complete(0, output: versions)
+        try await waitUntil { !model.isCheckingMAAEnvironment }
+
+        model.refreshMAAStatus()
+        try await waitUntil { await checker.isPending(1) }
+        #expect(model.maaVersionSummary == versions)
+        await checker.complete(1, output: diagnostic, exitCode: 7)
+        try await waitUntil { !model.isCheckingMAAEnvironment }
+        #expect(model.maaVersionSummary == "检测失败：退出码 7")
+        #expect(model.maaEnvironmentDiagnostic == diagnostic)
+
+        model.refreshMAAStatus()
+        try await waitUntil { await checker.isPending(2) }
+        await checker.complete(2, output: versions)
+        try await waitUntil { !model.isCheckingMAAEnvironment }
+        #expect(model.maaVersionSummary == versions)
+        #expect(model.maaEnvironmentDiagnostic == nil)
     }
 
     @Test("a superseded check cannot overwrite the active path or a newer result", arguments: [false, true])

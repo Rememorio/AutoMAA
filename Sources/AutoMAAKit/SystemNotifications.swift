@@ -63,25 +63,25 @@ public enum WorkflowNotificationComposer {
         if report.fatalError != nil {
             return WorkflowSystemNotification(
                 title: "自动化流程已中止",
-                body: "运行未能安全继续，请打开 AutoMAA 查看原因。"
+                body: "运行未能安全继续，可在运行记录查看原因。"
             )
         }
         if !report.attentionMessages.isEmpty {
             if report.unexecutedSteps > 0 {
                 return WorkflowSystemNotification(
                     title: "自动化流程部分完成",
-                    body: "有 \(report.unexecutedSteps) 个步骤未执行，请打开 AutoMAA 查看活动记录。"
+                    body: "有 \(report.unexecutedSteps) 个步骤未执行，可在运行记录查看原因。"
                 )
             }
             return WorkflowSystemNotification(
                 title: "自动化流程需要手动处理",
-                body: "有 \(report.attentionMessages.count) 项情况需要确认，请打开 AutoMAA 查看活动记录。"
+                body: "有 \(report.attentionMessages.count) 项情况需要确认，详见运行记录。"
             )
         }
         if report.failedSteps > 0 {
             return WorkflowSystemNotification(
                 title: "自动化流程有步骤失败",
-                body: "有 \(report.failedSteps) 个步骤未完成，请打开 AutoMAA 查看活动记录。"
+                body: "有 \(report.failedSteps) 个步骤未完成，可在运行记录查看原因。"
             )
         }
         return nil
@@ -98,13 +98,13 @@ public enum WorkflowNotificationComposer {
         if let level = notices.compactMap(highRarityLevel).max() {
             return WorkflowSystemNotification(
                 title: "公开招募发现 \(level)★ 组合",
-                body: "请打开 AutoMAA 查看对应账号与识别标签。\(suffix)"
+                body: "可在运行记录查看对应账号与识别标签。\(suffix)"
             )
         }
         guard !notices.isEmpty else { return nil }
         return WorkflowSystemNotification(
             title: "公开招募需要确认",
-            body: "发现 \(notices.count) 项稀有或保留标签结果，请打开 AutoMAA 查看活动记录。\(suffix)"
+            body: "发现 \(notices.count) 项稀有或保留标签结果，详见运行记录。\(suffix)"
         )
     }
 

@@ -14,7 +14,7 @@ struct SettingsView: View {
 
     var body: some View {
         SettingsPresentation(selectedSection: $selectedSection, onPreferredHeight: { height, isNewPage in
-            preferredContentHeight = isNewPage ? height : max(preferredContentHeight, height)
+            preferredContentHeight = isNewPage || selectedSection == .general ? height : max(preferredContentHeight, height)
         }) { section in
             VStack(alignment: .leading, spacing: 18) {
                 switch section {
@@ -23,9 +23,7 @@ struct SettingsView: View {
                     Divider()
                     applicationUpdatePreferences
                     Divider()
-                    storageSection
-                    Divider()
-                    privacySection
+                    dataAndPrivacy
                 case .environment:
                     maaSections
                 case .about:
@@ -77,7 +75,7 @@ struct SettingsView: View {
             .disabled(model.isWorkflowRunning || model.applicationUpdateState.blocksWorkflow)
             Button("取消", role: .cancel) {}
         } message: {
-            Text("Beta 是预发布版本，可能包含尚未进入稳定版的修复，也可能出现新问题。本次将更新引擎与识别数据，兼容性校验通过后才启用；自动更新仍使用稳定通道。")
+            Text("Beta 版本可能不稳定。本次更新引擎与识别数据，后续自动更新仍使用稳定版。")
         }
     }
 
@@ -93,7 +91,8 @@ struct SettingsView: View {
             }
             SettingsToggleRow(
                 title: "接收预发布更新",
-                detail: "包含 Beta、RC 等预发布版本，可能出现新问题。关闭后保留当前版本，等待更新的正式版。",
+                detail: "Beta 和 RC 版本可能不稳定。",
+                showsDetail: true,
                 isOn: Binding(
                     get: { model.configuration.applicationUpdates.receivesPrereleaseUpdates },
                     set: { model.setPrereleaseApplicationUpdatesEnabled($0) }
@@ -108,12 +107,6 @@ struct SettingsView: View {
                     set: { model.setAutomaticApplicationUpdatesEnabled($0) }
                 )
             )
-            Text("来源：\(model.applicationUpdateRepository) · \(model.applicationUpdateChannelDescription)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .help("从 \(model.applicationUpdateRepository) 下载所选通道的更新。MAA 与游戏包体分别维护。")
         }
     }
 
@@ -129,10 +122,21 @@ struct SettingsView: View {
 
     private var notificationSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("通知").font(.headline)
+            HStack {
+                Text("通知").font(.headline)
+                Spacer()
+                if model.configuration.notifications.importantEventsEnabled,
+                   model.notificationAuthorizationState == .authorized || model.notificationAuthorizationState == .provisional {
+                    ActionTextButton(title: model.isTestingImportantNotification ? "正在测试…" : "测试通知", symbol: "bell.badge",
+                                     help: "测试后台通知", reservedTitles: ["测试通知", "正在测试…"]) {
+                        model.testImportantNotification()
+                    }
+                    .disabled(model.isTestingImportantNotification || model.isRequestingNotificationAuthorization)
+                }
+            }
             SettingsToggleRow(
-                title: "启用重要通知",
-                detail: "提醒需要处理的事件与失败，不展示账号或识别标签；普通完成不通知。",
+                title: "通知失败和待处理事项",
+                detail: "通知中隐藏账号和识别标签。",
                 isOn: Binding(
                     get: { model.configuration.notifications.importantEventsEnabled },
                     set: { model.setImportantNotificationsEnabled($0) }
@@ -147,31 +151,14 @@ struct SettingsView: View {
     private var notificationAuthorizationRow: some View {
         if model.isRequestingNotificationAuthorization {
             progressRow("正在等待 macOS 通知权限…")
-        } else if !model.configuration.notifications.importantEventsEnabled {
-            Label("未开启", systemImage: "bell.slash")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        } else {
+        } else if model.configuration.notifications.importantEventsEnabled {
             HStack(spacing: 10) {
                 switch model.notificationAuthorizationState {
                 case .authorized:
-                    Label("macOS 已允许横幅与声音", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                    Spacer()
-                    ActionTextButton(title: model.isTestingImportantNotification ? "正在测试…" : "测试通知", symbol: "bell.badge",
-                                     help: "测试后台通知", reservedTitles: ["测试通知", "正在测试…"]) {
-                        model.testImportantNotification()
-                    }
-                    .disabled(model.isTestingImportantNotification)
+                    EmptyView()
                 case .provisional:
-                    Label("macOS 当前以静默方式投递", systemImage: "bell.and.waves.left.and.right")
+                    Label("macOS 将静默投递通知", systemImage: "bell.slash")
                         .foregroundStyle(.secondary)
-                    Spacer()
-                    ActionTextButton(title: model.isTestingImportantNotification ? "正在测试…" : "测试通知", symbol: "bell.badge",
-                                     help: "测试后台通知", reservedTitles: ["测试通知", "正在测试…"]) {
-                        model.testImportantNotification()
-                    }
-                    .disabled(model.isTestingImportantNotification)
                 case .notDetermined:
                     Label("尚未授予 macOS 通知权限", systemImage: "questionmark.circle")
                         .foregroundStyle(.orange)
@@ -223,24 +210,27 @@ struct SettingsView: View {
                     .accessibilityLabel("maa-cli 路径")
                     .help(model.configuration.cliPath)
                     .disabled(model.isWorkflowRunning || model.applicationUpdateState.blocksWorkflow)
-                ActionTextButton(title: "检测环境", symbol: "arrow.clockwise", help: "检测 MAA 环境") { model.refreshMAAStatus() }
-                    .fixedSize()
-                    .disabled(model.isWorkflowRunning || model.applicationUpdateState.blocksWorkflow
-                              || model.isCheckingMAAEnvironment)
-                    .help("检测 MAA 环境")
-            }
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("版本").frame(width: 62, alignment: .leading)
                 if model.isCheckingMAAEnvironment {
                     progressRow("正在检测…")
                 } else {
+                    ActionTextButton(title: "检测环境", symbol: "arrow.clockwise") { model.refreshMAAStatus() }
+                        .fixedSize()
+                        .disabled(model.isWorkflowRunning || model.applicationUpdateState.blocksWorkflow)
+                }
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("版本").frame(width: 62, alignment: .leading)
+                VStack(alignment: .leading, spacing: 5) {
                     Text(model.maaVersionSummary)
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
+                    if let details = model.maaEnvironmentDiagnostic {
+                        DetailDisclosure(details: details).id(details)
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             Divider()
             HStack(alignment: .firstTextBaseline) {
@@ -259,7 +249,7 @@ struct SettingsView: View {
             }
             SettingsToggleRow(
                 title: "空闲时自动更新 MAA",
-                detail: "每 24 小时最多一次稳定版；避开 90 分钟内的定时任务，关闭仅影响后续更新。",
+                detail: "每天最多检查一次稳定版，并避开即将运行的定时任务。",
                 isOn: Binding(
                     get: { model.configuration.maaUpdates.automaticallyUpdatesCoreAndResources },
                     set: { model.setAutomaticMAAUpdatesEnabled($0) }
@@ -280,16 +270,28 @@ struct SettingsView: View {
                               : activity.phase == .cancelled ? "stop.circle" : "checkmark.circle.fill")
                             .font(.subheadline)
                             .foregroundStyle(activity.phase == .failed ? Color.orange : .secondary)
-                        if let details = activity.details, !details.isEmpty {
-                            DetailDisclosure(details: details)
-                                .id(details)
-                        }
-                        if let runID = activity.runID,
-                           let session = model.maintenanceSessions.first(where: { $0.runID == runID }) {
-                            ActionTextButton(title: "本次记录", symbol: "clock.arrow.circlepath", help: "查看本次维护记录") {
-                                model.showMaintenanceHistory(sessionID: session.id)
+                        HStack(spacing: 14) {
+                            if activity.phase == .failed {
+                                ActionTextButton(title: "重试", symbol: "arrow.clockwise",
+                                                 help: "重新更新\(activity.component.title)") {
+                                    switch activity.component {
+                                    case .resources: model.hotUpdate()
+                                    case .core(.stable): model.updateMAACore()
+                                    case .core(.beta): showsBetaUpdateConfirmation = true
+                                    }
+                                }
+                                .disabled(model.isWorkflowRunning || model.applicationUpdateState.blocksWorkflow)
                             }
-                            .font(.caption)
+                            if let runID = activity.runID,
+                               let session = model.maintenanceSessions.first(where: { $0.runID == runID }) {
+                                ActionTextButton(title: "本次记录", symbol: "clock.arrow.circlepath", help: "查看本次维护记录") {
+                                    model.showMaintenanceHistory(sessionID: session.id)
+                                }
+                            }
+                        }
+                        .font(.caption)
+                        if let details = activity.details, !details.isEmpty {
+                            DetailDisclosure(details: details).id(details)
                         }
                     }
                 } else {
@@ -297,67 +299,42 @@ struct SettingsView: View {
                         message: (activity.automatic ? "自动更新 · " : "") + (activity.progress?.message ?? activity.message),
                         progress: activity.progress?.download,
                         startedAt: activity.startedAt,
-                        limit: "上限 \(UpdatePolicy.durationDescription(activity.timeout))，含重试与校验",
                         isCancelling: activity.isCancelling,
                         showsTransferRate: true,
                         cancel: { model.cancelRun() }
                     )
                 }
             }
-            if let information = model.latestMAAUpdateInformation, let after = information.after {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("最近启用 · \(information.date.formatted(date: .abbreviated, time: .shortened))")
-                    if let old = information.before.core, let current = after.core {
-                        Text(old == current ? "MAA 引擎 v\(current) · 版本未变" : "MAA 引擎 v\(old) → v\(current)")
-                    }
-                    if let summary = information.recognitionSummary { Text(summary) }
-                }.font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-            }
-            Text("校验通过后启用；失败或取消保留当前安装。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .help("最多重试一次，计入当前操作的总时限。")
         }
     }
 
-    private var storageSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("数据与恢复").font(.headline)
-                Spacer()
-                Label(model.configurationSaveError == nil ? "自动保存" : "尚未保存", systemImage: model.configurationSaveError == nil ? "checkmark.circle" : "exclamationmark.circle")
+    private var dataAndPrivacy: some View {
+        DisclosureGroup("数据与隐私") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Text("配置目录")
+                    Text(model.directories.root.path)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .lineLimit(1).truncationMode(.middle)
+                        .textSelection(.enabled)
+                        .help(model.directories.root.path)
+                    ClipboardCopyButton(subject: "配置目录路径") { model.directories.root.path }
+                    ActionIconButton(title: "打开配置目录", symbol: "folder") { NSWorkspace.shared.open(model.directories.root) }
+                }
+                HStack {
+                    Text("更新来源")
+                    Text("\(model.applicationUpdateRepository) · \(model.applicationUpdateChannelDescription)")
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                ActionTextButton(title: "打开日志目录", symbol: "doc.text.magnifyingglass") { NSWorkspace.shared.open(model.directories.logs) }
+                Text("配置、断点和运行记录保存在本机。AutoMAA 不保存游戏密码或验证码。应用联网用于更新和读取说明。")
                     .font(.caption).foregroundStyle(.secondary)
-                ActionIconButton(title: "打开日志目录", symbol: "doc.text.magnifyingglass") {
-                    NSWorkspace.shared.open(model.directories.logs)
-                }
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            HStack(spacing: 8) {
-                Text("配置目录").fixedSize()
-                Text(model.directories.root.path)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .textSelection(.enabled)
-                    .help(model.directories.root.path)
-                ClipboardCopyButton(subject: "配置目录路径") { model.directories.root.path }
-                ActionIconButton(title: "打开配置目录", symbol: "folder") {
-                    NSWorkspace.shared.open(model.directories.root)
-                }
-            }
+            .padding(.top, 6)
         }
     }
-
-    private var privacySection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("本地数据").font(.headline)
-            Text("配置、断点和运行历史保存在本机。AutoMAA 不读取或保存游戏密码、验证码。")
-            Text("应用联网用于更新和读取说明；任务联网由游戏、maa-cli 与 MaaCore 管理。")
-        }
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
-    }
-
 }

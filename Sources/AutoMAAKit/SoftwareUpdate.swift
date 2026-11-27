@@ -163,6 +163,7 @@ public enum SoftwareUpdateError: Equatable, LocalizedError, Sendable {
     case checksumMismatch
     case commandFailed(String, String)
     case invalidApplication(String)
+    case localValidationTimedOut(String)
     case unsupportedInstallLocation(String)
     case installerUnavailable
     case installerLaunchFailed(String)
@@ -193,6 +194,8 @@ public enum SoftwareUpdateError: Equatable, LocalizedError, Sendable {
             "\(command) 执行失败：\(output)"
         case let .invalidApplication(message):
             "更新包中的 AutoMAA.app 无效：\(message)"
+        case let .localValidationTimedOut(step):
+            "\(step)超时"
         case let .unsupportedInstallLocation(message):
             message
         case .installerUnavailable:
@@ -364,20 +367,27 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
     private let repository: String
     private let session: URLSession
     private let commandRunner = CommandRunner()
+    private let applicationValidator: SoftwareUpdateApplicationValidator
+    private let cachedValidationTimeout: TimeInterval
 
     public init(currentVersion: String, repository: String = defaultRepository) {
         self.currentVersion = currentVersion
         self.repository = repository
+        applicationValidator = SoftwareUpdateApplicationValidator()
+        cachedValidationTimeout = UpdatePolicy.cachedApplicationValidationTimeout
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = UpdatePolicy.checkTimeout
         configuration.timeoutIntervalForResource = UpdatePolicy.packageTimeout
         session = URLSession(configuration: configuration)
     }
 
-    init(currentVersion: String, session: URLSession) {
+    init(currentVersion: String, session: URLSession, applicationValidator: SoftwareUpdateApplicationValidator = .init(),
+         cachedValidationTimeout: TimeInterval = UpdatePolicy.cachedApplicationValidationTimeout) {
         self.currentVersion = currentVersion
         self.repository = Self.defaultRepository
         self.session = session
+        self.applicationValidator = applicationValidator
+        self.cachedValidationTimeout = cachedValidationTimeout
     }
 
     public func check(channel: SoftwareUpdateChannel = .stable) async throws -> SoftwareUpdateRelease? {
@@ -500,24 +510,25 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
     }
 
     public func restorePreparedUpdate(directories: AppDirectories, channel: SoftwareUpdateChannel = .stable) async throws -> PreparedSoftwareUpdate? {
-        guard !Task.isCancelled else { return nil }
+        try Task.checkCancellation()
         let store = PreparedSoftwareUpdateStore(directories: directories)
         let prepared: PreparedSoftwareUpdate
         do {
             guard let stored = try store.load() else { return nil }
             prepared = stored
         } catch {
-            if Task.isCancelled { return nil }
+            try Task.checkCancellation()
             store.clear()
             return nil
         }
+        try Task.checkCancellation()
         guard channel.allows(prepared.release, currentVersion: currentVersion) else {
             store.clear()
             return nil
         }
         do {
-            try await UpdateDeadline(timeout: UpdatePolicy.checkTimeout).perform(operation: "校验已下载的 AutoMAA 更新") {
-                try await SoftwareUpdateApplicationValidator().validate(
+            try await UpdateDeadline(timeout: cachedValidationTimeout).perform(operation: "本地更新校验") {
+                try await self.applicationValidator.validate(
                     prepared.applicationURL,
                     expectedVersion: prepared.release.version.description
                 )
@@ -525,10 +536,16 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
             try Task.checkCancellation()
             return prepared
         } catch {
-            if Task.isCancelled { return nil }
-            if error is UpdateTimeoutError { throw error }
-            store.clear()
-            return nil
+            try Task.checkCancellation()
+            switch error {
+            case let timeout as UpdateTimeoutError:
+                throw SoftwareUpdateError.localValidationTimedOut(timeout.operation)
+            case SoftwareUpdateError.invalidApplication:
+                store.clear()
+                return nil
+            default:
+                throw error
+            }
         }
     }
 
@@ -676,7 +693,7 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
         }
         do {
             let source = mountedURL.appending(path: "AutoMAA.app", directoryHint: .isDirectory)
-            try await SoftwareUpdateApplicationValidator().validate(source, expectedVersion: expectedVersion)
+            try await applicationValidator.validate(source, expectedVersion: expectedVersion)
             let destination = workingDirectory.appending(path: "AutoMAA.app", directoryHint: .isDirectory)
             let copy = try await commandRunner.run(
                 executable: "/usr/bin/ditto",
@@ -686,7 +703,7 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
             guard copy.exitCode == 0, !copy.timedOut, !copy.cancelled else {
                 throw commandError("暂存 AutoMAA.app", copy)
             }
-            try await SoftwareUpdateApplicationValidator().validate(destination, expectedVersion: expectedVersion)
+            try await applicationValidator.validate(destination, expectedVersion: expectedVersion)
             await detach(mountedURL)
             return destination
         } catch {
@@ -735,11 +752,14 @@ public actor SoftwareUpdateService: SoftwareUpdateServing {
 }
 
 public struct SoftwareUpdateApplicationValidator: Sendable {
-    private let commandRunner = CommandRunner()
+    private let commandRunner: any CommandRunning
 
-    public init() {}
+    public init() { self.init(commandRunner: CommandRunner()) }
+
+    init(commandRunner: any CommandRunning) { self.commandRunner = commandRunner }
 
     public func validate(_ applicationURL: URL, expectedVersion: String?) async throws {
+        try Task.checkCancellation()
         let values = try applicationURL.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
         let infoURL = applicationURL.appending(path: "Contents/Info.plist")
         guard values.isDirectory == true, values.isSymbolicLink != true,
@@ -763,10 +783,10 @@ public struct SoftwareUpdateApplicationValidator: Sendable {
             throw SoftwareUpdateError.invalidApplication("主执行文件不可执行")
         }
 
-        let architecture = try await commandRunner.run(
+        let architecture = try await runCheck("应用架构校验",
             executable: "/usr/bin/lipo",
             arguments: ["-archs", executableURL.path],
-            timeout: 30
+            timeout: UpdatePolicy.applicationArchitectureTimeout
         )
         guard architecture.exitCode == 0,
               architecture.standardOutput.split(whereSeparator: \.isWhitespace).contains("arm64")
@@ -774,15 +794,24 @@ public struct SoftwareUpdateApplicationValidator: Sendable {
             throw SoftwareUpdateError.invalidApplication("不包含 arm64 可执行文件")
         }
 
-        let signature = try await commandRunner.run(
+        let signature = try await runCheck("代码签名校验",
             executable: "/usr/bin/codesign",
             arguments: ["--verify", "--deep", "--strict", "--verbose=2", applicationURL.path],
-            timeout: 60
+            timeout: UpdatePolicy.applicationSignatureTimeout
         )
-        guard signature.exitCode == 0, !signature.timedOut else {
+        guard signature.exitCode == 0 else {
             let output = signature.combinedOutput.isEmpty ? "代码签名校验失败" : String(signature.combinedOutput.prefix(300))
             throw SoftwareUpdateError.invalidApplication(output)
         }
+    }
+
+    private func runCheck(_ step: String, executable: String, arguments: [String], timeout: TimeInterval) async throws -> CommandResult {
+        let result = try await commandRunner.run(executable: executable, arguments: arguments, environment: [:],
+            timeout: timeout, observeCancellation: true, startupScreenshotPolicy: nil, startupUpdateWait: nil)
+        try Task.checkCancellation()
+        if result.cancelled { throw CancellationError() }
+        if result.timedOut { throw SoftwareUpdateError.localValidationTimedOut(step) }
+        return result
     }
 }
 

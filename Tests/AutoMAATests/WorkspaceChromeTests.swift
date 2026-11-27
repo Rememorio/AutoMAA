@@ -7,6 +7,76 @@ import Testing
 @MainActor
 @Suite("Workspace window chrome")
 struct WorkspaceChromeTests {
+    @Test("switching from a hosted plan to clients installs the client actions without selecting an account")
+    func navigationUpdatesHostedClientToolbar() async throws {
+        let fixture = makeModel()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let model = fixture.model
+        let plan = try #require(model.configuration.plans.first)
+        let client = ClientConfiguration(name: "示例客户端", kind: .yoStarJP, appPath: "",
+            address: "127.0.0.1:59784", profileName: "navigation-test", bundleIdentifier: "org.example.toolbar.client",
+            accounts: [.init(name: "示例账号")])
+        model.configuration.clients = [client]
+        #expect(model.clientsSelection == .client(client.id))
+
+        _ = NSApplication.shared
+        let window = NSWindow(contentRect: .init(origin: .zero, size: WorkspaceLayout.defaultSize),
+                              styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        window.alphaValue = 0
+        window.contentViewController = NSHostingController(rootView: HostedNavigation(model: model))
+        window.setContentSize(WorkspaceLayout.defaultSize)
+        window.orderBack(nil)
+        defer {
+            window.orderOut(nil)
+            window.contentViewController = nil
+            window.close()
+        }
+
+        func displays(_ title: String, action: String) -> Bool {
+            window.title == title && window.toolbar?.items.contains {
+                $0.itemIdentifier.rawValue == "AutoMAA.PageAction.\(action)"
+            } == true
+        }
+        func waitForPage(_ title: String, action: String) async throws {
+            let deadline = ContinuousClock.now + .seconds(3)
+            while !displays(title, action: action), ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            try #require(displays(title, action: action))
+        }
+
+        try await waitForPage(plan.displayName, action: "plan.arrangement")
+        model.selection = .clients
+        try await waitForPage("客户端与账号", action: "clients.edit")
+        #expect(displays("客户端与账号", action: "clients.add"))
+        #expect(window.toolbar?.items.contains { $0.itemIdentifier == WorkspaceChromeController.detailID
+            || $0.itemIdentifier == WorkspaceChromeController.runID || $0.itemIdentifier.rawValue.contains(".plan.") } == false)
+        #expect(model.clientsSelection == .client(client.id))
+    }
+
+    @Test("an outgoing plan cannot replace the visible client toolbar or its action")
+    func latePlanToolbarUpdateIsIgnored() throws {
+        let chrome = WorkspaceChromeController()
+        let fixture = makeModel()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let (window, workspace) = makeWindow(chrome: chrome)
+        defer { window.contentViewController = nil }
+        chrome.attach(to: window, splitController: workspace)
+        chrome.setRunControls(model: fixture.model)
+        let plan = fixture.model.selection
+        let oldActions = [WorkspaceToolbarAction(id: "arrange", title: "执行安排", symbol: "calendar")]
+        chrome.setPage(for: plan, title: "日常方案", actions: oldActions)
+        fixture.model.selection = .clients
+        chrome.setRunControls(model: fixture.model)
+        let actions = [WorkspaceToolbarAction(id: "clients.add", title: "添加客户端", symbol: "plus")]
+        chrome.setPage(for: .clients, title: "客户端与账号", actions: actions)
+        chrome.setPage(for: plan, title: "日常方案", actions: oldActions)
+        #expect(window.title == "客户端与账号")
+        #expect(chrome.toolbar.items.contains { $0.label == "添加客户端" })
+        #expect(!chrome.toolbar.items.contains { $0.label == "执行安排" })
+    }
+
     @Test("the first page and subsequent navigation keep an accessible window title")
     func pageTitlesSurviveAttachment() {
         let chrome = WorkspaceChromeController()
@@ -14,8 +84,9 @@ struct WorkspaceChromeTests {
         let (window, root) = makeWindow(chrome: chrome)
         defer { window.contentViewController = nil }
 
-        chrome.attach(to: window, splitController: root)
         let frame = window.frame
+        chrome.attach(to: window, splitController: root)
+        #expect(window.frame == frame)
         #expect(window.title == "演示方案")
         #expect(window.titleVisibility == .hidden)
         #expect(window.toolbar === chrome.toolbar)
@@ -24,6 +95,34 @@ struct WorkspaceChromeTests {
         #expect(window.title == "运行记录")
         #expect(window.toolbar === chrome.toolbar)
         #expect(window.frame == frame)
+    }
+
+    @Test("installing the toolbar restores the outer frame saved with that toolbar")
+    func restoredWindowKeepsSavedOuterFrame() {
+        let name = "AutoMAA-Test-Workspace-\(UUID().uuidString)"
+        defer { NSWindow.removeFrame(usingName: name) }
+
+        let originalChrome = WorkspaceChromeController()
+        let (original, originalRoot) = makeWindow(chrome: originalChrome)
+        defer { original.contentViewController = nil }
+        originalChrome.attach(to: original, splitController: originalRoot)
+        original.setFrame(NSRect(origin: .zero, size: NSSize(width: 1002, height: 660)), display: false)
+        original.center()
+        layoutWindow(original)
+        let expected = original.frame
+        original.saveFrame(usingName: name)
+
+        let chrome = WorkspaceChromeController()
+        let (restored, root) = makeWindow(chrome: chrome)
+        defer {
+            restored.setFrameAutosaveName("")
+            restored.contentViewController = nil
+        }
+        #expect(restored.setFrameAutosaveName(name))
+        #expect(restored.setFrameUsingName(name))
+        chrome.attach(to: restored, splitController: root)
+        layoutWindow(restored)
+        #expect(restored.frame == expected)
     }
 
     @Test("workspace content stays below the native toolbar when a full-height window is reattached")
@@ -106,10 +205,11 @@ struct WorkspaceChromeTests {
         defer { window.contentViewController = nil }
         chrome.attach(to: window, splitController: root)
         let sidebar = try #require(root.splitViewItems.first)
-        #expect(sidebar.minimumThickness == 200)
-        #expect(sidebar.maximumThickness == 200)
+        #expect(sidebar.minimumThickness == WorkspaceLayout.sidebarWidth)
+        #expect(sidebar.maximumThickness == WorkspaceLayout.sidebarWidth)
         #expect(!sidebar.canCollapseFromWindowResize)
         let host = root.contentHost
+        layoutWindow(window)
         let frame = window.frame
         let item = try #require(chrome.toolbar.items.first { $0.itemIdentifier == WorkspaceChromeController.sidebarID })
         let action = try #require(item.action)
@@ -204,12 +304,13 @@ struct WorkspaceChromeTests {
             [.init(id: "records", title: "记录操作", symbol: "ellipsis", menu: [.action("菜单操作", handler: {})])]
         ] : [[.init(id: "add-client", title: "添加客户端", symbol: "plus")]]
         let sidebar = try #require(root.splitViewItems.first)
-        for width in [1020.0, 1180.0, 1400.0] {
-            window.setContentSize(NSSize(width: width, height: 780))
+        for size in [WorkspaceLayout.minimumSize, WorkspaceLayout.defaultSize, CGSize(width: 1_400, height: 900)] {
+            let width = size.width
+            window.setContentSize(size)
             for collapsed in [false, true] {
                 sidebar.isCollapsed = collapsed
                 chrome.sidebarVisibilityDidChange()
-                for middleWidth in (threeColumns ? [240.0, 280.0, 320.0] : [0.0]) {
+                for middleWidth in (threeColumns ? [WorkspaceLayout.middleWidths.lowerBound, WorkspaceLayout.initialMiddleWidth, WorkspaceLayout.middleWidths.upperBound] : [0.0]) {
                     layoutWindow(window)
                     detail?.splitView.setPosition(middleWidth, ofDividerAt: 0)
                     for actions in actionSets {
@@ -384,7 +485,7 @@ struct WorkspaceChromeTests {
         root.removeSplitViewItem(root.splitViewItems[1])
         let replacement = makeDetail(chrome: chrome)
         let item = NSSplitViewItem(viewController: replacement)
-        item.minimumThickness = 680
+        item.minimumThickness = WorkspaceLayout.minimumContentWidth
         root.addSplitViewItem(item)
         layoutWindow(window)
         replacement.viewDidLayout()
@@ -556,13 +657,14 @@ struct WorkspaceChromeTests {
     private func makeWindow(chrome: WorkspaceChromeController) -> (NSWindow, WorkspaceSplitController) {
         _ = NSApplication.shared
         let root = WorkspaceSplitController(chrome: chrome,
-            sidebar: AnyView(Text("导航").frame(maxWidth: .infinity, minHeight: 680, maxHeight: .infinity)),
-            content: AnyView(Text("正文").frame(minWidth: 680, maxWidth: .infinity, minHeight: 680, maxHeight: .infinity)))
-        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 1180, height: 780),
+            sidebar: AnyView(Text("导航").frame(maxWidth: .infinity, maxHeight: .infinity)),
+            content: AnyView(Text("正文").frame(minWidth: WorkspaceLayout.minimumContentWidth,
+                                               maxWidth: .infinity, maxHeight: .infinity)))
+        let window = NSWindow(contentRect: NSRect(origin: NSPoint(x: 100, y: 100), size: WorkspaceLayout.defaultSize),
                               styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: true)
-        window.contentMinSize = NSSize(width: 1020, height: 680)
         window.contentViewController = root
-        window.setContentSize(NSSize(width: 1180, height: 780))
+        window.contentMinSize = WorkspaceLayout.minimumSize
+        window.setContentSize(WorkspaceLayout.defaultSize)
         root.view.layoutSubtreeIfNeeded()
         return (window, root)
     }
@@ -574,7 +676,7 @@ struct WorkspaceChromeTests {
         let detail = makeDetail(chrome: chrome)
         root.removeSplitViewItem(root.splitViewItems[1])
         let content = NSSplitViewItem(viewController: detail)
-        content.minimumThickness = 680
+        content.minimumThickness = WorkspaceLayout.minimumContentWidth
         root.addSplitViewItem(content)
         layoutWindow(window)
         return (window, root, detail)
@@ -582,5 +684,23 @@ struct WorkspaceChromeTests {
 
     private func makeDetail(chrome: WorkspaceChromeController) -> WorkspaceDetailSplitController {
         WorkspaceDetailSplitController(chrome: chrome, content: AnyView(Text("列表")), detail: AnyView(Text("详情")))
+    }
+}
+
+@MainActor
+private struct HostedNavigation: View {
+    @ObservedObject var model: AppModel
+    @State private var chrome = WorkspaceChromeController()
+
+    var body: some View {
+        WorkspaceShell(chrome: chrome, model: model) {
+            SidebarView()
+        } content: {
+            if case let .plan(id) = model.selection, let plan = model.planBinding(id) {
+                PlanEditorView(plan: plan)
+            } else {
+                ClientsView()
+            }
+        }
     }
 }

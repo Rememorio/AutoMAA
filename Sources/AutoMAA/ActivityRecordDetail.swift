@@ -18,17 +18,12 @@ enum ActivityRecordPresentation {
         return client.displayName
     }
 
-    static func roundSummary(_ progress: PlanContinuation) -> String {
-        if !progress.fightRecoveryItems.isEmpty {
-            return (progress.hasStarted ? "\(progress.resolved) 项已处理 · " : "")
-                + "\(progress.fightRecoveryItems.count) 项作战待处理"
-                + (progress.pending > 0 ? " · \(progress.pending) 项可继续" : "")
-        }
-        guard progress.hasStarted else { return progress.hasExpiredScope ? "本轮已结束" : "今日尚未运行" }
-        if progress.pending == 0, progress.unconfirmed == 0 { return progress.completionTitle }
-        return "\(progress.resolved) 项已处理"
-            + (progress.pending > 0 ? " · \(progress.pending) 项可继续" : "")
-            + (progress.unconfirmed > 0 ? " · \(progress.unconfirmed) 项待确认" : "")
+    static func showsContext(in visibleEntries: [LogEntry], at index: Int) -> Bool {
+        let entry = visibleEntries[index]
+        guard entry.clientID != nil || entry.accountID != nil else { return false }
+        if index == 0 || entry.level == .warning || entry.level == .error { return true }
+        let previous = visibleEntries[index - 1]
+        return entry.clientID != previous.clientID || entry.accountID != previous.accountID
     }
 
     static func listSummary(_ session: ActivitySession, attempts: Int = 1) -> String {
@@ -56,25 +51,22 @@ enum ActivityRecordPresentation {
     }
 
     static func summary(_ session: ActivitySession) -> String {
-        if let blocker = session.startBlocker { return "未启动 · " + blocker.title }
+        guard let result = session.runSummary else { return session.outcome.title }
+        let handled = result.completedSteps + result.unnecessarySteps + result.manuallyHandledSteps
+        let outcomes = ActivityAccountSummary.groups(in: session).flatMap(\.outcomes)
         var parts: [String] = []
-        if let summary = session.runSummary {
-            parts.append("\(summary.completedSteps + summary.unnecessarySteps + summary.manuallyHandledSteps)/\(summary.totalSteps) 项已处理")
-            if summary.unnecessarySteps > 0 { parts.append("\(summary.unnecessarySteps) 项无需执行") }
-            if summary.manuallyHandledSteps > 0 { parts.append("\(summary.manuallyHandledSteps) 项人工处理") }
-            if summary.unconfirmedSteps > 0 { parts.append("\(summary.unconfirmedSteps) 项未确认") }
-            if summary.failedSteps > 0 { parts.append("\(summary.failedSteps) 项失败") }
-            if summary.unexecutedSteps > 0 { parts.append("\(summary.unexecutedSteps) 项未执行") }
-            if summary.pendingWeeklyAnnihilation > 0 { parts.append("\(summary.pendingWeeklyAnnihilation) 个账号剿灭待补打") }
-        } else {
-            parts.append("\(session.entries.count) 条记录")
+        if outcomes.filter(\.isHandledTaskOutcome).count != handled || outcomes.isEmpty {
+            parts.append("本轮已处理 \(handled)/\(result.totalSteps) 项")
         }
-        let notices = ActivityResultSummary(session: session).notices
-        let warnings = notices.filter { $0.level == .warning }.count
-        let errors = notices.filter { $0.level == .error }.count
-        if warnings > 0 { parts.append("\(warnings) 条提醒") }
-        if errors > 0 { parts.append("\(errors) 条错误") }
-        if session.endedAt > session.startedAt { parts.append(duration(from: session.startedAt, to: session.endedAt)) }
+        if result.failedSteps > outcomes.count(where: { $0.level == .error || $0.fightResult?.status == .failed }) {
+            parts.append("\(result.failedSteps) 项失败")
+        }
+        if result.unconfirmedSteps > outcomes.count(where: { $0.fightResult?.status == .unconfirmed }) {
+            parts.append("\(result.unconfirmedSteps) 项待核实")
+        }
+        if result.unexecutedSteps > 0 { parts.append("\(result.unexecutedSteps) 项未执行") }
+        if result.pendingWeeklyAnnihilation > 0 { parts.append("\(result.pendingWeeklyAnnihilation) 个账号剿灭待补打") }
+        if [.cancelled, .failed, .unfinished].contains(session.outcome) { parts.insert(session.outcome.title, at: 0) }
         return parts.joined(separator: " · ")
     }
 
@@ -84,7 +76,7 @@ enum ActivityRecordPresentation {
         return date.formatted(.dateTime.year().month().day().weekday())
     }
 
-    private static func duration(from start: Date, to end: Date) -> String {
+    static func duration(from start: Date, to end: Date) -> String {
         let seconds = max(1, Int(end.timeIntervalSince(start)))
         if seconds < 60 { return "\(seconds) 秒" }
         let minutes = seconds / 60
@@ -97,47 +89,19 @@ struct ActivityRecordDetail: View {
     let session: ActivitySession
     let title: String
     let section: ActivityRecordSection
-    var pendingLink: ActivityPendingLink?
-    var showPendingWork: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 10) {
-                ActivityRecordHeader(session: session, title: title)
-                followUp
-            }
-            .padding(20)
+            ActivityRecordHeader(session: session, title: title)
+                .padding(.horizontal, 16).padding(.vertical, 12)
             Divider()
             ScrollView {
                 ActivitySessionContents(session: session, section: section)
-                    .padding(20)
+                    .padding(.horizontal, 16).padding(.vertical, 12)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    @ViewBuilder
-    private var followUp: some View {
-        switch pendingLink {
-        case let .available(summary):
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) { pendingSummary(summary); pendingButton }
-                VStack(alignment: .leading, spacing: 2) { pendingSummary(summary); pendingButton }
-            }
-        case .expired:
-            Text("本轮续跑已结束").font(.caption).foregroundStyle(.secondary)
-        case nil: EmptyView()
-        }
-    }
-
-    private func pendingSummary(_ summary: String) -> some View {
-        Text(summary).font(.caption.weight(.medium)).foregroundStyle(ActivityOutcome.partial.color)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private var pendingButton: some View {
-        PendingWorkLinkButton(action: showPendingWork)
     }
 }
 
@@ -147,21 +111,50 @@ struct ActivityRecordHeader: View {
     var showFullHistory: (() -> Void)? = nil
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        ViewThatFits(in: .horizontal) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text(title).font(.headline).textSelection(.enabled)
-                if let showFullHistory {
-                    ActionTextButton(title: "完整记录", symbol: "clock.arrow.circlepath",
-                                     help: "查看本方案的完整运行记录", action: showFullHistory)
-                }
+                heading
+                metadataLabel
+                actions
             }
-            Text(session.startedAt, format: .dateTime.year().month().day().hour().minute())
-                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-            Text(ActivityRecordPresentation.summary(session))
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            .fixedSize(horizontal: true, vertical: false)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    heading
+                    actions.fixedSize(horizontal: true, vertical: false)
+                }
+                metadataLabel
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var heading: some View {
+        Text(title).font(.headline).textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var metadataLabel: some View {
+        Text(metadata).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder private var actions: some View {
+        if let showFullHistory {
+            ActionTextButton(title: "完整记录", symbol: "clock.arrow.circlepath",
+                             help: "在运行记录中查看该次结果和日志", action: showFullHistory)
+        }
+    }
+
+    private var metadata: String {
+        var parts = [session.startedAt.formatted(.dateTime.year().month().day().hour().minute())]
+        if session.endedAt.timeIntervalSince(session.startedAt) >= 1 {
+            parts.append(ActivityRecordPresentation.duration(from: session.startedAt, to: session.endedAt))
+        }
+        let summary = ActivityRecordPresentation.summary(session)
+        if !summary.isEmpty { parts.append(summary) }
+        return parts.joined(separator: " · ")
     }
 }
 
@@ -179,6 +172,7 @@ struct ActivitySessionContents: View {
     @EnvironmentObject private var model: AppModel
     let session: ActivitySession
     var section = ActivityRecordSection.results
+    @State private var expandedTaskAccounts: Set<ActivityAccountSummary.ID> = []
     @State private var onlyAttention = false
     @State private var feedbackVisibilityID = UUID()
 
@@ -212,35 +206,136 @@ struct ActivitySessionContents: View {
             model.setActivityResultVisible(runID, viewID: feedbackVisibilityID)
         }
         .onDisappear { model.setActivityResultVisible(nil, viewID: feedbackVisibilityID) }
+        .onChange(of: session.id) { expandedTaskAccounts.removeAll() }
     }
 
     private var results: some View {
         let summary = ActivityResultSummary(session: session)
-        let accounts = summary.accounts
-        return VStack(alignment: .leading, spacing: 18) {
-            if accounts.isEmpty, let entry = session.entries.last {
-                ActivityLogRows(entries: [entry])
-            }
-            ForEach(accounts) { account in
-                VStack(alignment: .leading, spacing: 9) {
-                    Text(ActivityRecordPresentation.context(account.lastEvent, clients: model.configuration.clients) ?? "已移除的账号")
-                        .font(.subheadline.weight(.semibold))
-                    if account.outcomes.isEmpty {
-                        Text("未记录任务结果")
-                            .font(.callout).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+        var events = summary.exceptions
+        if summary.accounts.isEmpty, let last = session.entries.last,
+           last.runSummary == nil || [.failed, .cancelled].contains(last.phase) {
+            events.append(last)
+        }
+        events.append(contentsOf: summary.notices)
+
+        return VStack(alignment: .leading, spacing: 14) {
+            if !events.isEmpty {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(events.enumerated()), id: \.element.id) { index, entry in
+                        resultRow(entry, index: index)
                     }
-                    ActivityLogRows(entries: account.outcomes.isEmpty ? [account.lastEvent] : account.outcomes,
-                                    showsContext: false, groupsByAccount: true)
                 }
-                if account.id != accounts.last?.id { Divider() }
             }
-            if !summary.notices.isEmpty {
-                Divider()
-                Text("其他提醒与错误 · \(summary.notices.count) 条").font(.subheadline.weight(.semibold))
-                ActivityLogRows(entries: summary.notices)
+            ForEach(summary.accounts) { account in
+                let fight = account.fight
+                let lines = account.fightLines
+                let tasks = account.completedTasks
+                if !lines.isEmpty || !tasks.isEmpty {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(accountName(account.lastEvent) ?? "历史账号")
+                            .font(.callout.weight(.semibold))
+                            .accessibilityAddTraits(.isHeader)
+                            .padding(.bottom, 5)
+                        ForEach(lines.indices, id: \.self) { index in
+                            resultLine(lines[index])
+                                .activityTableRow(index)
+                        }
+                        if let fight, !lines.isEmpty, fight.isHandledTaskOutcome {
+                            ActivityEntryDetails(entry: fight, showsRecordedDrops: false)
+                                .padding(.horizontal, 8)
+                            earlierAttempts(summary.earlierFailuresByOutcome[fight.id])
+                        }
+                        if !tasks.isEmpty {
+                            DisclosureGroup(isExpanded: Binding {
+                                expandedTaskAccounts.contains(account.id)
+                            } set: { expanded in
+                                if expanded { expandedTaskAccounts.insert(account.id) }
+                                else { expandedTaskAccounts.remove(account.id) }
+                            }) {
+                                VStack(alignment: .leading, spacing: 0) {
+                                    ForEach(Array(tasks.enumerated()), id: \.element.id) { index, entry in
+                                        Text(entry.accountResultMessage)
+                                            .activityTableRow(index)
+                                        ActivityEntryDetails(entry: entry).padding(.horizontal, 8)
+                                        earlierAttempts(summary.earlierFailuresByOutcome[entry.id])
+                                    }
+                                }
+                                .textSelection(.enabled)
+                            } label: {
+                                let summary = expandedTaskAccounts.contains(account.id)
+                                    ? "\(tasks.count) 项任务" : tasks.compactMap { $0.task?.title }.joined(separator: "、")
+                                Text("已完成 · " + summary)
+                                    .foregroundStyle(.secondary)
+                                    .activityTableRow(lines.count)
+                            }
+                            .font(.callout)
+                        }
+                    }
+                }
             }
         }
+    }
+
+    private func resultLine(_ line: ActivityResultLine) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(line.title).font(.callout)
+            if let drops = line.drops { Text(drops).font(.callout).foregroundStyle(.secondary) }
+            if let note = line.note { Text(note).font(.caption).foregroundStyle(.secondary) }
+        }
+        .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+    }
+
+    @ViewBuilder
+    private func earlierAttempts(_ entries: [LogEntry]?) -> some View {
+        if let entries {
+            DisclosureGroup("较早的尝试 · \(entries.count) 条") {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                        Text(entry.accountResultMessage).textSelection(.enabled)
+                            .activityTableRow(index)
+                        ActivityEntryDetails(entry: entry).padding(.horizontal, 8)
+                    }
+                }
+            }
+            .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func accountName(_ entry: LogEntry) -> String? {
+        if let client = model.configuration.clients.first(where: { $0.id == entry.clientID }),
+           let account = client.accounts.first(where: { $0.id == entry.accountID }) {
+            return "\(client.displayName) · \(account.displayName)"
+        }
+        if entry.accountID != nil, entry.message.hasPrefix("账号「"), let end = entry.message.range(of: "」：") {
+            return String(entry.message.dropFirst(3)[..<end.lowerBound])
+        }
+        return ActivityRecordPresentation.context(entry, clients: model.configuration.clients)
+    }
+
+    private func resultRow(_ entry: LogEntry, index: Int) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 3) {
+                if let context = accountName(entry) {
+                    Text(context).font(.caption).foregroundStyle(.secondary)
+                }
+                resultLine(entry.exceptionLine)
+                    .foregroundStyle(entry.messageColor)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityHint(entry.level.displayName)
+            .activityTableRow(index)
+            ActivityEntryDetails(entry: entry, showsRecordedDrops: false)
+                .padding(.horizontal, 8)
+        }
+    }
+}
+
+private extension View {
+    func activityTableRow(_ index: Int, horizontal: CGFloat = 8, vertical: CGFloat = 5) -> some View {
+        padding(.horizontal, horizontal)
+            .padding(.vertical, vertical)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(nsColor: NSColor.alternatingContentBackgroundColors[index % 2]))
     }
 }
 
@@ -266,9 +361,8 @@ struct ActivityLiveLog: View {
             .toggleStyle(.checkbox).font(.caption).fixedSize(horizontal: false, vertical: true)
 
             if displayedEntries.isEmpty {
-                ActivityEmptyState(title: entries.isEmpty ? "正在准备" : "当前没有提醒",
-                                   symbol: entries.isEmpty ? "clock" : "checkmark.circle",
-                                   detail: entries.isEmpty ? "等待第一条运行记录。" : "警告与错误会显示在这里。")
+                ActivityEmptyState(title: entries.isEmpty ? "等待运行记录" : "暂无警告或错误",
+                                   symbol: entries.isEmpty ? "clock" : "checkmark.circle")
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -297,7 +391,6 @@ struct ActivityLogRows: View {
     @EnvironmentObject private var model: AppModel
     let entries: [LogEntry]
     var showsContext = true
-    var groupsByAccount = false
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 0) {
@@ -310,12 +403,11 @@ struct ActivityLogRows: View {
             .accessibilityAddTraits(.isHeader)
             Divider()
             ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
-                ActivityEventRow(entry: entry, message: groupsByAccount ? entry.accountResultMessage : entry.message,
+                ActivityEventRow(entry: entry,
                     context: showsContext
-                        ? ActivityRecordPresentation.context(entry, clients: model.configuration.clients) : nil)
-                    .padding(.horizontal, 10).padding(.vertical, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(nsColor: NSColor.alternatingContentBackgroundColors[index % 2]))
+                        ? ActivityRecordPresentation.context(entry, clients: model.configuration.clients) : nil,
+                    showsContextSubtitle: showsContext && ActivityRecordPresentation.showsContext(in: entries, at: index))
+                    .activityTableRow(index, horizontal: 10, vertical: 8)
                     .id(entry.id)
             }
         }
@@ -324,8 +416,8 @@ struct ActivityLogRows: View {
 
 struct ActivityEventRow: View {
     let entry: LogEntry
-    let message: String
     let context: String?
+    let showsContextSubtitle: Bool
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -339,33 +431,38 @@ struct ActivityEventRow: View {
                             .foregroundStyle(outcome.color)
                             .accessibilityHidden(true)
                     }
-                    Text(message).font(.callout).textSelection(.enabled)
+                    Text(entry.message).font(.callout).textSelection(.enabled)
                         .foregroundStyle(entry.messageColor)
                         .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityValue(context ?? "")
                         .accessibilityHint(entry.level.displayName)
                 }
-                if let context {
+                if showsContextSubtitle, let context {
                     Text(context).font(.caption).foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
                 }
                 ActivityEntryDetails(entry: entry)
             }
             Spacer(minLength: 0)
         }
+        .help(context ?? entry.level.displayName)
     }
 }
 
 struct ActivityEmptyState: View {
     let title: String
     let symbol: String
-    let detail: String
+    var detail: String? = nil
 
     var body: some View {
         VStack(spacing: 9) {
             Image(systemName: symbol).font(.system(size: 26)).foregroundStyle(.tertiary)
                 .accessibilityHidden(true)
             Text(title).font(.callout.weight(.medium))
-            Text(detail).font(.caption).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+            if let detail {
+                Text(detail).font(.caption).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

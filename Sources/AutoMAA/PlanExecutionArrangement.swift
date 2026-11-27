@@ -73,10 +73,6 @@ struct PlanExecutionArrangement: View {
 
             Divider()
             HStack(spacing: 12) {
-                if !model.isWorkflowRunning {
-                    Text("更改在应用后生效")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
                 Spacer()
                 Button { dismiss() } label: {
                     Text(model.isWorkflowRunning ? "关闭" : "取消").frame(minWidth: 56)
@@ -98,7 +94,7 @@ struct PlanExecutionArrangement: View {
     }
 
     private var accountSection: some View {
-        PlanFormSection("执行账号") {
+        PlanFormSection("执行账号 · \(targetAccountCount) 个") {
             Picker("账号范围", selection: $includesAllEnabledAccounts) {
                 Text("所有已启用账号").tag(true)
                 Text("指定账号").tag(false)
@@ -106,13 +102,10 @@ struct PlanExecutionArrangement: View {
             .pickerStyle(.radioGroup)
             .labelsHidden()
             .fixedSize(horizontal: true, vertical: false)
-            if includesAllEnabledAccounts {
-                Text("新启用的账号会自动加入。")
-                    .font(.caption).foregroundStyle(.secondary)
-            } else if model.configuration.clients.isEmpty {
+            if model.configuration.clients.isEmpty {
                 Text("请先在“客户端与账号”中添加客户端。")
                     .font(.callout).foregroundStyle(.secondary)
-            } else {
+            } else if !includesAllEnabledAccounts {
                 ForEach(model.configuration.clients) { client in
                     VStack(alignment: .leading, spacing: 8) {
                         Text(client.displayName + (client.enabled ? "" : " · 已停用"))
@@ -128,21 +121,20 @@ struct PlanExecutionArrangement: View {
                     }
                 }
             }
-            Text("当前选择 \(targetAccountCount) 个账号，按客户端依次执行。")
-                .font(.caption).foregroundStyle(.secondary)
         }
     }
 
     private var scheduleSection: some View {
         PlanFormSection("定时运行") {
             Toggle("启用定时运行", isOn: $schedule.enabled)
+                .help("AutoMAA 关闭后仍可定时运行。")
             if schedule.enabled {
                 ForEach(Array(schedule.rules.enumerated()), id: \.element.id) { index, rule in
                     scheduleRule(rule, index: index)
                 }
                 Button("添加时段", systemImage: "plus", action: addScheduleRule)
                     .help("同一天可以安排多个时间，每个时段开启新一轮")
-                Text("每次定时开启新一轮。无需保持 AutoMAA 打开；执行时需保持系统唤醒、登录且解锁。")
+                Text("每个时段开启新一轮，作战额度重新计算。运行时 Mac 须保持唤醒、登录并解锁。")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -187,12 +179,9 @@ struct PlanExecutionArrangement: View {
     private var policySection: some View {
         PlanFormSection("执行策略") {
             Toggle("运行前更新识别数据", isOn: $policy.hotUpdateBeforeRun)
-            Stepper("单步骤失败重试：\(policy.maxRetries) 次", value: $policy.maxRetries, in: 0...3)
+            Stepper("单步失败重试 \(policy.maxRetries) 次", value: $policy.maxRetries, in: ExecutionPolicy.retryRange)
                 .fixedSize(horizontal: true, vertical: false)
-            Toggle("某一步失败后继续后续步骤", isOn: $policy.continueAfterStepFailure)
-            Text("断点按方案与轮次隔离，每周剿灭进度按账号共享。作战次数、理智药和源石额度每轮重新计算；未确认的作战会保留。")
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            Toggle("单步失败后继续其他步骤", isOn: $policy.continueAfterStepFailure)
         }
     }
 

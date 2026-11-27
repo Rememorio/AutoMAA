@@ -28,6 +28,7 @@ description: macOS 上的 MAA 工作流编排器。配置客户端、账号与�
         <span>AutoMAA v0.17.0 今日总览<span class="home-caption-detail"> · 方案、进度与待办，一处查看</span></span>
         <a href="./guide/getting-started#认识主窗口">认识主窗口<span aria-hidden="true"> →</span></a>
       </div>
+      <p>文档包含待发布的界面调整。<a href="https://github.com/Rememorio/AutoMAA/tree/v0.17.3/docs">查看正式版 v0.17.3 文档</a>。</p>
     </figcaption>
   </figure>
 

@@ -88,6 +88,7 @@ private actor StubSoftwareUpdateService: SoftwareUpdateServing {
     func saveDownloadAfterCancellation() { savesLateDownload = true }
     func restore(_ prepared: PreparedSoftwareUpdate?, late: Bool = false) {
         restored = prepared
+        restorationFails = false
         slowRestoration = late
         returnsLateRestoration = late
     }
@@ -119,7 +120,7 @@ private actor StubSoftwareUpdateService: SoftwareUpdateServing {
         restorationFails = !cancel
     }
 
-    func failDownload() { downloadFails = true }
+    func failDownload(_ fails: Bool = true) { downloadFails = fails }
 
     func checkResult(hasUpdate: Bool, fails: Bool = false) {
         self.hasUpdate = hasUpdate
@@ -513,6 +514,14 @@ struct ApplicationUpdateTests {
         #expect(fixture.model.applicationUpdateRelease == fixture.service.release)
         let cache = ReleaseNotesCache(directories: AppDirectories(root: fixture.root)).load()
         #expect(cache.releases.first?.body == "测试更新")
+        let counts = await fixture.service.counts()
+        await fixture.service.delay()
+        await fixture.service.failDownload(false)
+        fixture.model.retryApplicationUpdate()
+        try await waitUntil { !fixture.model.applicationUpdateState.isBusy }
+        if case .ready = fixture.model.applicationUpdateState {} else { Issue.record("重新下载应准备好更新") }
+        #expect(await fixture.service.counts().checks == counts.checks)
+        #expect(await fixture.service.counts().prepares == counts.prepares + 1)
     }
 
     @Test("update success retains a readable notice until the current version notes are opened")
@@ -543,7 +552,12 @@ struct ApplicationUpdateTests {
         if cancel {
             if case .idle = fixture.model.applicationUpdateState {} else { Issue.record("取消后未回到空闲状态") }
         } else {
-            if case .failed = fixture.model.applicationUpdateState {} else { Issue.record("校验错误未保留") }
+            if case .failed(_, .validateCache) = fixture.model.applicationUpdateState {} else { Issue.record("校验失败应提供本地重试") }
+            await fixture.service.restore(fixture.service.prepared)
+            fixture.model.retryApplicationUpdate()
+            try await waitUntil { !fixture.model.applicationUpdateState.isBusy }
+            if case .ready = fixture.model.applicationUpdateState {} else { Issue.record("重新校验应恢复已下载的更新") }
+            #expect(await fixture.service.restorationCount == 2)
         }
         let counts = await fixture.service.counts()
         #expect(counts.checks == 0)

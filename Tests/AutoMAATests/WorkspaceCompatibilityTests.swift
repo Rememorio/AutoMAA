@@ -153,7 +153,7 @@ struct WorkspaceCompatibilityTests {
         let original = model.configuration
         let plan = original.plans[0]
         var policy = plan.policy
-        policy.maxRetries = 4
+        policy.maxRetries = ExecutionPolicy.retryRange.upperBound
 
         let error = model.applyPlanExecutionArrangement(
             plan.id, includesAllEnabledAccounts: true, accountIDs: [],

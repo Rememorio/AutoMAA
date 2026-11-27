@@ -18,7 +18,7 @@ struct BrandLogo: View {
 }
 
 enum PageLayout {
-    static let inset: CGFloat = 24
+    static let inset: CGFloat = 18
     static let sectionSpacing: CGFloat = 16
     static let contentWidth: CGFloat = 1_060
     static let readingWidth: CGFloat = 900
@@ -94,19 +94,22 @@ struct EntityIcon: View {
 struct SettingsToggleRow: View {
     let title: String
     let detail: String
+    var showsDetail = false
     @Binding var isOn: Bool
 
     var body: some View {
         Toggle(isOn: $isOn) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
-                Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                if showsDetail {
+                    Text(detail)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
         .toggleStyle(.checkbox)
+        .help(detail)
         .accessibilityHint(detail)
     }
 }

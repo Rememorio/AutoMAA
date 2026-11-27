@@ -240,6 +240,84 @@ final class SoftwareUpdateTests: XCTestCase {
         XCTAssertTrue(ReleaseUpdateURLProtocol.state.requestedPaths().isEmpty)
     }
 
+    func testIncompleteLocalChecksKeepCandidateForSuccessfulRevalidation() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        let prepared = try storeTestApplication(in: directories)
+        let store = PreparedSoftwareUpdateStore(directories: directories)
+        for (tool, step) in [("lipo", "应用架构校验"), ("codesign", "代码签名校验")] {
+            for cancelled in [false, true] {
+                let result = CommandResult(exitCode: 0, standardOutput: "arm64", standardError: "", timedOut: !cancelled, cancelled: cancelled)
+                let service = updateService(routes: [:], validationCommands: .init(tool: tool, result: result))
+                do {
+                    _ = try await service.restorePreparedUpdate(directories: directories)
+                    XCTFail("An interrupted check must not return an installable application")
+                } catch is CancellationError {
+                    XCTAssertTrue(cancelled)
+                } catch {
+                    XCTAssertFalse(cancelled)
+                    XCTAssertEqual(error as? SoftwareUpdateError, .localValidationTimedOut(step))
+                }
+                XCTAssertEqual(try store.load(), prepared)
+            }
+        }
+        let restored = try await updateService(routes: [:]).restorePreparedUpdate(directories: directories)
+        XCTAssertEqual(restored, prepared)
+        XCTAssertTrue(ReleaseUpdateURLProtocol.state.requestedPaths().isEmpty)
+    }
+
+    func testOverallLocalValidationDeadlineKeepsCachedCandidate() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        let prepared = try storeTestApplication(in: directories)
+        XCTAssertGreaterThan(UpdatePolicy.cachedApplicationValidationTimeout,
+            UpdatePolicy.applicationArchitectureTimeout + UpdatePolicy.applicationSignatureTimeout)
+        let service = updateService(routes: [:], cachedValidationTimeout: 0)
+        do {
+            _ = try await service.restorePreparedUpdate(directories: directories)
+            XCTFail("An exhausted local deadline must fail validation")
+        } catch {
+            XCTAssertEqual(error as? SoftwareUpdateError, .localValidationTimedOut("本地更新校验"))
+            XCTAssertFalse(error.localizedDescription.contains("网络"))
+        }
+        XCTAssertEqual(try PreparedSoftwareUpdateStore(directories: directories).load(), prepared)
+    }
+
+    func testCompletedValidationRejectsWrongArchitectureOrBadSignatureAndClearsCache() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        for (tool, exitCode, output) in [("lipo", Int32(0), "x86_64"), ("codesign", Int32(1), "invalid signature")] {
+            let prepared = try storeTestApplication(in: directories)
+            let result = CommandResult(exitCode: exitCode, standardOutput: output, standardError: "", timedOut: false)
+            let service = updateService(routes: [:], validationCommands: .init(tool: tool, result: result))
+            let restored = try await service.restorePreparedUpdate(directories: directories)
+            XCTAssertNil(restored)
+            XCTAssertNil(try PreparedSoftwareUpdateStore(directories: directories).load())
+            XCTAssertFalse(FileManager.default.fileExists(atPath: prepared.workingDirectory.path))
+        }
+    }
+
+    private func storeTestApplication(in directories: AppDirectories) throws -> PreparedSoftwareUpdate {
+        let release = try XCTUnwrap(SoftwareUpdateReleaseResolver.newerRelease(
+            from: releaseJSON(version: "0.16.0"), currentVersion: "0.15.10"))
+        let workingDirectory = directories.root.appending(path: "Updates/candidate", directoryHint: .isDirectory)
+        let application = workingDirectory.appending(path: "AutoMAA.app", directoryHint: .isDirectory)
+        let executable = application.appending(path: "Contents/MacOS/TestApp")
+        try FileManager.default.createDirectory(at: executable.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let info = ["CFBundleIdentifier": "com.rememorio.AutoMAA", "CFBundleExecutable": "TestApp",
+                    "CFBundleShortVersionString": release.version.description]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+            .write(to: application.appending(path: "Contents/Info.plist"))
+        let prepared = PreparedSoftwareUpdate(release: release, applicationURL: application, workingDirectory: workingDirectory)
+        try PreparedSoftwareUpdateStore(directories: directories).save(prepared)
+        return prepared
+    }
+
     private func releaseJSON(version: String, host: String = "github.com", prerelease: Bool = false) -> Data {
         try! JSONSerialization.data(withJSONObject: releaseObject(version: version, host: host, prerelease: prerelease))
     }
@@ -255,16 +333,34 @@ final class SoftwareUpdateTests: XCTestCase {
                 ] : []]
     }
 
-    private func updateService(routes: [String: Data]) -> SoftwareUpdateService {
+    private func updateService(routes: [String: Data], validationCommands: LocalValidationCommands = .init(),
+                               cachedValidationTimeout: TimeInterval = UpdatePolicy.cachedApplicationValidationTimeout) -> SoftwareUpdateService {
         ReleaseUpdateURLProtocol.state.install(routes)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [ReleaseUpdateURLProtocol.self]
-        return SoftwareUpdateService(currentVersion: "0.15.10", session: URLSession(configuration: configuration))
+        return SoftwareUpdateService(currentVersion: "0.15.10", session: URLSession(configuration: configuration),
+            applicationValidator: .init(commandRunner: validationCommands), cachedValidationTimeout: cachedValidationTimeout)
     }
 
     private func temporaryRoot() -> URL {
         FileManager.default.temporaryDirectory
             .appending(path: "automaa-update-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
+    }
+}
+
+private struct LocalValidationCommands: CommandRunning {
+    var tool: String?
+    var result: CommandResult?
+
+    func run(executable: String, arguments: [String], environment: [String: String], timeout: TimeInterval,
+             observeCancellation: Bool, startupScreenshotPolicy: StartupScreenshotPolicy?,
+             startupUpdateWait: StartupUpdateWait?) async throws -> CommandResult {
+        let name = URL(filePath: executable).lastPathComponent
+        XCTAssertTrue(["lipo", "codesign"].contains(name))
+        XCTAssertEqual(timeout, name == "lipo" ? UpdatePolicy.applicationArchitectureTimeout : UpdatePolicy.applicationSignatureTimeout)
+        XCTAssertTrue(observeCancellation)
+        if name == tool, let result { return result }
+        return .init(exitCode: 0, standardOutput: name == "lipo" ? "arm64" : "", standardError: "", timedOut: false)
     }
 }
 

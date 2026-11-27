@@ -21,12 +21,13 @@ struct ClientsView: View {
         } detail: {
             if let client = selectedClient {
                 ClientWorkspaceDetail(client: client, account: selectedAccount,
-                                      plans: model.configuration.plans)
+                                      plans: model.configuration.plans, openEditor: openEditor)
+                    .id(model.clientsSelection)
             } else {
                 emptyDetail
             }
         }
-        .workspaceToolbar(title: "客户端与账号", actions: [
+        .workspaceToolbar(for: .clients, title: "客户端与账号", actions: [
             .init(id: "clients.add", title: "添加客户端", symbol: "plus", isEnabled: !model.isWorkflowRunning,
                   handler: { openEditor(.newClient) })
         ], detailActions: detailActions)
@@ -39,81 +40,76 @@ struct ClientsView: View {
     }
 
     private var clientList: some View {
-        VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("客户端与账号").font(.subheadline.weight(.medium))
-                Text("\(model.configuration.clients.count) 个客户端 · \(model.activeAccountCount) 个账号已启用")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 18).padding(.vertical, 12)
-            Divider()
-            List(selection: Binding(get: { model.clientsSelection }, set: { selection in
-                if let selection { model.clientsSelection = selection }
-            })) {
-                ForEach(Array(model.configuration.clients.enumerated()), id: \.element.id) { index, client in
-                    Section {
-                        clientRow(client)
-                            .tag(ClientWorkspaceSelection.client(client.id))
-                            .contextMenu { clientMenu(client, index: index) }
-                        ForEach(Array(client.accounts.enumerated()), id: \.element.id) { index, account in
-                            accountRow(account, client: client)
-                                .tag(ClientWorkspaceSelection.account(clientID: client.id, accountID: account.id))
-                                .contextMenu { accountMenu(account, client: client, index: index) }
-                        }
-                    }
-                }
-            }
-            .listStyle(.inset)
-            .scrollContentBackground(.hidden)
-            .overlay {
-                if model.configuration.clients.isEmpty {
-                    Text("添加客户端后，账号会显示在这里。")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center).padding(18)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                        .padding(.top, 12).allowsHitTesting(false)
+        List(selection: Binding(get: { model.clientsSelection }, set: { selection in
+            if let selection { model.clientsSelection = selection }
+        })) {
+            ForEach(Array(model.configuration.clients.enumerated()), id: \.element.id) { index, client in
+                clientRow(client)
+                    .listRowInsets(EdgeInsets(top: 8, leading: 14, bottom: 8, trailing: 14))
+                    .tag(ClientWorkspaceSelection.client(client.id))
+                    .contextMenu { clientMenu(client, index: index) }
+                ForEach(Array(client.accounts.enumerated()), id: \.element.id) { index, account in
+                    accountRow(account, client: client)
+                        .listRowInsets(EdgeInsets(top: 6, leading: 28, bottom: 6, trailing: 14))
+                        .tag(ClientWorkspaceSelection.account(clientID: client.id, accountID: account.id))
+                        .contextMenu { accountMenu(account, client: client, index: index) }
                 }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .accessibilityLabel("客户端与账号")
     }
 
     private func clientRow(_ client: ClientConfiguration) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "desktopcomputer")
-                .foregroundStyle(client.enabled ? Color.maaAccent : .secondary)
-                .frame(width: 18).padding(.top, 2).accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(client.displayName).font(.callout.weight(.semibold)).lineLimit(2)
-                Text(client.enabled ? "\(client.kind.title) · \(client.accounts.count) 个账号" : "已停用 · \(client.kind.title)")
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(client.displayName).font(.body.weight(.semibold)).lineLimit(2)
+                if client.displayName != client.kind.title {
+                    Text(client.kind.title).font(.caption).foregroundStyle(.secondary)
+                }
             }
             Spacer(minLength: 0)
+            if !client.enabled { Image(systemName: "pause.circle").foregroundStyle(.secondary) }
         }
-        .padding(.vertical, 5)
+        .contentShape(Rectangle())
         .help(client.displayName)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(client.displayName)
+        .accessibilityValue([client.displayName != client.kind.title ? client.kind.title : "",
+                             client.enabled ? "" : "已停用"].filter { !$0.isEmpty }.joined(separator: "，"))
     }
 
     private func accountRow(_ account: AccountConfiguration, client: ClientConfiguration) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: account.enabled ? "person.crop.circle" : "person.crop.circle.badge.xmark")
-                .foregroundStyle(.secondary).frame(width: 18).accessibilityHidden(true)
-            Text(account.displayName).font(.callout).lineLimit(2)
-                .foregroundStyle(account.enabled && client.enabled ? .primary : .secondary)
+        let active = client.enabled && account.enabled
+        let state = client.enabled ? (account.enabled ? "" : "账号已停用") : "所属客户端已停用"
+        return HStack(spacing: 7) {
+            Image(systemName: "person").foregroundStyle(.secondary)
+                .frame(width: 16).accessibilityHidden(true)
+            Text(account.displayName).font(.body).lineLimit(2)
+                .foregroundStyle(active ? .primary : .secondary)
             Spacer(minLength: 0)
+            if !active { Image(systemName: "pause.circle").foregroundStyle(.secondary) }
         }
-        .padding(.leading, 26).padding(.vertical, 6)
-        .help(account.displayName + (account.enabled ? "" : " · 已停用"))
-        .accessibilityLabel(account.displayName + (account.enabled ? "" : "，已停用"))
+        .contentShape(Rectangle())
+        .help([account.displayName, state].filter { !$0.isEmpty }.joined(separator: " · "))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(account.displayName)
+        .accessibilityValue(state)
     }
 
+    @ViewBuilder
     private var emptyDetail: some View {
-        ContentUnavailableView(model.configuration.clients.isEmpty ? "还没有客户端" : "选择客户端或账号",
-                               systemImage: "desktopcomputer",
-                               description: Text(model.configuration.clients.isEmpty
-                                    ? "从中列顶部添加游戏应用，再配置执行账号。" : "在中列查看客户端配置与账号信息。"))
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        if model.configuration.clients.isEmpty {
+            ContentUnavailableView {
+                Label("还没有客户端", systemImage: "desktopcomputer")
+            } actions: {
+                Button("添加客户端…") { openEditor(.newClient) }
+                    .disabled(model.isWorkflowRunning)
+            }
+        } else {
+            ContentUnavailableView("选择客户端或账号", systemImage: "desktopcomputer")
+        }
     }
 
     private var detailActions: [WorkspaceToolbarAction] {
@@ -193,7 +189,7 @@ struct ClientsView: View {
 
     private var deletionMessage: String {
         switch deletion {
-        case let .client(id):
+        case let .client(id, _):
             let name = model.configuration.clients.first { $0.id == id }?.displayName ?? "客户端"
             return "移除「\(name)」及其全部账号配置，不会删除游戏应用。"
         case let .account(clientID, accountID):
@@ -206,7 +202,7 @@ struct ClientsView: View {
     private func delete() {
         guard !model.isWorkflowRunning else { return }
         switch deletion {
-        case let .client(id): model.deleteClient(id)
+        case let .client(id, _): model.deleteClient(id)
         case let .account(clientID, accountID): model.deleteAccount(clientID: clientID, accountID: accountID)
         default: break
         }

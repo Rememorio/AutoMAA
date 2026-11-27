@@ -2,19 +2,25 @@ import AutoMAAKit
 import SwiftUI
 
 extension LogEntry {
+    var isCarriedForwardFight: Bool {
+        if let carriedForwardFight { return carriedForwardFight }
+        guard task == .fight, phase == .runningTask, fightResult?.status == .unconfirmed else { return false }
+        // These two messages identify carry-forward events recorded before the explicit flag.
+        return message.hasSuffix("：保留待确认作战，继续其他任务；请在活动记录的当前待办中处理")
+            || message.hasSuffix("：上次作战结果待核实，本次跳过作战并继续其他任务")
+    }
+
     var recordedDropsSummary: String? {
-        // Older carry-forward events embedded the previous run's entire fight result.
-        if task == .fight, phase == .runningTask, fightResult?.status == .unconfirmed,
-           message.hasSuffix("保留待确认作战，继续其他任务；请在活动记录的当前待办中处理") { return nil }
-        return fightResult?.dropsSummary
+        isCarriedForwardFight || fightResult?.status == .manuallyHandled ? nil : fightResult?.dropsSummary
     }
 }
 
 struct ActivityEntryDetails: View {
     let entry: LogEntry
+    var showsRecordedDrops = true
 
     var body: some View {
-        if let summary = entry.recordedDropsSummary {
+        if showsRecordedDrops, let summary = entry.recordedDropsSummary {
             Text(summary)
                 .font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)

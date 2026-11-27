@@ -1,54 +1,62 @@
-import AutoMAAKit
+@testable import AutoMAAKit
 import Foundation
 import Testing
 @testable import AutoMAA
 
 @Suite("Continuation presentation")
 struct ContinuationPresentationTests {
-    @Test("task settings only interrupt editing for unfinished work or fight review")
-    func taskSettingsNotice() {
-        let account = AccountConfiguration(name: "测试账号")
-        let client = ClientConfiguration(name: "测试客户端", kind: .yoStarJP, appPath: "", address: "127.0.0.1:65492",
-            profileName: "plan-settings", bundleIdentifier: "dev.automaa.tests.plan-settings", accounts: [account])
-        let plan = AutomationPlan.lightRoutine
-        let configuration = AppConfiguration(cliPath: "/usr/bin/true", clients: [client], plans: [plan])
-        var state = ExecutionState(dateKey: ExecutionStateStore.todayKey)
-        func progress() -> PlanContinuation {
-            PlanContinuation(configuration: configuration, planID: plan.id, state: state, history: [])
-        }
-        #expect(progress().taskSettingsNotice(isRunning: false) == nil)
-        _ = state.startRound(for: plan.id, at: Date())
-        #expect(progress().taskSettingsNotice(isRunning: false) == "本轮剩余 \(plan.enabledTasks.count) 项")
-        #expect(progress().taskSettingsNotice(isRunning: true) == nil)
-
-        for task in plan.enabledTasks {
-            state.completedSteps.insert(WorkflowStep(planID: plan.id, clientID: client.id, accountID: account.id, task: task).key)
-        }
-        #expect(progress().taskSettingsNotice(isRunning: false) == nil)
-        let step = WorkflowStep(planID: plan.id, clientID: client.id, accountID: account.id, task: .fight)
-        state.record(.init(status: .failed, reason: .missingRegularTarget), for: step.key)
-        #expect(progress().taskSettingsNotice(isRunning: false) == "1 项作战需要处理")
-        state.record(.init(status: .unconfirmed, reason: .missingEvidence), for: step.key)
-        #expect(progress().taskSettingsNotice(isRunning: true) == "1 项作战结果待核实")
+    @Test("the plan list shows the effective regular fight budget independently of selection and configured overrides")
+    func regularFightListBudget() {
+        var fight = FightConfiguration()
+        #expect(fight.regularFightBudgetSummary == "自然理智")
+        fight.stone = 0
+        fight.medicine = 0
+        fight.times = 4
+        #expect(fight.regularFightBudgetSummary == "自然理智 · 每账号最多 4 次")
+        fight.stone = 2
+        fight.medicine = 5
+        fight.medicineExpireDays = 2
+        #expect(fight.regularFightBudgetSummary == "每账号源石最多 2 颗 · 理智药最多 5 瓶 · 使用 2 天内到期药 · 最多 4 次")
+        fight.weeklyAnnihilation.enabled = true
+        #expect(fight.regularFightBudgetSummary?.hasPrefix("常规 · 每账号源石最多 2 颗") == true)
+        fight.usesCustomSettings = false
+        #expect(fight.regularFightBudgetSummary == "常规 · 自然理智")
+        fight.enabled = false
+        #expect(fight.regularFightBudgetSummary == nil)
     }
 
-    @Test("a historical record offers one live follow-up only while related work remains")
-    func historicalPendingLink() {
+    @Test("collapsed fight settings disclose configured resource limits and ignore inactive overrides")
+    func collapsedFightSettings() {
+        var fight = FightConfiguration()
+        #expect(fight.advancedOptionsSummary == nil)
+        fight.stone = 0
+        fight.medicine = 3
+        fight.medicineExpireDays = 2
+        fight.fallbackStage = "1-7"
+        #expect(fight.advancedOptionsSummary == "每账号源石最多 0 颗 · 理智药最多 3 瓶 · 使用 2 天内到期药 · 兜底 1-7")
+        fight.usesCustomSettings = false
+        #expect(fight.advancedOptionsSummary == nil)
+        fight.usesCustomSettings = true
+        #expect(fight.advancedOptionsSummary?.contains("源石最多 0 颗") == true)
+    }
+
+    @Test("pending accounts are scoped to a client and show each recoverable task once")
+    func pendingAccounts() {
         let planID = UUID()
-        let roundID = UUID()
-        let run = ActivitySession(id: "partial", runID: UUID(), entries: [
-            LogEntry(level: .warning, message: "部分完成", phase: .completed, planID: planID,
-                     runSummary: .init(completedSteps: 10, failedSteps: 0, unexecutedSteps: 5, totalSteps: 15), roundID: roundID)
-        ])
-        var progress = PlanContinuation(configuration: .defaults, planID: planID, state: .init(), history: [])
-        progress.hasStarted = true
-        progress.roundID = roundID
-        progress.pending = 5
-        #expect(ActivityPendingLink(session: run, progress: progress) == .available("剩余 5 项"))
-        progress.pending = 0
-        #expect(ActivityPendingLink(session: run, progress: progress) == nil)
-        progress.hasExpiredScope = true
-        #expect(ActivityPendingLink(session: run, progress: progress) == .expired)
+        let accountID = UUID()
+        let fight = WorkflowStep(planID: planID, clientID: UUID(), accountID: accountID, task: .fight)
+        let award = WorkflowStep(planID: planID, clientID: fight.clientID, accountID: accountID, task: .award)
+        let other = WorkflowStep(planID: planID, clientID: UUID(), accountID: accountID, task: .fight)
+        let pending = [other, fight, award].map {
+            PendingWorkflowItem(step: $0, targets: [.task], reason: nil, lastFailure: nil)
+        }
+        let recovery = FightRecoveryItem(step: fight, result: .init(status: .failed),
+                                         roundID: UUID(), clientKind: .yoStarJP, gameDayStart: Date(), weeklyAttempt: nil,
+                                         canConfirmWeeklyCompletion: false, retryStage: "1-7", canHandleRegularWithoutRetry: false)
+        let groups = PendingAccountWork.groups(items: pending, recovery: [recovery])
+        #expect(groups.map(\.step) == [fight, other])
+        #expect(groups.map { $0.tasks.map(\.step) } == [[award], [other]])
+        #expect(groups.map { $0.recovery.map(\.step) } == [[fight], []])
     }
 
     @Test("today summaries distinguish runnable work from review, blocked and empty states")
@@ -58,12 +66,10 @@ struct ContinuationPresentationTests {
         let empty = PlanRoundSummaryPresentation(progress: progress, runState: .ready)
         #expect(empty.title == "暂无可执行任务")
         #expect(!empty.needsAttention)
-        #expect(empty.guidance == nil)
 
         progress.pending = 15
         let fresh = PlanRoundSummaryPresentation(progress: progress, runState: .ready)
         #expect(fresh.title == "今日尚未运行")
-        #expect(fresh.guidance == nil)
 
         progress.hasStarted = true
         progress.pending = 5
@@ -75,8 +81,6 @@ struct ContinuationPresentationTests {
         #expect(partial.rounds == "今日已运行 2 轮")
         #expect(partial.remaining == "剩余 5 项")
         #expect(partial.needsAttention)
-        #expect(partial.guidance?.contains("从待办继续本轮") == true)
-        #expect(partial.guidance?.contains("开启新一轮") == true)
 
         progress.pending = 4
         progress.unconfirmed = 1
@@ -84,15 +88,10 @@ struct ContinuationPresentationTests {
         #expect(review.scope == partial.scope)
         #expect(review.remaining == "剩余 4 项")
         #expect(review.review == "1 项待核实")
-        #expect(review.guidance?.contains("待核实作战会保留") == true)
-        for state in [PlanRunState.configurationIncomplete, .anotherPlanRunning, .maintenanceRunning, .running] {
-            #expect(PlanRoundSummaryPresentation(progress: progress, runState: state).guidance == nil)
-        }
         progress.pending = 0
         let onlyReview = PlanRoundSummaryPresentation(progress: progress, runState: .ready)
         #expect(onlyReview.title == "结果待核实")
         #expect(onlyReview.remaining == nil)
-        #expect(onlyReview.guidance == nil)
     }
 
     @Test("today summaries retain manual handling instead of describing it as automatic completion")
@@ -108,7 +107,47 @@ struct ContinuationPresentationTests {
         let handled = PlanRoundSummaryPresentation(progress: progress, runState: .ready)
         #expect(handled.title == "本轮已处理")
         #expect(!handled.needsAttention)
-        #expect(handled.guidance == nil)
+    }
+
+    @Test("confirming a regular fight keeps the diagnostic without adding a run")
+    @MainActor
+    func confirmingWithoutRetryPreservesHistory() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "review-history-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        let model = AppModel(directories: directories, launchAgentsDirectory: root.appending(path: "LaunchAgents"),
+                             managesSystemLaunchAgents: false, checksForUpdatesAutomatically: false,
+                             allowsAutomaticMAAMaintenance: false)
+        let account = AccountConfiguration(name: "测试账号")
+        let client = ClientConfiguration(name: "测试客户端", kind: .yoStarJP, appPath: root.appending(path: "Fake.app").path,
+                                         address: "127.0.0.1:65491", profileName: "review-history",
+                                         bundleIdentifier: "dev.automaa.tests.review-history", accounts: [account])
+        let plan = AutomationPlan.lightRoutine, now = Date()
+        let step = WorkflowStep(planID: plan.id, clientID: client.id, accountID: account.id, task: .fight)
+        let original = FightResult(status: .unconfirmed, stage: "1-7", reason: .interruptedBattle, kind: .regular)
+        var state = ExecutionState().forGameDays(of: [client], at: now)
+        let round = state.startRound(for: plan.id, at: now)
+        state.record(original, for: step.key, at: now)
+        let stateStore = ExecutionStateStore(directories: directories)
+        try stateStore.save(state)
+        let run = LogEntry(level: .warning, message: "部分完成", runID: UUID(), phase: .completed, planID: plan.id,
+                           runSummary: .init(completedSteps: 0, failedSteps: 0, unexecutedSteps: 0, totalSteps: 1,
+                                             unconfirmedSteps: 1), roundID: round.id)
+        HistoryStore(directories: directories).append(run)
+        model.configuration = AppConfiguration(cliPath: "/usr/bin/true", clients: [client], plans: [plan])
+        model.reloadActivityHistory()
+        let item = try #require(model.continuation(for: plan.id).fightRecoveryItems.first)
+        model.handleRegularFightWithoutRetry(item)
+
+        let logs = HistoryStore(directories: directories).load()
+        let event = try #require(logs.first { $0.isManualFightDecision })
+        #expect(event.roundID == round.id)
+        #expect(event.runID == nil && event.phase == nil && event.runSummary == nil)
+        #expect(event.fightResult?.status == .manuallyHandled)
+        #expect(try stateStore.loadForExecution().fightProgress?[step.key]?.regular == original)
+        let sessions = ActivityHistory.sessions(from: model.activityEntries)
+        #expect(sessions.map(\.runID) == [run.runID])
+        #expect(sessions.first?.runSummary == run.runSummary)
     }
 
     @Test("continuation lists the exact remaining scope independently of history")
@@ -145,8 +184,8 @@ struct ContinuationPresentationTests {
         try WeeklyAnnihilationStore(directories: directories).save(weekly)
         model.configuration = AppConfiguration(cliPath: "/usr/bin/true", clients: [client], plans: [plan])
         model.reloadActivityHistory()
-        #expect(model.runTitle(for: plan.id) == "运行一轮")
-        #expect(model.runTitle(for: plan.id, request: .resume(roundID: round.id)) == "继续未完成")
+        #expect(model.runTitle(for: plan.id) == "运行新一轮")
+        #expect(model.runTitle(for: plan.id, request: .resume(roundID: round.id)) == "继续本轮")
         #expect(model.continuation(for: plan.id).pending == 1)
         #expect(model.continuation(for: plan.id).unconfirmed == 0)
         let pending = try #require(model.continuation(for: plan.id).pendingItems.first)
@@ -164,7 +203,7 @@ struct ContinuationPresentationTests {
         state.fightProgress?[step.key]?.regular = .init(status: .unconfirmed, reason: .interruptedBattle)
         try ExecutionStateStore(directories: directories).save(state)
         model.reloadActivityHistory()
-        #expect(model.runTitle(for: plan.id, request: .resume(roundID: round.id)) == "继续其他任务")
+        #expect(model.runTitle(for: plan.id, request: .resume(roundID: round.id)) == "继续本轮")
         #expect(model.continuation(for: plan.id).pendingItems.map(\.step.task) == [.award])
         #expect(model.continuation(for: plan.id).fightRecoveryItems.map(\.step) == [step])
     }

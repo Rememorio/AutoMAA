@@ -69,28 +69,57 @@ struct DashboardPlanSummary: Identifiable {
 }
 
 struct DashboardAttentionItem: Identifiable, Equatable {
-    enum Destination: Equatable { case activity(UUID), readiness(UUID), schedule(UUID) }
+    enum Destination: Equatable { case reviewFight(UUID), resumePlan(UUID), readiness(UUID), schedule(UUID) }
     let id: String
     let title: String
     let detail: String
     let destination: Destination
+    var accountStep: WorkflowStep?
+
+    var isResumable: Bool {
+        if case .resumePlan = destination { return true }
+        return false
+    }
+}
+
+private extension ReadinessIssue {
+    var dashboardID: String {
+        let owner = if case let .plan(id) = scope { id.uuidString } else { "shared" }
+        return "configuration/\(owner)/\(id)"
+    }
+
+    var dashboardTitle: String {
+        id == "maa-cli-missing" ? "找不到可执行的 maa-cli" : message
+    }
 }
 
 /// Presentation data keeps the overview scoped to current checkpoints and verified schedules.
 struct DashboardSnapshot {
     let plans: [DashboardPlanSummary]
     let focusedPlan: DashboardPlanSummary?
+    let focusedBlocker: String?
     let attention: [DashboardAttentionItem]
     let upcoming: [DashboardPlanSummary]
     let recentRuns: [ActivityHistoryGroup]
 
     init(plans: [DashboardPlanSummary], currentPlanID: UUID?, activePlanID: UUID?, activeRunID: UUID?,
-         isRunning: Bool, entries: [LogEntry]) {
+         isRunning: Bool, hasClients: Bool, entries: [LogEntry]) {
         self.plans = plans
         // An unidentified external run or maintenance never borrows the idle selection.
         focusedPlan = isRunning ? plans.first { $0.id == activePlanID }
             : plans.first { $0.id == currentPlanID } ?? plans.first
-        attention = Self.attentionItems(plans)
+        let blocker: ReadinessIssue?
+        if !isRunning, hasClients, let focus = focusedPlan, focus.runState == .configurationIncomplete {
+            blocker = focus.readiness.directIssues.first { $0.severity == .error } ?? focus.readiness.externalBlockers.first
+        } else {
+            blocker = nil
+        }
+        if let blocker, case let .plan(owner) = blocker.scope, owner != focusedPlan?.id,
+           let other = plans.first(where: { $0.id == owner }) {
+            focusedBlocker = "「\(other.plan.displayName)」：\(blocker.dashboardTitle)"
+        } else {
+            focusedBlocker = blocker?.dashboardTitle
+        }
         upcoming = plans.filter { if case .scheduled = $0.schedule { true } else { false } }
             .sorted {
                 guard case let .scheduled(left) = $0.schedule, case let .scheduled(right) = $1.schedule else { return false }
@@ -98,34 +127,48 @@ struct DashboardSnapshot {
             }
         let history = ActivityHistory.sessions(from: entries).filter { !(isRunning && activeRunID != nil && $0.runID == activeRunID) }
         recentRuns = Array(ActivityHistoryGroup.groups(history).filter { $0.latest.planID != nil }.prefix(3))
+        let onboarding = !hasClients && recentRuns.isEmpty && !isRunning
+        let reviewInFocus = !isRunning && focusedPlan?.runState == .ready
+            && focusedPlan?.progress.blockingFightAction != nil ? focusedPlan?.id : nil
+        attention = Self.attentionItems(plans, reviewInFocus: reviewInFocus, isRunning: isRunning).filter { item in
+            if onboarding, case .readiness = item.destination { return false }
+            return item.id != blocker?.dashboardID
+        }
     }
 
-    private static func attentionItems(_ plans: [DashboardPlanSummary]) -> [DashboardAttentionItem] {
+    private static func attentionItems(_ plans: [DashboardPlanSummary], reviewInFocus: UUID?,
+                                       isRunning: Bool) -> [DashboardAttentionItem] {
         var results: [DashboardAttentionItem] = []
         var configuration: [DashboardAttentionItem] = []
         var schedules: [DashboardAttentionItem] = []
         var issueIDs: Set<String> = []
         for summary in plans {
             let progress = summary.progress
-            if progress.unconfirmed > 0 || !progress.fightRecoveryItems.isEmpty {
-                let recovery = progress.fightRecoveryItems
-                let title: String
-                if progress.unconfirmed > 0 { title = "\(progress.unconfirmed) 项结果待确认" }
-                else if recovery.allSatisfy(\.canConfirmWeeklyCompletion) { title = "本周剿灭待核实" }
-                else if recovery.allSatisfy({ $0.result.reason == .missingRegularTarget }) { title = "常规目标需检查" }
-                else { title = "作战需要处理" }
+            let recovery = progress.fightRecoveryItems
+            if !isRunning, summary.id != reviewInFocus,
+               summary.runState == .ready || summary.runState == .configurationIncomplete,
+               !recovery.isEmpty {
+                let single = recovery.count == 1 ? recovery[0] : nil
+                let title = if let single {
+                    single.actionTitle(in: summary.plan.fight)
+                } else {
+                    "\(recovery.count) 项作战待处理"
+                }
                 results.append(.init(id: "result/\(summary.id)",
                     title: title,
-                    detail: summary.plan.displayName, destination: .activity(summary.id)))
+                    detail: summary.plan.displayName, destination: .reviewFight(summary.id),
+                    accountStep: single?.step))
+            } else if !isRunning, summary.runState == .ready, progress.resumableRoundID != nil {
+                results.append(.init(id: "resume/\(summary.id)", title: "本轮还有 \(progress.pending) 项可继续",
+                    detail: summary.plan.displayName, destination: .resumePlan(summary.id)))
             }
             for issue in summary.readiness.directIssues + summary.readiness.externalBlockers where issue.severity == .error {
-                let scope = if case let .plan(id) = issue.scope { id.uuidString } else { "shared" }
-                let key = "configuration/\(scope)/\(issue.id)"
+                let key = issue.dashboardID
                 guard issueIDs.insert(key).inserted else { continue }
                 let shared = issue.scope == .shared
                 let owner = if case let .plan(id) = issue.scope { plans.first { $0.id == id } ?? summary } else { summary }
                 configuration.append(.init(id: key,
-                    title: issue.id == "maa-cli-missing" ? "找不到可执行的 maa-cli" : issue.message,
+                    title: issue.dashboardTitle,
                     detail: shared ? "运行前检查" : owner.plan.displayName,
                     destination: .readiness(owner.id)))
             }
@@ -149,6 +192,7 @@ extension AppModel {
                     isInstalled: installedPlanIDs.contains(plan.id), isSynchronizing: isSynchronizingSchedules, now: date))
         }
         return DashboardSnapshot(plans: summaries, currentPlanID: currentPlanID, activePlanID: activePlanID,
-            activeRunID: activeRunID, isRunning: isWorkflowRunning, entries: activityEntries)
+            activeRunID: activeRunID, isRunning: isWorkflowRunning,
+            hasClients: !configuration.clients.isEmpty, entries: activityEntries)
     }
 }

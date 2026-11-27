@@ -2,11 +2,10 @@ import AutoMAAKit
 import SwiftUI
 
 extension PlanContinuation {
-    func taskSettingsNotice(isRunning: Bool) -> String? {
-        if unconfirmed > 0 { return "\(unconfirmed) 项作战结果待核实" }
-        if !fightRecoveryItems.isEmpty { return "\(fightRecoveryItems.count) 项作战需要处理" }
-        guard !isRunning, hasPendingWork else { return nil }
-        return "本轮剩余 \(pending) 项"
+    var fightReviewAction: String? {
+        if unconfirmed > 0 { return "核实作战" }
+        if !fightRecoveryItems.isEmpty { return "处理作战" }
+        return nil
     }
 }
 
@@ -17,7 +16,6 @@ struct PlanRoundSummaryPresentation: Equatable {
     let remaining: String?
     let review: String?
     let needsAttention: Bool
-    let guidance: String?
 
     init(progress: PlanContinuation, runState: PlanRunState) {
         let total = progress.resolved + progress.pending + progress.unconfirmed
@@ -36,35 +34,23 @@ struct PlanRoundSummaryPresentation: Equatable {
         remaining = progress.pending > 0
             ? (progress.hasStarted ? "剩余 \(progress.pending) 项" : "\(progress.pending) 项待执行") : nil
         review = progress.unconfirmed > 0 ? "\(progress.unconfirmed) 项待核实" : nil
-        if runState == .ready, progress.hasStarted, progress.pending > 0 {
-            guidance = progress.unconfirmed > 0
-                ? "从待办继续本轮，待核实作战会保留；播放按钮会开启新一轮。"
-                : "从待办继续本轮，已处理的任务会跳过；播放按钮会开启新一轮。"
-        } else { guidance = nil }
     }
 }
 
 struct PlanRoundSummary: View {
     let progress: PlanContinuation
     let runState: PlanRunState
-    var showsGuidance = true
 
     private var presentation: PlanRoundSummaryPresentation {
         .init(progress: progress, runState: runState)
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(summary)
-                .monospacedDigit()
-                .fixedSize(horizontal: false, vertical: true)
-            if showsGuidance, let guidance = presentation.guidance {
-                Text(guidance).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .font(.caption)
-        .frame(maxWidth: .infinity, minHeight: showsGuidance ? 34 : 0, alignment: .topLeading)
+        Text(summary)
+            .monospacedDigit()
+            .font(.caption)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var summary: AttributedString {

@@ -4,50 +4,43 @@ struct SidebarOperationStatus: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        Group {
-            if model.isWorkflowRunning {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(identity)
-                        .font(.system(size: 12, weight: .medium))
-                        .lineLimit(1).truncationMode(.tail)
-                    HStack(spacing: 6) {
-                        if progress == nil {
-                            ProgressView().controlSize(.mini)
-                                .frame(width: 12, height: 12)
-                                .accessibilityHidden(true)
-                        }
-                        Text(stage).lineLimit(1)
-                        Spacer(minLength: 0)
-                        if let progress {
-                            Text(progress, format: .percent.precision(.fractionLength(0)))
-                                .monospacedDigit()
-                        }
-                    }
-                    .font(.caption).foregroundStyle(.secondary)
-                    .frame(minHeight: 14)
-                    Group {
-                        if let progress {
-                            ProgressView(value: progress).progressViewStyle(.linear)
-                                .tint(.maaAccent)
-                                .accessibilityHidden(true)
-                        } else {
-                            Color.clear
-                        }
-                    }
-                    .frame(height: 4)
+        VStack(alignment: .leading, spacing: 6) {
+            Text(identity)
+                .font(.system(size: 12, weight: .medium))
+                .lineLimit(1).truncationMode(.tail)
+            HStack(spacing: 6) {
+                if progress == nil {
+                    ProgressView().controlSize(.mini)
+                        .frame(width: 12, height: 12)
+                        .accessibilityHidden(true)
                 }
-                .padding(8)
-                .foregroundStyle(.primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .help("\(identity) · \(model.activeStatusMessage)")
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("当前运行：\(identity)，\(stage)")
-                .accessibilityValue(progressDescription)
+                Text(stage).lineLimit(1)
+                Spacer(minLength: 0)
+                if let progress {
+                    Text(progress, format: .percent.precision(.fractionLength(0)))
+                        .monospacedDigit()
+                }
             }
+            .font(.caption).foregroundStyle(.secondary)
+            .frame(minHeight: 14)
+            Group {
+                if let progress {
+                    ProgressView(value: progress).progressViewStyle(.linear)
+                        .tint(.maaAccent)
+                        .accessibilityHidden(true)
+                } else {
+                    Color.clear
+                }
+            }
+            .frame(height: 4)
         }
-        .frame(maxWidth: .infinity, alignment: .bottomLeading)
-        .frame(height: 68, alignment: .bottom)
-        .padding(.bottom, 6)
+        .padding(8)
+        .foregroundStyle(.primary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .help("\(identity) · \(model.activeStatusMessage)")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("当前运行：\(identity)，\(stage)")
+        .accessibilityValue(progressDescription)
     }
 
     private var identity: String {

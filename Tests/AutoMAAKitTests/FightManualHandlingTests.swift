@@ -3,6 +3,41 @@ import XCTest
 @testable import AutoMAAKit
 
 final class FightManualHandlingTests: XCTestCase {
+    func testReviewedRegularFightCannotBeHandledAfterRoundOrGameDayChanges() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "fight-review-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ExecutionStateStore(directories: AppDirectories(root: root))
+        let client = testClient, plan = AutomationPlan.lightRoutine
+        let configuration = AppConfiguration(cliPath: "/usr/bin/true", clients: [client], plans: [plan])
+        let step = WorkflowStep(planID: plan.id, clientID: client.id, accountID: client.accounts[0].id, task: .fight)
+        let today = Date(timeIntervalSince1970: 1_800_000_000), tomorrow = today.addingTimeInterval(86_400)
+        var state = ExecutionState().forGameDays(of: [client], at: today)
+        state.startRound(for: plan.id, at: today)
+        state.record(.init(status: .unconfirmed, stage: "1-7", reason: .interruptedBattle, kind: .regular),
+                     for: step.key, at: today)
+        try store.save(state)
+        func review(at date: Date) throws -> FightRecoveryItem {
+            let snapshot = try store.loadForExecution()
+            return try XCTUnwrap(PlanContinuation(configuration: configuration, planID: plan.id, state: snapshot,
+                                                  history: [], now: date).fightRecoveryItems.first)
+        }
+
+        let first = try review(at: today)
+        state.startRound(for: plan.id, at: today)
+        try store.save(state)
+        let second = try review(at: today)
+        XCTAssertEqual(first.result, second.result)
+        XCTAssertNotEqual(first, second)
+        XCTAssertThrowsError(try store.handleRegularWithoutRetry(first, clients: [client], at: today))
+
+        let nextDay = try review(at: tomorrow)
+        XCTAssertNotEqual(second, nextDay)
+        XCTAssertThrowsError(try store.handleRegularWithoutRetry(second, clients: [client], at: tomorrow))
+        XCTAssertTrue(try store.loadForExecution().needsFightConfirmation(step.key))
+        let handled = try store.handleRegularWithoutRetry(nextDay, clients: [client], at: tomorrow)
+        XCTAssertTrue(handled.fightProgress?[step.key]?.isRegularManuallyHandled == true)
+    }
+
     func testHandlingPreservesEvidenceWithoutSuccessAndIsScopedToTheDayAndStep() throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "fight-handling-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -79,6 +114,34 @@ final class FightManualHandlingTests: XCTestCase {
         XCTAssertEqual(report.runSummary?.completedSteps, 1)
         XCTAssertEqual(report.runSummary?.manuallyHandledSteps, 1)
         XCTAssertTrue(report.runSummary?.completionDescription.contains("已人工处理") == true)
+    }
+
+    func testStandaloneReviewIsNotARunAndRealRunsKeepTheirOriginalResults() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "fight-history-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = HistoryStore(directories: .init(root: root))
+        let plan = UUID(), run = UUID(), client = testClient
+        let handled = WorkflowRunSummary(completedSteps: 0, failedSteps: 0, unexecutedSteps: 0,
+                                         totalSteps: 1, manuallyHandledSteps: 1)
+        let original = LogEntry(level: .warning, message: "结果待核实", runID: UUID(), phase: .completed, planID: plan,
+            runSummary: .init(completedSteps: 0, failedSteps: 0, unexecutedSteps: 0, totalSteps: 1, unconfirmedSteps: 1))
+        let legacy = LogEntry(level: .info, message: "已人工处理：今天不再重试本方案的常规作战；原始结果仍未确认",
+            runID: UUID(), phase: .completed, planID: plan, clientID: client.id, accountID: client.accounts[0].id,
+            task: .fight, runSummary: handled, fightResult: .init(status: .manuallyHandled))
+        let realTask = LogEntry(level: .info, message: "今天已人工处理", runID: run, phase: .runningTask, planID: plan,
+            clientID: client.id, accountID: client.accounts[0].id, task: .fight, fightResult: .init(status: .manuallyHandled))
+        let terminal = LogEntry(level: .info, message: "本轮已处理", runID: run, phase: .completed, planID: plan, runSummary: handled)
+        let maintenance = LogEntry(level: .info, message: "引擎更新", runID: UUID(), phase: .updating)
+        let review = LogEntry(level: .info, message: "人工核实", manualFightDecision: true, planID: plan,
+                              clientID: client.id, accountID: client.accounts[0].id, task: .fight, roundID: UUID())
+        [original, legacy, realTask, terminal, maintenance, review].forEach(store.append)
+        let sessions = ActivityHistory.sessions(from: store.load())
+        XCTAssertEqual(Set(sessions.compactMap(\.runID)), Set([original.runID!, run, maintenance.runID!]))
+        XCTAssertEqual(sessions.first { $0.runID == original.runID }?.runSummary, original.runSummary)
+        XCTAssertEqual(sessions.first { $0.runID == run }?.entries.count, 2)
+        _ = try store.clear(.maintenance)
+        XCTAssertEqual(Set(store.load().filter(\.isManualFightDecision).map(\.id)), [legacy.id, review.id])
+        XCTAssertTrue(try store.clear(.runs).isEmpty)
     }
 
     func testSharedWeeklyCompletionRestoresHandledRegularAfterAnInterruptedPreparation() throws {

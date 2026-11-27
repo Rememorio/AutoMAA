@@ -28,16 +28,17 @@ struct WorkspaceToolbarModes {
 }
 
 extension View {
-    func workspaceToolbar(title: String, actions: [WorkspaceToolbarAction] = [],
+    func workspaceToolbar(for page: SidebarSelection, title: String, actions: [WorkspaceToolbarAction] = [],
                           detailActions: [WorkspaceToolbarAction] = [],
                           modes: WorkspaceToolbarModes? = nil) -> some View {
-        background(WorkspaceToolbarAttachment(title: title, actions: actions, detailActions: detailActions, modes: modes)
+        background(WorkspaceToolbarAttachment(page: page, title: title, actions: actions, detailActions: detailActions, modes: modes)
             .frame(width: 0, height: 0))
     }
 }
 
 private struct WorkspaceToolbarAttachment: NSViewRepresentable {
     @Environment(\.workspaceChrome) private var chrome
+    let page: SidebarSelection
     let title: String
     let actions: [WorkspaceToolbarAction]
     let detailActions: [WorkspaceToolbarAction]
@@ -46,7 +47,7 @@ private struct WorkspaceToolbarAttachment: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView { NSView() }
 
     func updateNSView(_ view: NSView, context: Context) {
-        chrome?.setPage(title: title, actions: actions, detailActions: detailActions, modes: modes)
+        chrome?.setPage(for: page, title: title, actions: actions, detailActions: detailActions, modes: modes)
     }
 }
 
@@ -83,7 +84,7 @@ final class WorkspaceChromeController: NSObject, NSToolbarDelegate {
     private var modesGroup: NSToolbarItemGroup?
     private var runPresentation = WorkspaceRunControlState.Presentation.hidden
     private var expectsColumns: Bool?
-    private(set) var middleColumnWidth: CGFloat = 280
+    private(set) var middleColumnWidth = WorkspaceLayout.initialMiddleWidth
     private lazy var stopItem: NSToolbarItem = {
         let item = NSToolbarItem(itemIdentifier: Self.stopID)
         item.label = "安全停止"
@@ -122,12 +123,23 @@ final class WorkspaceChromeController: NSObject, NSToolbarDelegate {
         self.splitController = splitController
         window.title = titleField.stringValue
         window.titleVisibility = .hidden
+        let initialFrame = window.toolbar === toolbar ? nil : window.frame
+        let savedFrame = window.frameAutosaveName.isEmpty ? nil :
+            UserDefaults.standard.string(forKey: "NSWindow Frame \(window.frameAutosaveName)")
         // Keep column headers outside the toolbar's scroll-edge backdrop.
         window.styleMask.remove(.fullSizeContentView)
         window.titlebarAppearsTransparent = false
         window.titlebarSeparatorStyle = .line
         window.toolbarStyle = .unified
         if window.toolbar !== toolbar { window.toolbar = toolbar }
+        // AppKit otherwise grows the restored window when installing its toolbar.
+        if let initialFrame, !window.styleMask.contains(.fullScreen) {
+            if let savedFrame {
+                window.setFrame(from: savedFrame)
+            } else if window.frame != initialFrame {
+                window.setFrame(initialFrame, display: false)
+            }
+        }
         reconcileItems()
     }
 
@@ -140,8 +152,17 @@ final class WorkspaceChromeController: NSObject, NSToolbarDelegate {
         reconcileItems()
     }
 
-    func setPage(title: String, actions: [WorkspaceToolbarAction], detailActions: [WorkspaceToolbarAction] = [],
+    func setPage(for page: SidebarSelection? = nil, title: String, actions: [WorkspaceToolbarAction], detailActions: [WorkspaceToolbarAction] = [],
                  modes: WorkspaceToolbarModes? = nil) {
+        // The outgoing hosting view can still update after its replacement has installed its toolbar.
+        if let page, let selection = model?.selection {
+            switch selection {
+            case .client, .account:
+                guard page == .clients else { return }
+            default:
+                guard page == selection else { return }
+            }
+        }
         titleField.stringValue = title
         titleField.toolTip = title
         titleField.setAccessibilityLabel(title)
@@ -195,7 +216,7 @@ final class WorkspaceChromeController: NSObject, NSToolbarDelegate {
     }
 
     func rememberMiddleColumnWidth(_ width: CGFloat, for split: NSSplitView) {
-        guard detailSplit === split, width.isFinite, (240...320).contains(width) else { return }
+        guard detailSplit === split, width.isFinite, WorkspaceLayout.middleWidths.contains(width) else { return }
         middleColumnWidth = width
     }
 
@@ -328,8 +349,8 @@ final class WorkspaceChromeController: NSObject, NSToolbarDelegate {
             ?? (sender as? NSSegmentedControl)?.selectedSegment ?? runGroup.selectedIndex
         if index == 0 {
             WorkspaceRunControlState(model: model).stopWorkflow(in: model)
-        } else if index == 1 {
-            WorkspaceRunControlState(model: model).start(in: model)
+        } else if index == 1, WorkspaceRunControlState(model: model).canStart {
+            model.runSelectedPlan()
         }
     }
 

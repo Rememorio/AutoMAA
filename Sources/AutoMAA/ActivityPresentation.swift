@@ -6,39 +6,12 @@ struct ActivityNavigationRequest: Identifiable, Equatable {
     let runID: UUID
 }
 
-struct ActivityPendingSource: Equatable {
-    let planID: UUID
-    let startedAt: Date
-    let roundID: UUID
-}
-
-enum ActivityPendingLink: Equatable {
-    case available(String)
-    case expired
-
-    init?(session: ActivitySession, progress: PlanContinuation) {
-        let summary = session.runSummary
-        let needsFollowUp = summary?.isPartial == true || (summary?.pendingWeeklyAnnihilation ?? 0) > 0
-            || [.failed, .blocked, .awaitingReview, .unfinished, .cancelled].contains(session.outcome)
-        guard needsFollowUp else { return nil }
-        guard let roundID = session.roundID, roundID == progress.roundID else {
-            if session.startBlocker != nil { return nil }
-            self = .expired
-            return
-        }
-        if progress.hasPendingWork {
-            var parts: [String] = []
-            if progress.pending > 0 { parts.append("剩余 \(progress.pending) 项") }
-            if progress.unconfirmed > 0 { parts.append("\(progress.unconfirmed) 项待核实") }
-            else if progress.fightRecoveryItems.contains(where: \.canConfirmWeeklyCompletion) { parts.append("剿灭待核实") }
-            self = .available(parts.joined(separator: " · "))
-        } else if progress.hasExpiredScope, (summary?.isPartial ?? needsFollowUp) {
-            self = .expired
-        } else { return nil }
-    }
-}
-
 extension LogEntry {
+    var isHandledTaskOutcome: Bool {
+        guard task != nil, !isCarriedForwardFight, level != .warning, level != .error else { return false }
+        return fightResult?.isResolved ?? (level == .success)
+    }
+
     var accountResultMessage: String {
         guard accountID != nil, message.hasPrefix("账号「"), let end = message.range(of: "」：") else { return message }
         return String(message[end.upperBound...])
@@ -202,14 +175,22 @@ struct ActivityDay: Identifiable {
     }
 }
 
+struct ActivityAccountID: Hashable {
+    let client: UUID?
+    let account: UUID
+}
+
 struct ActivityAccountSummary: Identifiable {
-    struct ID: Hashable {
-        let client: UUID?
-        let account: UUID
-    }
-    let id: ID
+    let id: ActivityAccountID
     let lastEvent: LogEntry
     let outcomes: [LogEntry]
+    let unreportedFightPhases: [FightResult]
+
+    var fight: LogEntry? { outcomes.first { $0.task == .fight } }
+    var fightLines: [ActivityResultLine] {
+        unreportedFightPhases.isEmpty ? (fight?.handledFightLines ?? []) : unreportedFightPhases.map(ActivityResultLine.init)
+    }
+    var completedTasks: [LogEntry] { outcomes.filter { $0.task != .fight && $0.isHandledTaskOutcome } }
 
     static func groups(in session: ActivitySession) -> [Self] {
         var order: [ID] = []
@@ -223,26 +204,125 @@ struct ActivityAccountSummary: Identifiable {
         return order.compactMap { id in
             guard let values = entries[id], let last = values.last else { return nil }
             // Use recorded task outcomes; never infer completion from an informational progress message.
-            var outcomes: [TaskKind: LogEntry] = [:]
-            for entry in values {
+            var outcomes: [TaskKind: Int] = [:]
+            for (index, entry) in values.enumerated() {
                 guard let task = entry.task,
                       entry.level == .success || entry.level == .error || entry.fightResult != nil else { continue }
-                outcomes[task] = entry
+                outcomes[task] = index
             }
-            return Self(id: id, lastEvent: last, outcomes: outcomes.values.sorted { $0.timestamp < $1.timestamp })
+            let fight = outcomes[.fight].map { values[$0] }
+            var unreported: [FightResult] = []
+            // A stop or error between phases may leave no final fight report for this account.
+            if fight?.executedFightPhases == nil, fight?.fightResult == nil {
+                var seen: Set<UUID> = []
+                for entry in values where entry.isSettledPhaseEvent && seen.insert(entry.id).inserted {
+                    unreported += entry.executedFightPhases ?? []
+                }
+            }
+            return Self(id: id, lastEvent: last, outcomes: outcomes.values.sorted().map { values[$0] },
+                        unreportedFightPhases: unreported)
         }
+    }
+}
+
+/// A visible result with the drops recorded for that outcome.
+struct ActivityResultLine: Equatable {
+    let title: String
+    let drops: String?
+    let note: String?
+
+    init(title: String, drops: String? = nil, note: String? = nil) {
+        self.title = title
+        self.drops = drops
+        self.note = note
+    }
+
+    init(_ result: FightResult) {
+        if result.status == .unnecessary {
+            self.init(title: result.reason == .navigationUnavailable ? "本次跳过作战" : "无需作战", note: result.reason?.recordedTitle)
+            return
+        }
+        guard result.status == .completed, result.times > 0 else {
+            let drops = result.totalDrops.flatMap { $0.isEmpty ? nil : "已识别掉落：" + $0 }
+            self.init(title: "作战" + result.recordedDescription, drops: drops)
+            return
+        }
+        let stage = result.stage.flatMap { $0.isEmpty ? nil : $0 }
+        let target = if stage?.lowercased() == "annihilation" {
+            "剿灭"
+        } else if result.kind == .annihilation {
+            stage.map { "剿灭 · " + $0 } ?? "剿灭"
+        } else {
+            stage ?? "作战"
+        }
+        let count = (result.unrecognizedSettlements ?? 0) > 0 ? "至少 \(result.times) 次" : "\(result.times) 次"
+        var notes: [String] = []
+        if let missing = result.missingDropRuns { notes.append("\(missing) 次掉落未识别") }
+        if let reason = result.reason { notes.append(reason.recordedTitle) }
+        if let original = result.fallbackFrom { notes.append("兜底作战，原目标为" + (original.isEmpty ? "游戏当前/上次" : original)) }
+        self.init(title: "\(target) × \(count)", drops: result.dropsSummary,
+                  note: notes.isEmpty ? nil : notes.joined(separator: " · "))
+    }
+}
+
+extension LogEntry {
+    var isSettledPhaseEvent: Bool {
+        guard phase == .runningTask, task == .fight, level == .info, fightResult == nil, !isCarriedForwardFight,
+              let phases = executedFightPhases, !phases.isEmpty else { return false }
+        return phases.allSatisfy { $0.status == .completed && $0.times > 0 }
+    }
+
+    var handledFightLines: [ActivityResultLine] {
+        guard task == .fight, !isCarriedForwardFight else { return [] }
+        let manual = ActivityResultLine(title: "常规作战已人工处理")
+        if let phases = executedFightPhases {
+            var lines = phases.filter { result in
+                (result.status == .completed && result.times > 0) || (result.status == .unnecessary && isHandledTaskOutcome)
+            }.map(ActivityResultLine.init)
+            if fightResult?.status == .manuallyHandled { lines.append(manual) }
+            if lines.isEmpty, isHandledTaskOutcome {
+                lines.append(.init(title: "本轮作战已处理，本次未执行"))
+            }
+            return lines
+        }
+        guard isHandledTaskOutcome else { return [] }
+        guard let result = fightResult else { return [.init(title: accountResultMessage)] }
+        if result.status == .manuallyHandled { return [manual] }
+        // Earlier combined outcomes retain per-stage counts in the original recorded message.
+        if accountResultMessage.hasPrefix("理智作战：") {
+            return [.init(title: accountResultMessage, drops: recordedDropsSummary)]
+        }
+        return [ActivityResultLine(result)]
+    }
+
+    var exceptionLine: ActivityResultLine {
+        if isCarriedForwardFight { return .init(title: "上次作战待核实，本次跳过") }
+        if let last = executedFightPhases?.last(where: { !$0.isResolved }) { return ActivityResultLine(last) }
+        return .init(title: accountResultMessage, drops: recordedDropsSummary)
     }
 }
 
 struct ActivityResultSummary {
     let accounts: [ActivityAccountSummary]
     let notices: [LogEntry]
+    let earlierFailuresByOutcome: [UUID: [LogEntry]]
+
+    var exceptions: [LogEntry] {
+        accounts.flatMap { account in
+            if account.outcomes.isEmpty { return account.lastEvent.isSettledPhaseEvent ? [] : [account.lastEvent] }
+            return account.outcomes.filter { !$0.isHandledTaskOutcome }
+        }
+    }
 
     init(session: ActivitySession) {
         accounts = ActivityAccountSummary.groups(in: session)
         var shown = accounts.isEmpty ? Array(session.entries.suffix(1)) : accounts.flatMap { account in
             account.outcomes.isEmpty ? [account.lastEvent] : account.outcomes
         }
+        let successfulTasks = accounts.flatMap(\.outcomes).filter {
+            $0.level == .success && ($0.fightResult == nil || $0.fightResult?.status == .completed)
+        }
+        var earlierFailures: [UUID: [LogEntry]] = [:]
         notices = session.entries.filter { entry in
             guard entry.level == .warning || entry.level == .error, entry.phase != .completed else { return false }
             if shown.contains(where: { previous in
@@ -252,8 +332,19 @@ struct ActivityResultSummary {
                     && previous.fightResult == entry.fightResult
             }) { return false }
             shown.append(entry)
+            if let runID = session.runID, entry.runID == runID, entry.phase == .runningTask,
+               entry.clientID != nil, entry.accountID != nil, entry.task != nil,
+               entry.level == .error || entry.fightResult?.status == .failed,
+               let outcome = successfulTasks.first(where: {
+                   $0.runID == runID && $0.phase == .runningTask && $0.timestamp > entry.timestamp
+                       && $0.clientID == entry.clientID && $0.accountID == entry.accountID && $0.task == entry.task
+               }) {
+                earlierFailures[outcome.id, default: []].append(entry)
+                return false
+            }
             return true
         }
+        earlierFailuresByOutcome = earlierFailures
     }
 }
 

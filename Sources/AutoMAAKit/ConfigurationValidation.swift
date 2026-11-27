@@ -101,6 +101,15 @@ public enum ConfigurationValidator {
                     scope: .plan(plan.id)
                 ))
             }
+            let retryRange = ExecutionPolicy.retryRange
+            if !retryRange.contains(plan.policy.maxRetries) {
+                result.append(.init(
+                    id: "\(prefix)-max-retries",
+                    severity: .error,
+                    message: "「\(plan.displayName)」单步骤失败重试次数必须在 \(retryRange.lowerBound) 到 \(retryRange.upperBound) 之间",
+                    scope: .plan(plan.id)
+                ))
+            }
             if plan.fight.enabled, plan.fight.usesCustomSettings {
                 validate(plan.fight, prefix: "\(prefix)-fight", plan: plan, into: &result)
             }
@@ -244,10 +253,10 @@ public enum ConfigurationValidator {
 
             let enabledAccounts = client.accounts.filter(\.enabled)
             let targetAccounts = client.accounts.filter(plan.includes)
-            if plan.fight.enabled,
-               (plan.fight.weeklyAnnihilation.enabled || (plan.fight.usesCustomSettings && plan.fight.stageStrategy == .rememberedRegular)),
-               (!plan.fight.usesCustomSettings || plan.fight.stageStrategy != .fixed) {
-                for account in targetAccounts where fightStageMemory.stage(clientID: client.id, accountID: account.id) == nil {
+            if plan.fight.enabled, !plan.fight.usesCustomSettings || plan.fight.stageStrategy != .fixed {
+                for account in targetAccounts where !FightStagePolicy.canResumeWithoutSettingRegularTarget(
+                    in: plan.fight, memory: fightStageMemory, clientID: client.id, accountID: account.id
+                ) {
                     result.append(.init(
                         id: "plan-\(plan.id)-fight-memory-\(client.id)-\(account.id)",
                         severity: .warning,

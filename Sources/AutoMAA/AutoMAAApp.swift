@@ -25,10 +25,10 @@ struct AutoMAAApp: App {
         Window("AutoMAA", id: "main") {
             RootView()
                 .environmentObject(model)
-                .frame(minWidth: 1_020, minHeight: 680)
+                .frame(minWidth: WorkspaceLayout.minimumSize.width, minHeight: WorkspaceLayout.minimumSize.height)
                 .onAppear { applicationDelegate.model = model }
         }
-        .defaultSize(width: 1_180, height: 780)
+        .defaultSize(width: WorkspaceLayout.defaultSize.width, height: WorkspaceLayout.defaultSize.height)
         .windowToolbarStyle(.unified)
         .commands {
             AutoMAACommands(model: model)
@@ -96,7 +96,7 @@ private struct AutoMAACommands: Commands {
         CommandGroup(after: .newItem) {
             Button(runCommandTitle) { model.runSelectedPlan() }
                 .keyboardShortcut("r", modifiers: [.command])
-                .disabled(workspaceActive != true || hasWorkspaceSheet || !canRunCommand)
+                .disabled(operationScope != .workspace || model.commandRunRequest == nil)
             Button(operationScope.cancelTitle) { operationScope.cancel(in: model) }
                 .keyboardShortcut(".", modifiers: [.command])
                 .disabled(!operationScope.canCancel(in: model))
@@ -115,7 +115,8 @@ private struct AutoMAACommands: Commands {
     }
 
     private var hasWorkspaceSheet: Bool {
-        model.entityEditor != nil || model.readinessRequest != nil || model.arrangementRequest != nil || model.updateDetailsRequest != nil
+        model.entityEditor != nil || model.readinessRequest != nil || model.arrangementRequest != nil
+            || model.updateDetailsRequest != nil || model.fightRecoveryDestination != nil
     }
 
     private var operationScope: OperationCommandScope {
@@ -125,18 +126,10 @@ private struct AutoMAACommands: Commands {
     }
 
     private var runCommandTitle: String {
-        guard let planID = model.commandPlanID, model.canRun(planID: planID), let request = model.commandRunRequest else {
-            return "运行当前方案一轮"
+        guard let planID = model.commandPlanID, let request = model.commandRunRequest else {
+            return "运行新一轮"
         }
-        return model.runTitle(for: planID, readyTitle: "运行当前方案一轮", request: request)
-    }
-
-    private var canRunCommand: Bool {
-        guard let planID = model.commandPlanID, model.canRun(planID: planID) else { return false }
-        let progress = model.continuation(for: planID, roundID: model.activityRoundID(for: planID))
-        return model.selection == .activity
-            ? progress.roundID != nil && progress.hasStarted && progress.pending > 0
-            : progress.newRoundTasks > 0
+        return model.runTitle(for: planID, request: request)
     }
 
     private func showSettings(_ section: SettingsSection) {

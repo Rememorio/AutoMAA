@@ -1,12 +1,26 @@
 import AutoMAAKit
 import SwiftUI
 
-struct PendingWorkLinkButton: View {
-    let action: () -> Void
+private extension WorkflowStep {
+    var activityAccountID: ActivityAccountID { .init(client: clientID, account: accountID) }
+}
 
-    var body: some View {
-        ActionTextButton(title: "查看待办", symbol: "chevron.right", tint: .primary,
-                         help: "查看剩余任务和需要处理的事项", symbolAfterTitle: true, action: action)
+struct PendingAccountWork: Identifiable {
+    let step: WorkflowStep
+    let tasks: [PendingWorkflowItem]
+    let recovery: [FightRecoveryItem]
+    var id: ActivityAccountID { step.activityAccountID }
+
+    static func groups(items: [PendingWorkflowItem], recovery: [FightRecoveryItem]) -> [Self] {
+        let recoveries = Dictionary(grouping: recovery) { $0.step.activityAccountID }
+        let recoverySteps = Set(recovery.map(\.step))
+        let tasks = Dictionary(grouping: items.filter { !recoverySteps.contains($0.step) }) { $0.step.activityAccountID }
+        var seen: Set<ActivityAccountID> = []
+        return (recovery.map(\.step) + items.map(\.step)).compactMap { step in
+            let id = step.activityAccountID
+            guard seen.insert(id).inserted else { return nil }
+            return Self(step: step, tasks: tasks[id] ?? [], recovery: recoveries[id] ?? [])
+        }
     }
 }
 
@@ -15,36 +29,28 @@ struct PendingWorkList: View {
     let items: [PendingWorkflowItem]
     let recovery: [FightRecoveryItem]
 
-    private var accounts: [WorkflowStep] {
-        var seen: Set<UUID> = []
-        return (items.map(\.step) + recovery.map(\.step)).filter { seen.insert($0.accountID).inserted }
-    }
-
     var body: some View {
+        let groups = PendingAccountWork.groups(items: items, recovery: recovery)
         LazyVStack(alignment: .leading, spacing: 12) {
-            ForEach(accounts, id: \.accountID) { account in
-                let problems = recovery.filter { $0.step.accountID == account.accountID }
-                let ordinary = items.filter { item in
-                    item.step.accountID == account.accountID && !problems.contains(where: { $0.id == item.id })
-                }
+            ForEach(groups) { group in
+                let context = model.pendingWorkContext(group.step)
                 VStack(alignment: .leading, spacing: 7) {
-                    Text(model.pendingWorkContext(account))
-                        .font(.callout.weight(.medium)).accessibilityAddTraits(.isHeader)
-                    ForEach(problems) { item in
-                        FightRecoveryRow(item: item, context: model.pendingWorkContext(account))
+                    Text(context).font(.callout.weight(.medium)).accessibilityAddTraits(.isHeader)
+                    ForEach(group.recovery) { item in
+                        FightRecoveryRow(item: item, context: context)
                     }
-                    if !ordinary.isEmpty {
-                        Text(ordinary.map(\.title).joined(separator: " · "))
+                    if !group.tasks.isEmpty {
+                        Text(group.tasks.map(\.title).joined(separator: " · "))
                             .font(.callout).foregroundStyle(.secondary)
                     }
-                    ForEach(ordinary.filter { $0.reason != nil || $0.lastFailure != nil || $0.targets == [.weeklyAnnihilation] }) { item in
+                    ForEach(group.tasks.filter { $0.reason != nil || $0.lastFailure != nil || $0.targets == [.weeklyAnnihilation] }) { item in
                         if let detail = item.detail {
                             Text(detail).font(.caption).foregroundStyle(.secondary)
                         }
                     }
                 }
                 .fixedSize(horizontal: false, vertical: true)
-                if account.accountID != accounts.last?.accountID { Divider() }
+                if group.id != groups.last?.id { Divider() }
             }
         }
     }

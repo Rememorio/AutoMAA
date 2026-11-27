@@ -61,30 +61,29 @@ struct WorkspaceRunControlsTests {
         #expect(!model.isWorkflowRunning)
     }
 
-    @Test("plan playback starts a round and pending playback resumes only the current round")
+    @Test("plan playback starts a new round and history has no run command")
     func continuationHelpMatchesAcrossPages() throws {
         let fixture = makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let model = fixture.model
         model.configuration.plans[0].award.enabled = true
         var state = ExecutionState(dateKey: ExecutionStateStore.todayKey)
-        let round = state.startRound(for: fixture.plan.id, at: Date())
+        _ = state.startRound(for: fixture.plan.id, at: Date())
         state.record(.init(status: .unconfirmed, reason: .interruptedBattle), for: fixture.step.key)
         try ExecutionStateStore(directories: model.directories).save(state)
         model.reloadActivityHistory()
         model.selection = .plan(fixture.plan.id)
         let settings = WorkspaceRunControlState(model: model)
+        #expect(model.commandRunRequest == .newRound)
         model.selection = .activity
         model.activitySelection = .plan(fixture.plan.id)
         let today = WorkspaceRunControlState(model: model)
         #expect(settings.canStart)
-        #expect(today.canStart)
-        if case .run(fixture.plan.id) = settings.startAction {} else { Issue.record("Expected a new round") }
-        if case .resume(fixture.plan.id, round.id) = today.startAction {} else { Issue.record("Expected the current round") }
+        #expect(!today.canStart)
+        #expect(today.presentation == .hidden)
+        #expect(model.commandRunRequest == nil)
         #expect(settings.startHelp.contains("开启新一轮"))
-        #expect(today.startHelp.contains(fixture.plan.name))
-        #expect(today.startHelp.contains("1 项待办"))
-        #expect(today.startHelp.contains("1 项待核实"))
+
     }
 
     @Test("native stop and play retain their icons and actual positions through running, cancelling and completion")
@@ -172,27 +171,24 @@ struct WorkspaceRunControlsTests {
         model.reloadActivityHistory()
         refresh(chrome, model: model, window: window)
         #expect(model.continuation(for: fixture.plan.id).unconfirmed == 1)
-        #expect(play.isEnabled)
+        #expect(!play.isEnabled)
+        #expect(model.continuation(for: fixture.plan.id).fightReviewAction == "核实作战")
+        #expect(model.commandRunRequest == nil)
         try expectFixedControls(group, stop: stop, play: play, window: window, frames: initialFrames, images: images)
         group.selectedIndex = 1
-        let firstSent = NSApp.sendAction(action, to: group.target, from: group)
-        #expect(firstSent)
-        #expect(model.activitySelection == .plan(fixture.plan.id))
-        refresh(chrome, model: model, window: window)
-        #expect(chrome.toolbar.items.contains { $0 === group })
-        #expect(!play.isEnabled)
-        #expect(play.toolTip?.contains("核实") == true)
+        _ = NSApp.sendAction(action, to: group.target, from: group)
+        #expect(model.selection == .plan(fixture.plan.id))
+        #expect(!model.isWorkflowRunning)
 
-        model.selection = .plan(fixture.plan.id)
         model.configuration.cliPath = fixture.root.appending(path: "missing-maa").path
         #expect(model.planRunState(planID: fixture.plan.id) == .configurationIncomplete)
         refresh(chrome, model: model, window: window)
-        #expect(play.isEnabled)
+        #expect(!play.isEnabled)
+        #expect(play.toolTip?.contains("检查配置") == true)
         try expectFixedControls(group, stop: stop, play: play, window: window, frames: initialFrames, images: images)
         group.selectedIndex = 1
-        let secondSent = NSApp.sendAction(action, to: group.target, from: group)
-        #expect(secondSent)
-        #expect(model.readinessRequest?.id == fixture.plan.id)
+        _ = NSApp.sendAction(action, to: group.target, from: group)
+        #expect(model.readinessRequest == nil)
 
         model.activitySelection = .session("historical-record")
         for selection: SidebarSelection in [.overview, .clients, .activity] {
@@ -242,10 +238,9 @@ struct WorkspaceRunControlsTests {
         model.selection = .activity
         model.activitySelection = .plan(fixture.plan.id)
         refresh(chrome, model: model, window: window)
-        #expect(!chrome.toolbar.items.contains { $0 === stop })
-        #expect(chrome.toolbar.items.contains { $0 === group })
-        #expect(group.subitems.first?.isEnabled == true)
-        #expect(group.subitems.last?.isEnabled == false)
+        #expect(chrome.toolbar.items.contains { $0 === stop })
+        #expect(!chrome.toolbar.items.contains { $0 === group })
+        #expect(stop.isEnabled)
 
         model.activitySelection = .session("historical-record")
         refresh(chrome, model: model, window: window)

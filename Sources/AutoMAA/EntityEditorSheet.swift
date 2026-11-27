@@ -3,14 +3,14 @@ import SwiftUI
 
 enum EntityEditorRequest: Identifiable, Equatable {
     case newClient
-    case client(UUID)
+    case client(UUID, application: URL? = nil)
     case newAccount(UUID, planID: UUID? = nil)
     case account(UUID, UUID)
 
     var id: String {
         switch self {
         case .newClient: "new-client"
-        case let .client(id): "client-\(id)"
+        case let .client(id, _): "client-\(id)"
         case let .newAccount(id, _): "new-account-\(id)"
         case let .account(client, account): "account-\(client)-\(account)"
         }
@@ -89,7 +89,9 @@ struct EntityEditorSheet: View {
         guard client == nil else { return }
         switch request {
         case .newClient: client = model.newClientDraft()
-        case let .client(id): client = model.configuration.clients.first { $0.id == id }
+        case let .client(id, application):
+            client = model.configuration.clients.first { $0.id == id }
+            if let application { client?.chooseApplication(application) }
         case let .newAccount(clientID, planID):
             if let planID { planIDs.insert(planID) }
             client = model.configuration.clients.first { $0.id == clientID }

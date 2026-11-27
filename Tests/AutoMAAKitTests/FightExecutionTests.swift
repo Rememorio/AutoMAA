@@ -554,7 +554,7 @@ private final class FightFixture {
 
     func cleanup() { try? FileManager.default.removeItem(at: root) }
 
-    func run(_ replies: [FightTestCommands.Reply], retry: Bool = false, blockStateSave: Bool = false,
+    func run(_ replies: [FightTestCommands.Reply], retry: Bool = false, reviewedFight: FightRecoveryItem? = nil, blockStateSave: Bool = false,
              blockWeeklySave: Bool = false, request: WorkflowRunRequest? = nil) async -> (WorkflowReport, [FightTestCommands.Call]) {
         let commands = FightTestCommands(replies, directories: directories, blockStateSave: blockStateSave,
                                          blockWeeklySave: blockWeeklySave, inspection: inspection, inspectionFailure: inspectionFailure)
@@ -563,7 +563,8 @@ private final class FightFixture {
                                     commandRunner: commands, now: { [self] in now }, eventSink: runtime.record)
         let current = state.currentRound(for: plan.id).flatMap { GameDay.contains($0.startedAt, for: client.kind, at: now) ? $0 : nil }
         let request = request ?? current.map { .resume(roundID: $0.id) } ?? .newRound
-        let report = await runner.run(configuration, planID: plan.id, request: request, retryStep: retry ? step : nil)
+        let report = await runner.run(configuration, planID: plan.id, request: request,
+                                      retryStep: retry ? step : nil, reviewedFight: reviewedFight)
         return (report, await commands.recordedCalls())
     }
 }
@@ -685,6 +686,9 @@ final class FightWorkflowTests: XCTestCase {
             XCTAssertFalse(fixture.state.completedSteps.contains(fixture.step.key))
             XCTAssertEqual(fixture.state.fightProgress?[fixture.step.key]?.regular, original)
             XCTAssertEqual(fixture.state.fightResults?[fixture.step.key]?.status, .manuallyHandled)
+            let phases = fixture.runtime.events.last { $0.log.fightResult?.status == .manuallyHandled }?.log.executedFightPhases
+            if priority { XCTAssertEqual(phases?.map(\.status), [.unnecessary]) }
+            else { XCTAssertTrue(phases?.isEmpty ?? true) }
             let continuation = PlanContinuation(configuration: fixture.configuration, planID: fixture.plan.id,
                 state: fixture.state, history: [], now: fixture.now)
             XCTAssertEqual(continuation.unconfirmed, 0)
@@ -1415,6 +1419,79 @@ final class FightWorkflowTests: XCTestCase {
         }
     }
 
+    func testReviewedRetryRejectsAnIdenticalResultFromAnotherRoundBeforeOpeningANewRound() async throws {
+        let fixture = try FightFixture()
+        defer { fixture.cleanup() }
+        let store = ExecutionStateStore(directories: fixture.directories)
+        var state = fixture.emptyState
+        state.record(.init(status: .unconfirmed, stage: "1-7", kind: .regular), for: fixture.step.key, at: fixture.now)
+        let reviewed = try XCTUnwrap(PlanContinuation(configuration: fixture.configuration, planID: fixture.plan.id,
+            state: state, history: [], now: fixture.now).fightRecoveryItems.first)
+        let replacement = state.startRound(for: fixture.plan.id, at: fixture.now)
+        try store.save(state)
+
+        let (report, calls) = await fixture.run([], reviewedFight: reviewed, request: .newRound)
+        XCTAssertNotNil(report.fatalError)
+        XCTAssertTrue(calls.isEmpty)
+        XCTAssertEqual(fixture.runtime.launches, 0)
+        XCTAssertEqual(fixture.state.currentRound(for: fixture.plan.id), replacement)
+        XCTAssertTrue(fixture.state.needsFightConfirmation(fixture.step.key))
+    }
+
+    func testMissingTargetClearsWhenChangedPolicyCanDispatchWithoutAnExplicitStage() async throws {
+        for usesCustomSettings in [true, false] {
+            let fixture = try FightFixture()
+            defer { fixture.cleanup() }
+            fixture.plan.fight.stageStrategy = .rememberedRegular
+            _ = await fixture.run([])
+            XCTAssertEqual(fixture.state.fightResults?[fixture.step.key]?.reason, .missingRegularTarget)
+            fixture.plan.fight.stageStrategy = .gameCurrentOrLast
+            fixture.plan.fight.usesCustomSettings = usesCustomSettings
+            let current = PlanContinuation(configuration: fixture.configuration, planID: fixture.plan.id,
+                                           state: fixture.state, history: [], now: fixture.now)
+            XCTAssertTrue(current.fightRecoveryItems.isEmpty)
+            XCTAssertNil(current.pendingItems.first?.reason)
+            let (report, calls) = await fixture.run([.init(result: command("Fight 1-7 1 times"))])
+            XCTAssertTrue(report.isSuccess)
+            XCTAssertEqual(calls.count, 1)
+            XCTAssertEqual(try parameters(XCTUnwrap(calls.first))["stage"] as? String, usesCustomSettings ? "" : nil)
+        }
+    }
+
+    func testUnfinishedRegularPhaseCanUseRememberedTargetAfterWeeklyPolicyWasDisabled() async throws {
+        let fixture = try FightFixture()
+        defer { fixture.cleanup() }
+        fixture.plan.fight.stageStrategy = .gameCurrentOrLast
+        fixture.inspection = .annihilation
+        let missing = FightResult(status: .failed, reason: .missingRegularTarget, kind: .regular)
+        var progress = FightProgress(regularStage: "")
+        progress.annihilation = .init(status: .completed, stage: "Annihilation", times: 1, kind: .annihilation)
+        progress.regular = missing
+        var state = fixture.emptyState
+        state.fightProgress = [fixture.step.key: progress]
+        state.record(missing, for: fixture.step.key, at: fixture.now)
+        try ExecutionStateStore(directories: fixture.directories).save(state)
+        var memory = FightStageMemory()
+        func continuation() -> PlanContinuation {
+            PlanContinuation(configuration: fixture.configuration, planID: fixture.plan.id, state: fixture.state,
+                             history: [], stageMemory: memory, now: fixture.now)
+        }
+        let item = try XCTUnwrap(continuation().fightRecoveryItems.first)
+        memory.remember("CE-6", clientID: fixture.client.id, accountID: fixture.account.id)
+        try FightStageMemoryStore(directories: fixture.directories).save(memory)
+        XCTAssertTrue(continuation().fightRecoveryItems.isEmpty)
+        let (stale, attempts) = await fixture.run([], reviewedFight: item)
+        XCTAssertNotNil(stale.fatalError)
+        XCTAssertTrue(attempts.isEmpty)
+        XCTAssertEqual(fixture.runtime.launches, 0)
+
+        let (resumed, calls) = await fixture.run([.init(result: command("Fight CE-6 1 times"))])
+        XCTAssertTrue(resumed.isSuccess)
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(try parameters(XCTUnwrap(calls.first))["stage"] as? String, "CE-6")
+        XCTAssertEqual(fixture.state.fightProgress?[fixture.step.key]?.annihilation, progress.annihilation)
+    }
+
     func testUnconfirmedFightStopsClientAndExplicitRetryOnlyRunsSelectedTask() async throws {
         let fixture = try FightFixture(award: true)
         defer { fixture.cleanup() }
@@ -1429,7 +1506,9 @@ final class FightWorkflowTests: XCTestCase {
         XCTAssertEqual(remaining.count, 1)
         XCTAssertTrue(remaining.first?.name.hasSuffix("award") == true)
         XCTAssertEqual(continued.unconfirmedSteps, 1)
-        let (retried, selected) = await fixture.run([.init(result: command("Fight 1-7 2 times"))], retry: true)
+        let reviewed = try XCTUnwrap(PlanContinuation(configuration: fixture.configuration, planID: fixture.plan.id,
+            state: fixture.state, history: [], now: fixture.now).fightRecoveryItems.first)
+        let (retried, selected) = await fixture.run([.init(result: command("Fight 1-7 2 times"))], reviewedFight: reviewed)
         XCTAssertTrue(retried.isSuccess)
         XCTAssertEqual(selected.count, 1)
         XCTAssertTrue(fixture.state.completedSteps.contains(fixture.step.key))
@@ -1472,6 +1551,8 @@ final class FightWorkflowTests: XCTestCase {
             XCTAssertTrue(event.log.details?.contains("剿灭：合成玉 × 740") == true)
             if regularRuns { XCTAssertTrue(event.log.details?.contains("常规：源岩 × 6") == true) }
             XCTAssertEqual(event.log.fightResult?.times, regularRuns ? 5 : 2)
+            XCTAssertEqual(event.log.executedFightPhases?.map(\.times), regularRuns ? [2, 3] : [2, 0])
+            XCTAssertEqual(event.log.executedFightPhases?.first?.totalDrops, "合成玉 × 740")
             XCTAssertEqual(report.pendingWeeklyAnnihilation, 0)
         }
     }
@@ -1493,11 +1574,14 @@ final class FightWorkflowTests: XCTestCase {
         XCTAssertEqual(event.log.fightResult?.status, .unconfirmed)
 
         let prior = fixture.state.fightResults?[fixture.step.key]
+        XCTAssertEqual(event.log.executedFightPhases?.map(\.status), [.completed, .unconfirmed])
         let (_, calls) = await fixture.run([], request: .newRound)
         XCTAssertEqual(calls.count, 1)
         XCTAssertTrue(calls.first?.name.hasSuffix("-award") == true)
         let retained = try XCTUnwrap(fixture.runtime.events.last { $0.log.task == .fight && $0.log.fightResult != nil })
         XCTAssertTrue(retained.message.contains("本次跳过"))
+        XCTAssertEqual(retained.log.carriedForwardFight, true)
+        XCTAssertTrue(retained.log.executedFightPhases?.isEmpty ?? true)
         XCTAssertNil(retained.log.fightResult?.totalDrops)
         XCTAssertEqual(fixture.state.fightResults?[fixture.step.key], prior)
     }
@@ -1549,7 +1633,7 @@ final class FightWorkflowTests: XCTestCase {
         XCTAssertEqual(fixture.state.fightResults?[fixture.step.key]?.times, 1, "This run must not recount an earlier phase")
         let event = try XCTUnwrap(fixture.runtime.events.last { $0.message.contains("：理智作战") && $0.log.fightResult != nil })
         XCTAssertFalse(event.message.contains("剿灭"))
-
+        XCTAssertEqual(event.log.executedFightPhases?.map(\.stage), ["1-7"])
     }
 
     func testMissingEntrancePausesUntilManualConfirmationThenOnlyRunsRegular() async throws {

@@ -3,6 +3,43 @@ import XCTest
 @testable import AutoMAAKit
 
 final class WeeklyAnnihilationTests: XCTestCase {
+    func testReviewedWeeklyConfirmationRequiresTheSameAttemptAndRound() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "weekly-review-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root), store = WeeklyAnnihilationStore(directories: directories)
+        let execution = ExecutionStateStore(directories: directories)
+        var client = client(.yoStarJP)
+        let account = AccountConfiguration(name: "账号")
+        client.accounts = [account]
+        var plan = AutomationPlan.lightRoutine
+        plan.fight.weeklyAnnihilation.enabled = true
+        let configuration = AppConfiguration(cliPath: "/usr/bin/true", clients: [client], plans: [plan])
+        let firstTime = date("2026-09-09T00:00:00Z"), secondTime = firstTime.addingTimeInterval(60)
+        let weekStart = GameWeek(client: client.kind, at: firstTime).start
+        let result = FightResult(status: .unnecessary, reason: .navigationUnavailable)
+        var weekly = WeeklyAnnihilationState(), daily = ExecutionState()
+        func review() throws -> FightRecoveryItem {
+            let progress = try PlanContinuation(configuration: configuration, planID: plan.id,
+                state: execution.loadForExecution(), history: [], weeklyAnnihilation: store.load(), now: secondTime)
+            return try XCTUnwrap(progress.fightRecoveryItems.first)
+        }
+        weekly.record(result, client: client, accountID: account.id, weekStart: weekStart, at: firstTime)
+        try store.save(weekly)
+        let first = try review()
+        weekly.record(result, client: client, accountID: account.id, weekStart: weekStart, at: secondTime)
+        try store.save(weekly)
+        let second = try review()
+        XCTAssertNotEqual(first, second)
+        XCTAssertThrowsError(try store.confirmComplete(first, client: client, at: secondTime))
+
+        daily.startRound(for: plan.id, at: secondTime)
+        try execution.save(daily)
+        XCTAssertThrowsError(try store.confirmComplete(second, client: client, at: secondTime))
+        XCTAssertEqual(try store.load(), weekly)
+        let confirmed = try store.confirmComplete(review(), client: client, at: secondTime)
+        XCTAssertEqual(confirmed.status(for: policy, client: client, accountID: account.id, at: secondTime), .completed)
+    }
+
     func testClosedEntranceResetsNextWeekAndConfirmationRespectsTheRunnerLock() throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "weekly-confirm-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }

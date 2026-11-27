@@ -6,7 +6,7 @@ import Testing
 
 @Suite("Activity workspace")
 struct ActivityWorkspaceTests {
-    @Test("pending work navigation selects its plan even when a filtered historical record was selected")
+    @Test("opening a plan's current round preserves the selected historical record and its filters")
     @MainActor
     func pendingWorkNavigationReplacesHistoricalSelection() throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "automaa-activity-navigation-\(UUID())")
@@ -19,8 +19,9 @@ struct ActivityWorkspaceTests {
 
         model.showPlanActivity(planID)
 
-        #expect(model.selection == .activity)
-        #expect(model.activitySelection == .plan(planID))
+        #expect(model.selection == .plan(planID))
+        #expect(model.planActivityRequest == planID)
+        #expect(model.activitySelection == .session("previous-record"))
         #expect(model.currentPlanID == planID)
         #expect(model.activitySearch == "保留的搜索")
         #expect(model.activityFilter == .failed)
@@ -99,6 +100,102 @@ struct ActivityWorkspaceTests {
         #expect(!ProcessLock.isHeld(at: model.directories.lock))
         #expect(!model.activityEntries.contains { $0.runID == newRunID && $0.phase == .launching })
         if !maintenance { #expect(model.lastReport?.cancelled == true) }
+    }
+
+    @Test("overview reviews a single account in place and opens the plan for multiple accounts")
+    @MainActor
+    func reviewOpensAtTheCorrectScope() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "automaa-review-scope-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = makeModel(root: root)
+        model.configuration.clients[0].accounts.append(.init(name: "第二个示例账号"))
+        let client = model.configuration.clients[0]
+        let plan = model.configuration.plans[0]
+        let steps = client.accounts.map { WorkflowStep(planID: plan.id, clientID: client.id, accountID: $0.id, task: .fight) }
+        let store = ExecutionStateStore(directories: model.directories)
+        var state = ExecutionState(dateKey: ExecutionStateStore.todayKey)
+        _ = state.startRound(for: plan.id, at: Date())
+        let result = FightResult(status: .unconfirmed, stage: "1-7", reason: .interruptedBattle, kind: .regular)
+        state.record(result, for: steps[0].key)
+        try store.save(state)
+        model.reviewFight(in: plan.id)
+        guard case let .review(item) = model.fightRecoveryDestination else {
+            Issue.record("应直接打开已选账号的核实窗口")
+            return
+        }
+        #expect(item.step == steps[0])
+        #expect(model.selection == .overview)
+        #expect(!model.isWorkflowRunning)
+        model.fightRecoveryDestination = nil
+        state.record(result, for: steps[1].key)
+        try store.save(state)
+        model.reviewFight(in: plan.id)
+        #expect(model.fightRecoveryDestination == nil)
+        #expect(model.selection == .plan(plan.id))
+        #expect(model.planActivityRequest == plan.id)
+    }
+
+    @Test("supplying a missing stage turns the prompt into ordinary resumable work")
+    @MainActor
+    func savedTargetClearsOnlyTheRepairPrompt() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "automaa-recovery-target-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = makeModel(root: root)
+        model.configuration.plans[0].fight.usesCustomSettings = true
+        model.configuration.plans[0].fight.stageStrategy = .rememberedRegular
+        model.configuration.plans[0].fight.fallbackStage = ""
+        let client = model.configuration.clients[0]
+        let plan = model.configuration.plans[0]
+        let step = WorkflowStep(planID: plan.id, clientID: client.id, accountID: client.accounts[0].id, task: .fight)
+        var state = ExecutionState(dateKey: ExecutionStateStore.todayKey)
+        let round = state.startRound(for: plan.id, at: Date())
+        let failure = FightResult(status: .failed, reason: .missingRegularTarget, kind: .regular)
+        state.record(failure, for: step.key)
+        try ExecutionStateStore(directories: model.directories).save(state)
+        model.reviewFight(in: plan.id)
+        guard case let .stage(context) = model.fightRecoveryDestination else {
+            Issue.record("应直接打开缺少关卡的账号表单")
+            return
+        }
+        #expect(context.accountID == step.accountID)
+        #expect(model.saveFightRecoveryStage("1-7", clientID: step.clientID, accountID: step.accountID) == nil)
+        let progress = model.continuation(for: plan.id)
+        #expect(progress.fightRecoveryItems.isEmpty)
+        #expect(progress.resumableRoundID == round.id)
+        #expect(progress.pendingItems.contains { $0.step == step && $0.reason == nil })
+        #expect(model.executionState.fightResults?[step.key] == failure)
+        #expect(!model.isWorkflowRunning)
+    }
+
+    @Test("a missing plan-fixed target opens the plan's fight settings")
+    @MainActor
+    func repairFixedTarget() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "automaa-fixed-target-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = makeModel(root: root)
+        model.configuration.plans[0].fight.usesCustomSettings = true
+        model.configuration.plans[0].fight.stageStrategy = .fixed
+        model.configuration.plans[0].fight.stage = "Annihilation"
+        model.configuration.plans[0].fight.fallbackStage = ""
+        model.configuration.plans[0].fight.weeklyAnnihilation.enabled = true
+        let plan = model.configuration.plans[0], client = model.configuration.clients[0]
+        let step = WorkflowStep(planID: plan.id, clientID: client.id, accountID: client.accounts[0].id, task: .fight)
+        var state = ExecutionState(dateKey: ExecutionStateStore.todayKey)
+        _ = state.startRound(for: plan.id, at: Date())
+        let failure = FightResult(status: .failed, reason: .missingRegularTarget, kind: .regular)
+        var progress = FightProgress(regularStage: "")
+        progress.regular = failure
+        state.fightProgress = [step.key: progress]
+        state.record(failure, for: step.key)
+        try ExecutionStateStore(directories: model.directories).save(state)
+
+        model.reviewFight(in: plan.id)
+
+        #expect(model.fightRecoveryDestination == nil)
+        #expect(model.selection == .plan(plan.id))
+        #expect(model.fightSettingsPlanID == plan.id)
+        model.configuration.plans[0].fight.stage = "1-7"
+        #expect(model.continuation(for: plan.id).fightRecoveryItems.isEmpty)
     }
 
     @Test("the plan inspector uses the matching active run instead of newer foreign history")

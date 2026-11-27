@@ -4,6 +4,9 @@ import Foundation
 public enum UpdatePolicy {
     public static let checkTimeout: TimeInterval = 30
     public static let packageTimeout: TimeInterval = 15 * 60
+    static let applicationArchitectureTimeout: TimeInterval = 30
+    static let applicationSignatureTimeout: TimeInterval = 60
+    static let cachedApplicationValidationTimeout = applicationArchitectureTimeout + applicationSignatureTimeout + 30
     public static let retryDelay: Duration = .seconds(5)
     public static let maximumAttempts = 2
     public static let downloadStallTimeout: TimeInterval = 5 * 60

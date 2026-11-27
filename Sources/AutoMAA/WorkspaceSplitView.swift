@@ -1,6 +1,16 @@
 import AppKit
 import SwiftUI
 
+enum WorkspaceLayout {
+    static let defaultSize = CGSize(width: 960, height: 600)
+    static let minimumSize = CGSize(width: 900, height: 520)
+    static let sidebarWidth: CGFloat = 176
+    static let middleWidths: ClosedRange<CGFloat> = 224...320
+    static let initialMiddleWidth: CGFloat = 248
+    static let minimumDetailWidth: CGFloat = 420
+    static let minimumContentWidth = middleWidths.lowerBound + 1 + minimumDetailWidth
+}
+
 private struct WorkspaceChromeKey: EnvironmentKey {
     static let defaultValue: WorkspaceChromeController? = nil
 }
@@ -50,8 +60,8 @@ final class WorkspaceSplitController: NSSplitViewController {
         contentHost.sizingOptions = []
         super.init(nibName: nil, bundle: nil)
         let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarHost)
-        sidebarItem.minimumThickness = 200
-        sidebarItem.maximumThickness = 200
+        sidebarItem.minimumThickness = WorkspaceLayout.sidebarWidth
+        sidebarItem.maximumThickness = WorkspaceLayout.sidebarWidth
         sidebarItem.canCollapse = true
         sidebarItem.canCollapseFromWindowResize = false
         sidebarItem.allowsFullHeightLayout = false
@@ -59,7 +69,7 @@ final class WorkspaceSplitController: NSSplitViewController {
         sidebarItem.holdingPriority = .init(751)
         addSplitViewItem(sidebarItem)
         let contentItem = NSSplitViewItem(viewController: contentHost)
-        contentItem.minimumThickness = 680
+        contentItem.minimumThickness = WorkspaceLayout.minimumContentWidth
         addSplitViewItem(contentItem)
     }
 
@@ -72,7 +82,7 @@ final class WorkspaceSplitController: NSSplitViewController {
 
     override func toggleSidebar(_ sender: Any?) {
         guard let sidebar = splitViewItems.first else { return }
-        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+        if view.window?.isVisible != true || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             sidebar.isCollapsed.toggle()
         } else {
             super.toggleSidebar(sender)
@@ -117,12 +127,12 @@ final class WorkspaceDetailSplitController: NSSplitViewController {
         detailHost.sizingOptions = []
         super.init(nibName: nil, bundle: nil)
         let contentItem = NSSplitViewItem(contentListWithViewController: contentHost)
-        contentItem.minimumThickness = 240
-        contentItem.maximumThickness = 320
+        contentItem.minimumThickness = WorkspaceLayout.middleWidths.lowerBound
+        contentItem.maximumThickness = WorkspaceLayout.middleWidths.upperBound
         contentItem.holdingPriority = .init(251)
         addSplitViewItem(contentItem)
         let detailItem = NSSplitViewItem(viewController: detailHost)
-        detailItem.minimumThickness = 440
+        detailItem.minimumThickness = WorkspaceLayout.minimumDetailWidth
         addSplitViewItem(detailItem)
     }
 
@@ -130,8 +140,8 @@ final class WorkspaceDetailSplitController: NSSplitViewController {
 
     override func viewDidLayout() {
         super.viewDidLayout()
-        guard !hasRestoredColumnWidth, view.window != nil, splitView.bounds.width >= 680 else { return }
-        splitView.setPosition(chrome?.middleColumnWidth ?? 280, ofDividerAt: 0)
+        guard !hasRestoredColumnWidth, view.window != nil, splitView.bounds.width >= WorkspaceLayout.minimumContentWidth else { return }
+        splitView.setPosition(chrome?.middleColumnWidth ?? WorkspaceLayout.initialMiddleWidth, ofDividerAt: 0)
         hasRestoredColumnWidth = true
         chrome?.setDetailSplit(splitView)
     }

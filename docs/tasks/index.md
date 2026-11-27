@@ -21,13 +21,13 @@
 <figure class="guide-screenshot">
   <img class="theme-shot theme-shot-light" src="../assets/screenshots/task-settings-light.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="方案页：中列按执行顺序列出任务，右栏显示理智作战及其自定义参数" />
   <img class="theme-shot theme-shot-dark" src="../assets/screenshots/task-settings-dark.webp" width="2360" height="1560" loading="lazy" decoding="async" alt="深色方案页：中列按执行顺序列出任务，右栏显示理智作战及其自定义参数" />
-  <figcaption>方案页的任务标题旁可切换参数模式，本轮统计在“运行概况”中查看。</figcaption>
+  <figcaption>v0.17.3 方案页。任务标题旁可切换参数模式，本轮统计在“运行概况”中查看。</figcaption>
 </figure>
 
 ::: tip 只收基建产物
 选择“自定义参数”，基建模式使用“仅收菜”。切换到“MAA 推荐参数”会使用常规换班设置。
 :::
 
-任务列表可直接拖动排序，右键菜单也提供上移、下移。每类任务在一个方案中保留一份配置，用行内开关启用或停用。选择任务后，常用参数在右侧直接展开，修改自动保存。执行账号、定时和重试策略在“执行安排…”中一起应用。
+任务列表可直接拖动排序，右键菜单也提供上移、下移。每类任务在一个方案中保留一份配置，用行内开关启用或停用。选择任务后，常用参数在右侧直接展开，修改自动保存。作战行显示当前生效的理智消耗规则，源石额度按账号计算。兜底和消耗选项在“更多作战设置”中调整。执行账号、定时和重试策略在“执行安排…”中一起应用。
 
 任务按方案中的顺序执行，排序对该方案所有目标账号生效。成功步骤按方案保存当日断点，多个方案不会互相跳过；详见[执行流程与续跑](../guide/workflow)。

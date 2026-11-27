@@ -36,6 +36,25 @@ enum PlanRunState: Equatable {
     }
 }
 
+enum ApplicationUpdateRetry {
+    case check
+    case validateCache
+    case download(SoftwareUpdateRelease)
+
+    var requiresIdleWorkflow: Bool {
+        if case .download = self { return true }
+        return false
+    }
+
+    var title: String {
+        switch self {
+        case .check: "重新检查"
+        case .validateCache: "重新校验"
+        case .download: "重新下载"
+        }
+    }
+}
+
 enum ApplicationUpdateState {
     case idle
     case restoring
@@ -46,7 +65,7 @@ enum ApplicationUpdateState {
     case cancelling
     case ready(PreparedSoftwareUpdate)
     case installing(SoftwareUpdateRelease)
-    case failed(String)
+    case failed(String, retry: ApplicationUpdateRetry = .check)
 
     var isBusy: Bool {
         switch self {
@@ -110,14 +129,9 @@ final class AppModel: ObservableObject {
     @Published var activityEntries: [LogEntry]
     @Published var activitySearch = ""
     @Published var activityFilter: ActivityFilter = .all
-    @Published var activitySelection: ActivityWorkspaceSelection? {
-        didSet {
-            if let activityPendingSource, activitySelection != .plan(activityPendingSource.planID) {
-                self.activityPendingSource = nil
-            }
-        }
-    }
-    @Published private(set) var activityPendingSource: ActivityPendingSource?
+    @Published var activitySelection: ActivityWorkspaceSelection?
+    @Published var planActivityRequest: UUID?
+    @Published var fightRecoveryDestination: FightRecoveryDestination?
     @Published var fightSettingsPlanID: UUID?
     @Published var clientsSelection: ClientWorkspaceSelection? {
         didSet {
@@ -146,6 +160,7 @@ final class AppModel: ObservableObject {
     @Published var lastReport: WorkflowReport?
     @Published private(set) var isSynchronizingSchedules = false
     @Published private(set) var maaVersionSummary = "尚未检测"
+    @Published private(set) var maaEnvironmentDiagnostic: String?
     @Published private(set) var isCheckingMAAEnvironment = false
     @Published private(set) var applicationUpdateState: ApplicationUpdateState = .idle
     var isApplicationUpdateWindowVisible = false
@@ -532,22 +547,16 @@ final class AppModel: ObservableObject {
 
     func continuation(for planID: UUID, at date: Date? = nil, roundID: UUID? = nil) -> PlanContinuation {
         PlanContinuation(configuration: configuration, planID: planID, state: executionState, history: activityEntries,
-                         weeklyAnnihilation: weeklyAnnihilation, now: date ?? currentDate, roundID: roundID)
+                         weeklyAnnihilation: weeklyAnnihilation, stageMemory: fightStageMemory,
+                         now: date ?? currentDate, roundID: roundID)
     }
 
-    func activityRoundID(for planID: UUID) -> UUID? {
-        guard selection == .activity, activitySelection == .plan(planID),
-              activityPendingSource?.planID == planID else { return nil }
-        return activityPendingSource?.roundID
-    }
-
-    func runTitle(for planID: UUID, readyTitle: String = "运行一轮", request: WorkflowRunRequest = .newRound) -> String {
-        guard case let .resume(roundID) = request else { return readyTitle }
+    func runTitle(for planID: UUID, request: WorkflowRunRequest = .newRound) -> String {
+        guard case let .resume(roundID) = request else { return "运行新一轮" }
         let state = continuation(for: planID, roundID: roundID)
         if state.hasExpiredScope, state.pending == 0, state.unconfirmed == 0 { return "本轮续跑已结束" }
         if state.pending == 0 { return state.unconfirmed > 0 ? "结果待确认" : state.completionTitle }
-        if state.unconfirmed > 0 { return "继续其他任务" }
-        return state.hasStarted ? "继续未完成" : readyTitle
+        return "继续本轮"
     }
 
     func pendingWorkContext(_ step: WorkflowStep) -> String {
@@ -565,7 +574,7 @@ final class AppModel: ObservableObject {
         case let .resume(roundID):
             progress = continuation(for: planID, roundID: roundID)
         }
-        let scope = "执行 \(progress.pending) 项待办，已处理的任务会自动跳过"
+        let scope = "继续本轮剩余的 \(progress.pending) 项任务"
         if progress.unconfirmed > 0 {
             return "\(scope)；另有 \(progress.unconfirmed) 项待核实作战会保留"
         }
@@ -583,14 +592,11 @@ final class AppModel: ObservableObject {
             return
         }
         do {
-            executionState = try executionStateStore.handleRegularWithoutRetry(item.step, expected: item.result,
-                                                                                clients: configuration.clients)
+            executionState = try executionStateStore.handleRegularWithoutRetry(item, clients: configuration.clients)
             historyStore.append(LogEntry(level: .info, message: "已人工处理：今天不再重试本方案的常规作战；原始结果仍未确认",
-                                         runID: UUID(), phase: .completed, planID: item.step.planID,
+                                         manualFightDecision: true, planID: item.step.planID,
                                          clientID: item.step.clientID, accountID: item.step.accountID, task: .fight,
-                                         runSummary: .init(completedSteps: 0, failedSteps: 0, unexecutedSteps: 0,
-                                                           totalSteps: 1, manuallyHandledSteps: 1),
-                                         fightResult: executionState.fightResults?[item.step.key]))
+                                         fightResult: executionState.fightResults?[item.step.key], roundID: item.roundID))
             reloadActivityHistory()
             showFeedback("已记录：该账号今天不再重试本方案的常规作战")
         } catch {
@@ -598,9 +604,12 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func confirmWeeklyAnnihilation(_ step: WorkflowStep) {
-        guard !isFightRecoveryBusy else {
-            showFeedback("运行或更新进行中，结束后可确认本周剿灭")
+    func confirmWeeklyAnnihilation(_ item: FightRecoveryItem) {
+        reloadActivityHistory()
+        let step = item.step
+        guard !isFightRecoveryBusy, item.canConfirmWeeklyCompletion,
+              continuation(for: step.planID).fightRecoveryItems.contains(item) else {
+            showFeedback("本周剿灭状态已变化或仍在运行，请重新核实结果")
             return
         }
         guard let client = configuration.clients.first(where: { $0.id == step.clientID }),
@@ -609,7 +618,7 @@ final class AppModel: ObservableObject {
             return
         }
         do {
-            weeklyAnnihilation = try weeklyAnnihilationStore.confirmComplete(client: client, accountID: step.accountID)
+            weeklyAnnihilation = try weeklyAnnihilationStore.confirmComplete(item, client: client)
             reloadActivityHistory()
             showFeedback("已记录本周剿灭完成；后续运行将继续尚未完成的日常")
         } catch {
@@ -632,7 +641,7 @@ final class AppModel: ObservableObject {
         } else {
             request = .newRound
         }
-        runPlan(item.step.planID, request: request, retryStep: item.step)
+        runPlan(item.step.planID, request: request, reviewedFight: item)
     }
 
     func fightRetryHint(_ step: WorkflowStep) -> String {
@@ -650,9 +659,9 @@ final class AppModel: ObservableObject {
             if progress.fallbackStage == nil,
                FightStagePolicy.regularStage(from: stage, times: 1) == nil,
                let plan = configuration.plans.first(where: { $0.id == step.planID }),
-               FightStagePolicy.requiresExplicitRegularStage(in: plan.fight),
+               FightStagePolicy.requiresExplicitRegularStage(in: plan.fight, progress: progress),
                case let .value(target) = FightStagePolicy.resolve(plan.fight, memory: fightStageMemory,
-                    clientID: step.clientID, accountID: step.accountID) {
+                    clientID: step.clientID, accountID: step.accountID, progress: progress) {
                 return "旧记录没有有效的常规目标，本次将明确选择 \(target)。已完成阶段保留；未确认阶段可能已消耗理智或道具，请先检查游戏。"
             }
             let target = stage.isEmpty ? "游戏当前/上次关卡" : stage
@@ -661,11 +670,11 @@ final class AppModel: ObservableObject {
         return "已完成阶段保留。未确认阶段可能已消耗理智或道具，请先检查游戏；重跑会再次执行该阶段。"
     }
 
-    func runPlan(_ planID: UUID, request: WorkflowRunRequest = .newRound, retryStep: WorkflowStep? = nil) {
+    func runPlan(_ planID: UUID, request: WorkflowRunRequest = .newRound, reviewedFight: FightRecoveryItem? = nil) {
         reloadActivityHistory()
-        if case let .resume(roundID) = request, retryStep == nil,
-           continuation(for: planID, roundID: roundID).pending == 0 {
-            showFeedback("这次运行已没有可续跑的任务，请查看待办")
+        if case let .resume(roundID) = request, reviewedFight == nil,
+           continuation(for: planID, roundID: roundID).resumableRoundID != roundID {
+            showFeedback("这轮已没有可以继续的任务")
             return
         }
         selectCurrentPlan(planID)
@@ -701,7 +710,7 @@ final class AppModel: ObservableObject {
             self?.consume(event)
         }
         workflowTask = Task { [weak self] in
-            let report = await runner.run(snapshot, planID: planID, request: request, retryStep: retryStep)
+            let report = await runner.run(snapshot, planID: planID, request: request, reviewedFight: reviewedFight)
             guard let self else { return }
             self.lastReport = report
             let completedRunID = self.runningRunID
@@ -724,10 +733,7 @@ final class AppModel: ObservableObject {
         switch selection {
         case .overview: return currentPlanID
         case let .plan(id): return id
-        case .activity:
-            if case let .plan(id) = activitySelection { return id }
-            return nil
-        case .client, .clients, .account: return nil
+        case .activity, .client, .clients, .account: return nil
         }
     }
 
@@ -737,10 +743,8 @@ final class AppModel: ObservableObject {
     }
 
     var commandRunRequest: WorkflowRunRequest? {
-        guard selection == .activity else { return .newRound }
-        guard let planID = commandPlanID,
-              let roundID = activityRoundID(for: planID) ?? executionState.currentRound(for: planID)?.id else { return nil }
-        return .resume(roundID: roundID)
+        guard let planID = commandPlanID, canRun(planID: planID) else { return nil }
+        return continuation(for: planID).newRoundTasks > 0 ? .newRound : nil
     }
 
     func hotUpdate() {
@@ -869,7 +873,7 @@ final class AppModel: ObservableObject {
 
     private func recordNotificationFailure(_ result: NotificationDeliveryResult, planID: UUID) {
         guard let failure = result.failureDescription else { return }
-        let runID = activityEntries.last(where: { $0.planID == planID })?.runID
+        let runID = activityEntries.last(where: { $0.planID == planID && !$0.isManualFightDecision })?.runID
         let entry = LogEntry(
             level: .warning,
             message: "重要通知未送达：\(failure)",
@@ -887,6 +891,7 @@ final class AppModel: ObservableObject {
         guard !isCheckingMAAEnvironment else { return }
         let path = configuration.cliPath
         guard FileManager.default.isExecutableFile(atPath: path) else {
+            maaEnvironmentDiagnostic = nil
             maaVersionSummary = "未找到 maa-cli"
             return
         }
@@ -900,17 +905,27 @@ final class AppModel: ObservableObject {
                 guard self.maaEnvironmentRequestID == requestID, self.configuration.cliPath == path else { return }
                 let output = SensitiveDataRedactor.redact(result.combinedOutput)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
-                self.maaVersionSummary = result.exitCode == 0 && !output.isEmpty
-                    ? output
-                    : "检测失败：\(output.isEmpty ? "退出码 \(result.exitCode)" : output)"
+                if result.exitCode == 0, !output.isEmpty {
+                    self.maaVersionSummary = output
+                    self.maaEnvironmentDiagnostic = nil
+                } else {
+                    let reason = result.timedOut ? "检测超时" : result.exitCode == 0 ? "未返回版本" : "退出码 \(result.exitCode)"
+                    self.recordMAAEnvironmentFailure(output, reason: reason)
+                }
             } catch {
                 guard self.maaEnvironmentRequestID == requestID, self.configuration.cliPath == path else { return }
-                self.maaVersionSummary = "检测失败：\(error.localizedDescription)"
+                self.recordMAAEnvironmentFailure(SensitiveDataRedactor.redact(error.localizedDescription))
             }
             self.isCheckingMAAEnvironment = false
             self.maaEnvironmentTask = nil
             self.maaEnvironmentRequestID = nil
         }
+    }
+
+    private func recordMAAEnvironmentFailure(_ output: String, reason: String = "无法读取版本") {
+        let inline = !output.isEmpty && output.count <= 100 && !output.contains(where: \.isNewline)
+        maaVersionSummary = "检测失败：" + (inline ? output : reason)
+        maaEnvironmentDiagnostic = inline || output.isEmpty ? nil : output
     }
 
     private func invalidateMAAEnvironment() {
@@ -919,6 +934,7 @@ final class AppModel: ObservableObject {
         maaEnvironmentRequestID = nil
         isCheckingMAAEnvironment = false
         maaVersionSummary = "尚未检测"
+        maaEnvironmentDiagnostic = nil
     }
 
     func updateMAACore(channel: MAAUpdateChannel = .stable) {
@@ -1057,6 +1073,7 @@ final class AppModel: ObservableObject {
         reloadActivityHistory()
         guard !isWorkflowRunning, !applicationUpdateState.blocksWorkflow else { return }
         guard FileManager.default.isExecutableFile(atPath: configuration.cliPath) else {
+            maaEnvironmentDiagnostic = nil
             maaVersionSummary = "未找到可执行的 maa-cli，请检查路径。"
             return
         }
@@ -1141,7 +1158,7 @@ final class AppModel: ObservableObject {
                     self.applicationUpdateState = .idle
                     self.applicationUpdateNotice = "已取消检查，可随时重新检查。"
                 } else {
-                    self.applicationUpdateState = .failed(error.localizedDescription)
+                    self.applicationUpdateState = .failed(error.localizedDescription, retry: .validateCache)
                 }
             }
             self.completeApplicationUpdateOperation()
@@ -1216,7 +1233,7 @@ final class AppModel: ObservableObject {
                 applicationUpdateNotice = "下载已取消，可以稍后重新下载。"
                 return
             }
-            applicationUpdateState = .failed(error.localizedDescription)
+            applicationUpdateState = .failed(error.localizedDescription, retry: .download(release))
         }
     }
 
@@ -1313,13 +1330,14 @@ final class AppModel: ObservableObject {
         guard !applicationUpdateState.isBusy else { return }
         applicationUpdateNotice = nil
         automaticApplicationDownloadPaused = false
-        applicationUpdateTask?.cancel()
-        applicationUpdateState = .checking
-        applicationUpdateStartedAt = Date()
-        applicationUpdateTask = Task { [weak self] in
-            guard let self else { return }
-            await self.performApplicationUpdateCheck()
-            self.completeApplicationUpdateOperation()
+        restorePreparedApplicationUpdateOrCheck()
+    }
+
+    func retryApplicationUpdate() {
+        guard case let .failed(_, retry) = applicationUpdateState else { return }
+        switch retry {
+        case .check, .validateCache: checkForApplicationUpdate()
+        case let .download(release): downloadApplicationUpdate(release)
         }
     }
 
@@ -1482,7 +1500,7 @@ final class AppModel: ObservableObject {
             NSApplication.shared.terminate(nil)
         } catch {
             applicationUpdateInstallLock = nil
-            applicationUpdateState = .failed(error.localizedDescription)
+            applicationUpdateState = .failed(error.localizedDescription, retry: .validateCache)
         }
     }
 
@@ -1538,7 +1556,6 @@ final class AppModel: ObservableObject {
                 maaUpdateActivity = nil
             } else {
                 activityNavigationRequest = nil
-                activityPendingSource = nil
                 if case .session = activitySelection { activitySelection = nil }
             }
             showFeedback("\(title)已清除", destination: destination)
@@ -1563,44 +1580,69 @@ final class AppModel: ObservableObject {
         let state = executionState.forGameDays(of: configuration.clients, at: currentDate)
         guard step.task == .fight, !isWorkflowRunning,
               !state.isResolved(step.key), !state.needsFightConfirmation(step.key),
-              state.fightProgress?[step.key]?.canReselectRegularStage == true,
               let plan = configuration.plans.first(where: { $0.id == step.planID && $0.isEnabled(.fight) }),
               let client = configuration.clients.first(where: { $0.id == step.clientID && $0.enabled }),
               client.accounts.contains(where: { $0.id == step.accountID && plan.includes($0) })
         else { return false }
-        return true
+        if state.fightProgress?[step.key]?.canReselectRegularStage == true { return true }
+        let result = state.fightResults?[step.key]
+        return result?.status == .failed && result?.reason == .missingRegularTarget
+            && plan.fight.usesCustomSettings && plan.fight.stageStrategy == .fixed
     }
 
     func openFightStageSettings(for step: WorkflowStep) {
         reloadActivityHistory()
         guard canOpenFightStageSettings(for: step) else {
-            showFeedback("作战状态已变化，请查看最新待办")
+            showFeedback("作战状态已变化，请重新选择要处理的作战")
             return
         }
+        planActivityRequest = nil
         fightSettingsPlanID = step.planID
         selection = .plan(step.planID)
     }
 
     func showPlanActivity(_ planID: UUID) {
         guard configuration.plans.contains(where: { $0.id == planID }) else { return }
-        activityNavigationRequest = nil
-        activityPendingSource = nil
-        selectCurrentPlan(planID)
-        activitySelection = .plan(planID)
-        selection = .activity
+        fightSettingsPlanID = nil
+        planActivityRequest = planID
+        selection = .plan(planID)
     }
 
-    func showPendingWork(from session: ActivitySession) {
-        guard let planID = session.planID,
-              configuration.plans.contains(where: { $0.id == planID }) else { return }
-        guard let roundID = session.roundID else {
-            showFeedback("这次运行已归档，请查看当前待办")
+    func reviewFight(in planID: UUID) {
+        reloadActivityHistory()
+        let items = continuation(for: planID).fightRecoveryItems
+        if items.count == 1, let item = items.first {
+            presentFightRecovery(item)
+        } else if !items.isEmpty {
+            showPlanActivity(planID)
+        } else {
+            showFeedback("当前方案已没有需要处理的作战")
+        }
+    }
+
+    func reviewFight(_ item: FightRecoveryItem) {
+        reloadActivityHistory()
+        guard continuation(for: item.step.planID).fightRecoveryItems.contains(item) else {
+            showFeedback("作战状态已变化，请重新核实结果")
             return
         }
-        activityNavigationRequest = nil
-        activitySelection = .plan(planID)
-        activityPendingSource = .init(planID: planID, startedAt: session.startedAt, roundID: roundID)
-        selection = .activity
+        presentFightRecovery(item)
+    }
+
+    private func presentFightRecovery(_ item: FightRecoveryItem) {
+        guard !isFightRecoveryBusy else {
+            showFeedback("运行或更新结束后可处理作战")
+            return
+        }
+        let fight = configuration.plans.first { $0.id == item.step.planID }?.fight
+        if item.usesAccountStageEditor(in: fight) {
+            fightRecoveryDestination = .stage(.init(clientID: item.step.clientID, accountID: item.step.accountID,
+                label: pendingWorkContext(item.step), stage: fightStageMemory.stage(clientID: item.step.clientID, accountID: item.step.accountID)))
+        } else if canOpenFightStageSettings(for: item.step) {
+            openFightStageSettings(for: item.step)
+        } else {
+            fightRecoveryDestination = .review(item)
+        }
     }
 
     func showArrangement(for planID: UUID, opensAtSchedule: Bool = false) {
@@ -1622,7 +1664,6 @@ final class AppModel: ObservableObject {
             return
         }
         activityNavigationRequest = nil
-        activityPendingSource = nil
         activitySearch = ""
         activityFilter = .all
         if isWorkflowRunning {
@@ -1635,7 +1676,7 @@ final class AppModel: ObservableObject {
         reloadActivityHistory()
         activityNavigationRequest = nil
         guard let session = ActivityHistory.sessions(from: activityEntries).first(where: { $0.runID == runID }) else {
-            showFeedback("该次运行记录已被清除，可在活动记录中打开诊断日志目录")
+            showFeedback("这次运行记录已被清除，可从侧栏的“查找日志”查看诊断文件")
             selection = .activity
             return
         }
@@ -2225,7 +2266,7 @@ final class AppModel: ObservableObject {
     }
 
     private func latestExternalRunEntry() -> LogEntry? {
-        guard let latest = activityEntries.last else { return nil }
+        guard let latest = activityEntries.last(where: { !$0.isManualFightDecision }) else { return nil }
         guard let lockDate = try? directories.lock
             .resourceValues(forKeys: [.contentModificationDateKey])
             .contentModificationDate

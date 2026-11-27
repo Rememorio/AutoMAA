@@ -1,26 +1,23 @@
+import AutoMAAKit
 import SwiftUI
+
+extension PlanContinuation {
+    var blockingFightAction: String? { newRoundTasks == 0 ? fightReviewAction : nil }
+}
 
 struct PlanRunControl: View {
     @EnvironmentObject private var model: AppModel
-    let planID: UUID
-    var showsTitle = false
+    let summary: DashboardPlanSummary
+    private var planID: UUID { summary.id }
 
     var body: some View {
-        switch model.planRunState(planID: planID) {
+        switch summary.runState {
         case .ready:
-            let progress = model.continuation(for: planID)
-            if progress.newRoundTasks > 0 {
-                if showsTitle {
-                    titledRunButton
-                } else {
-                    ActionIconButton(title: actionTitle(model.runTitle(for: planID)), symbol: "play.fill",
-                                     tint: .maaAccent, help: model.runHelp(for: planID)) {
-                        model.runPlan(planID)
-                    }
-                }
-            } else if progress.unconfirmed > 0 {
-                secondaryAction("处理结果", symbol: "exclamationmark.circle", help: actionTitle("处理待确认结果")) {
-                    model.showPlanActivity(planID)
+            if summary.progress.newRoundTasks > 0 {
+                titledRunButton
+            } else if let action = summary.progress.blockingFightAction {
+                secondaryAction(action, symbol: "exclamationmark.circle", help: actionTitle(action)) {
+                    model.reviewFight(in: planID)
                 }
             } else {
                 unavailableRunButton("没有可执行任务")
@@ -39,8 +36,7 @@ struct PlanRunControl: View {
     }
 
     private func actionTitle(_ title: String) -> String {
-        let name = model.configuration.plans.first { $0.id == planID }?.displayName ?? "当前方案"
-        return "\(title) · \(name)"
+        "\(title) · \(summary.plan.displayName)"
     }
 
     private var titledRunButton: some View {
@@ -53,17 +49,10 @@ struct PlanRunControl: View {
     }
 
     private func unavailableRunButton(_ title: String) -> some View {
-        let button = Button {} label: {
-            Label(showsTitle ? "运行一轮" : title, systemImage: "play.fill")
+        Button {} label: {
+            Label("运行新一轮", systemImage: "play.fill")
         }
-        return Group {
-            if showsTitle {
-                button.buttonStyle(.borderedProminent).tint(.maaAction).controlSize(.large)
-            } else {
-                button.labelStyle(.iconOnly).frame(width: 26, height: 26)
-                    .buttonStyle(.borderless).foregroundStyle(.secondary)
-            }
-        }
+        .buttonStyle(.borderedProminent).tint(.maaAction).controlSize(.large)
         .disabled(true)
         .help(actionTitle(title))
         .accessibilityLabel(actionTitle(title))

@@ -24,7 +24,9 @@ struct ClientEditorView: View {
                     TextField("选择 .app", text: $client.appPath)
                         .accessibilityLabel("应用路径")
                         .help(client.appPath.isEmpty ? "选择要运行的游戏应用" : client.appPath)
-                    ActionTextButton(title: "选择应用…", symbol: "folder", help: "选择游戏应用…", action: chooseApplication)
+                    ActionTextButton(title: "选择应用…", symbol: "folder", help: "选择游戏应用…") {
+                        if let url = GameApplicationPicker.select(currentPath: client.appPath) { client.chooseApplication(url) }
+                    }
                 }
             }
             EditorFieldRow(title: "") {
@@ -64,16 +66,23 @@ struct ClientEditorView: View {
             client.kind = kind
         })
     }
+}
 
-    private func chooseApplication() {
+@MainActor
+enum GameApplicationPicker {
+    static func select(currentPath: String) -> URL? {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.application]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        if !client.appPath.isEmpty { panel.directoryURL = URL(filePath: client.appPath).deletingLastPathComponent() }
-        if panel.runModal() == .OK, let url = panel.url {
-            client.appPath = url.path
-            if let identifier = Bundle(url: url)?.bundleIdentifier { client.bundleIdentifier = identifier }
-        }
+        if !currentPath.isEmpty { panel.directoryURL = URL(filePath: currentPath).deletingLastPathComponent() }
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+}
+
+extension ClientConfiguration {
+    mutating func chooseApplication(_ url: URL) {
+        appPath = url.path
+        if let identifier = Bundle(url: url)?.bundleIdentifier { bundleIdentifier = identifier }
     }
 }

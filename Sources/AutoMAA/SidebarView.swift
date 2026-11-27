@@ -9,16 +9,16 @@ struct SidebarView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 9) {
-                BrandLogo().frame(width: 32, height: 32)
+                BrandLogo().frame(width: 28, height: 28)
                 Text("AutoMAA").font(.headline)
                 Spacer()
             }
-            .padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 18)
+            .padding(.horizontal, 14).padding(.vertical, 10)
             List(selection: $model.selection) {
                 Label("今日总览", systemImage: "square.grid.2x2")
                     .tag(SidebarSelection.overview)
                 planHeader
-                    .padding(.top, 18)
+                    .padding(.top, 6)
                     .selectionDisabled()
                     .listRowBackground(Color.clear)
                 ForEach(model.configuration.plans) { plan in
@@ -36,9 +36,6 @@ struct SidebarView: View {
                         }
                         .tag(SidebarSelection.plan(plan.id))
                 }
-                Color.clear.frame(height: 12)
-                    .listRowInsets(EdgeInsets())
-                    .selectionDisabled().accessibilityHidden(true)
                 Label("客户端与账号", systemImage: "desktopcomputer")
                     .tag(SidebarSelection.clients)
                 Label("运行记录", systemImage: "clock.arrow.circlepath")
@@ -81,7 +78,7 @@ struct SidebarView: View {
 
     private var footer: some View {
         VStack(alignment: .leading, spacing: 2) {
-            SidebarOperationStatus()
+            if model.isWorkflowRunning { SidebarOperationStatus() }
             Divider().padding(.horizontal, 8).padding(.bottom, 6)
             footerButton("帮助与公告", symbol: "questionmark.circle") {
                 NSWorkspace.shared.open(model.documentationURL)

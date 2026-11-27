@@ -1,4 +1,7 @@
+import AppKit
 import AutoMAAKit
+import ImageIO
+import UniformTypeIdentifiers
 import Foundation
 import Testing
 @testable import AutoMAA
@@ -68,6 +71,63 @@ struct ClientWorkspaceSelectionTests {
         let account = created.accounts[0]
         let newAccount = ClientWorkspaceSelection.account(clientID: created.id, accountID: account.id)
         #expect(resolve(newAccount, [first, created]) == newAccount)
+    }
+
+    @MainActor
+    @Test("client artwork falls back for missing paths, non-app folders and bundles without artwork")
+    func clientArtworkFallback() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "client-artwork-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = root.appending(path: "Fixture.app")
+        #expect(!ClientApplicationAppearance.read(at: "").isMissing)
+        #expect(ClientApplicationAppearance.read(at: app.path).isMissing)
+        for path in [app, root.appending(path: "MissingArtwork.app")] {
+            let contents = path.appending(path: "Contents")
+            try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+            #expect(ClientApplicationAppearance.read(at: contents.path).icon == nil)
+            var info = ["CFBundlePackageType": "APPL", "CFBundleIdentifier": "org.example.automaa.artwork", "CFBundleName": "Fixture"]
+            if path != app {
+                info["CFBundleIconFile"] = "Missing.icns"
+                info["CFBundleIconName"] = "MissingAppIcon"
+            }
+            try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+                .write(to: contents.appending(path: "Info.plist"))
+            let appearance = ClientApplicationAppearance.read(at: path.path)
+            #expect(appearance.icon == nil)
+            #expect(!appearance.isMissing)
+        }
+    }
+
+    @MainActor
+    @Test("the client uses its bundled artwork without Finder launch-status overlays", arguments: ["icns", "png"])
+    func readsDeclaredClientArtwork(fileType: String) throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "client-artwork-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = root.appending(path: "Fixture.app")
+        let contents = app.appending(path: "Contents")
+        let resources = contents.appending(path: "Resources")
+        try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+        var metadata: [String: Any] = ["CFBundlePackageType": "APPL", "CFBundleIdentifier": "org.example.automaa.icon"]
+        if fileType == "icns" { metadata["CFBundleIconFile"] = "Artwork" }
+        else { metadata["CFBundleIcons"] = ["CFBundlePrimaryIcon": ["CFBundleIconFiles": ["Artwork"]]] }
+        try PropertyListSerialization.data(fromPropertyList: metadata, format: .xml, options: 0)
+            .write(to: contents.appending(path: "Info.plist"))
+
+        let artwork = resources.appending(path: fileType == "icns" ? "Artwork.icns" : "Artwork@2x.png")
+        let type: UTType = fileType == "icns" ? .icns : .png
+        let image = NSImage(size: NSSize(width: 128, height: 128), flipped: false) { bounds in
+            NSColor.systemPurple.setFill()
+            bounds.fill()
+            return true
+        }
+        let bitmap = try #require(image.cgImage(forProposedRect: nil, context: nil, hints: nil))
+        let destination = try #require(CGImageDestinationCreateWithURL(artwork as CFURL, type.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, bitmap, nil)
+        try #require(CGImageDestinationFinalize(destination))
+
+        let expected = try #require(NSImage(contentsOf: artwork)?.tiffRepresentation)
+        let displayed = try #require(ClientApplicationAppearance.read(at: app.path).icon?.tiffRepresentation)
+        #expect(displayed.elementsEqual(expected))
     }
 
     private func resolve(_ selection: ClientWorkspaceSelection?, _ clients: [ClientConfiguration],

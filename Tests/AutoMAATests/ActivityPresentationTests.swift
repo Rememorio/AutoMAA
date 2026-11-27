@@ -5,12 +5,56 @@ import Testing
 
 @Suite("Activity presentation")
 struct ActivityPresentationTests {
+    @Test("a historical fight reports its original uncertainty without prompting for a current action")
+    func recordedFightReason() {
+        let result = FightResult(status: .unconfirmed, stage: "1-7", reason: .interruptedBattle)
+        #expect(ActivityResultLine(result).title == "作战结果未确认（目标：1-7） · 作战中断")
+        #expect(result.description.contains("请检查游戏结果"))
+    }
+
+    @Test("timeline context follows visible rows and distinct identities even when display names match")
+    func contextualLogSubtitles() {
+        let account = AccountConfiguration(name: "示例")
+        let namesake = AccountConfiguration(name: "示例")
+        let client = ClientConfiguration(name: "客户端", kind: .official, appPath: "",
+            address: "127.0.0.1:49195", profileName: "demo", bundleIdentifier: "test.client.one", accounts: [account, namesake])
+        var second = client
+        second.id = UUID()
+        let clients = [client, second]
+        let event = LogEntry(level: .info, message: "账号「原名称」：正在执行", clientID: client.id, accountID: account.id)
+        var otherAccount = event
+        otherAccount.accountID = namesake.id
+        var otherClient = otherAccount
+        otherClient.clientID = second.id
+        var clientOnly = otherClient
+        clientOnly.accountID = nil
+        var warning = clientOnly
+        warning.level = .warning
+        var error = warning
+        error.level = .error
+        let visible = [event, event, otherAccount, otherClient, clientOnly, clientOnly, warning, error]
+        let flags = visible.indices.map { ActivityRecordPresentation.showsContext(in: visible, at: $0) }
+        #expect(flags == [true, false, true, true, true, false, true, true])
+        #expect([event, otherAccount, otherClient].map { ActivityRecordPresentation.context($0, clients: clients) }
+            == ["客户端 · 示例", "客户端 · 示例", "客户端 · 示例"])
+        let filtered = Array(visible.dropFirst())
+        #expect(ActivityRecordPresentation.showsContext(in: filtered, at: 0))
+        #expect(filtered.first?.message == "账号「原名称」：正在执行")
+    }
+
     @Test("carried fights in old history do not display drops earned in the original run")
     func carriedFightDrops() {
         let result = FightResult(status: .unconfirmed, totalDrops: "剿灭：合成玉 × 370")
         var entry = LogEntry(level: .warning, message: "账号：保留待确认作战，继续其他任务；请在活动记录的当前待办中处理",
                              phase: .runningTask, task: .fight, fightResult: result)
         #expect(entry.recordedDropsSummary == nil)
+        #expect(entry.isCarriedForwardFight)
+        entry.message = "账号：上次作战结果待核实，本次跳过作战并继续其他任务"
+        #expect(entry.isCarriedForwardFight)
+        entry.message = "已跳过"
+        entry.carriedForwardFight = true
+        #expect(entry.recordedDropsSummary == nil)
+        entry.carriedForwardFight = nil
         entry.message = "理智作战：剿灭已完成；常规结果未确认"
         #expect(entry.recordedDropsSummary == result.dropsSummary)
     }
@@ -77,7 +121,7 @@ struct ActivityPresentationTests {
 
         let notices = session([.init(level: .warning, message: "重试提醒"), complete])
         #expect(notices.outcome == .completed)
-        #expect(ActivityRecordPresentation.summary(notices).contains("1 条提醒"))
+        #expect(ActivityRecordPresentation.summary(notices) == "本轮已处理 1/1 项")
         #expect(ActivityResultSummary(session: notices).notices.count == 1)
 
         let cases: [(LogEntry, ActivityOutcome)] = [
@@ -220,6 +264,131 @@ struct ActivityPresentationTests {
         let earlier = LogEntry(level: .warning, message: "下载重试")
         let failed = LogEntry(level: .error, message: "更新失败", phase: .failed)
         #expect(ActivityResultSummary(session: session([earlier, failed])).notices.map(\.id) == [earlier.id])
+    }
+
+    @Test("only earlier failures followed by the same recorded task's success belong to its handled details")
+    func recoveredAttempts() throws {
+        let run = UUID(), client = UUID(), account = UUID()
+        let issue = LogEntry(level: .error, message: "失败", runID: run, phase: .runningTask,
+                             clientID: client, accountID: account, task: .mall)
+        let warning = LogEntry(level: .warning, message: "需要人工处理", runID: run, phase: .runningTask,
+                               clientID: client, accountID: account, task: .mall)
+        let done = LogEntry(level: .success, message: "重试后已完成", runID: run, phase: .runningTask,
+                            clientID: client, accountID: account, task: .mall)
+        var foreign = issue
+        foreign.id = UUID()
+        foreign.accountID = UUID()
+        let entries = session([issue, warning, foreign, done]).entries
+        let summary = ActivityResultSummary(session: .init(id: "recovered", runID: run, entries: entries))
+        #expect(summary.earlierFailuresByOutcome[done.id]?.map(\.id) == [issue.id])
+        #expect(summary.notices.map(\.id) == [warning.id])
+        #expect(summary.exceptions.map(\.id) == [foreign.id])
+        let legacy = ActivityResultSummary(session: .init(id: "legacy", runID: nil, entries: entries))
+        #expect(legacy.earlierFailuresByOutcome.isEmpty)
+    }
+
+    @Test("record selection preserves a visible object and prefers the latest history when idle")
+    func visibleSelection() {
+        let plan = UUID(), stale = UUID()
+        let history = ["recent", "older"]
+        #expect(ActivityWorkspaceSelection.restored(nil, current: nil, history: history) == .session("recent"))
+        #expect(ActivityWorkspaceSelection.restored(.session("older"), current: .plan(plan), history: history) == .session("older"))
+        #expect(ActivityWorkspaceSelection.restored(.plan(stale), current: nil, history: history) == .session("recent"))
+        #expect(ActivityWorkspaceSelection.restored(.plan(plan), current: nil, history: []) == nil)
+        #expect(ActivityWorkspaceSelection.restored(.plan(stale), current: .plan(plan), history: history) == .plan(plan))
+        #expect(ActivityWorkspaceSelection.restored(nil, current: .backgroundRun, history: history) == .backgroundRun)
+        #expect(ActivityWorkspaceSelection.restored(nil, current: nil, history: []) == nil)
+    }
+
+    @Test("unconfirmed fights remain visible ahead of handled outcomes; incomplete history retains round totals")
+    func separatesHandledTasks() {
+        let account = UUID()
+        let fight = LogEntry(level: .warning, message: "上次作战待核实", accountID: account, task: .fight,
+                             fightResult: .init(status: .unconfirmed))
+        let success = LogEntry(level: .success, message: "领取奖励已完成", accountID: account, task: .award)
+        let result = LogEntry(level: .warning, message: "部分完成", phase: .completed,
+                              runSummary: .init(completedSteps: 1, failedSteps: 0, unexecutedSteps: 0, totalSteps: 2, unconfirmedSteps: 1))
+        let run = session([fight, success, result])
+        let rendered = ActivityResultSummary(session: run)
+        #expect(rendered.exceptions.map(\.id) == [fight.id])
+        #expect(rendered.accounts.flatMap(\.completedTasks).map(\.id) == [success.id])
+        #expect(ActivityRecordPresentation.summary(run).isEmpty)
+        #expect(ActivityRecordPresentation.summary(session([result])).contains("1 项待核实"))
+    }
+
+    @Test("account results show each executed stage and its drops exactly once, including mixed outcomes")
+    func visibleFightResults() throws {
+        let weekly = FightResult(status: .completed, stage: "地图", times: 2, reason: .weeklyLimit,
+                                 totalDrops: "合成玉 × 740", kind: .annihilation)
+        let regular = FightResult(status: .completed, stage: "1-7", times: 3, totalDrops: "源岩 × 2", kind: .regular,
+                                  missingDropRuns: 1)
+        let combined = FightResult(status: .completed, stage: "地图 + 1-7", times: 5, totalDrops: "剿灭：合成玉 × 740\n常规：源岩 × 2")
+        var event = LogEntry(level: .success, message: "理智作战", accountID: UUID(), task: .fight,
+                             fightResult: combined, executedFightPhases: [weekly, regular])
+        let rows = event.handledFightLines
+        #expect(rows.map(\.title) == ["剿灭 · 地图 × 2 次", "1-7 × 3 次"])
+        #expect(rows.map(\.drops) == ["总掉落：合成玉 × 740", "已识别掉落：源岩 × 2"])
+        #expect(rows.last?.note == "1 次掉落未识别")
+        #expect(try JSONDecoder().decode(LogEntry.self, from: JSONEncoder().encode(event)) == event)
+
+        let interrupted = FightResult(status: .unconfirmed, stage: "1-7", times: 1, reason: .interruptedBattle,
+                                      totalDrops: "龙门币 × 12", kind: .regular)
+        event.level = .warning
+        event.fightResult = interrupted
+        event.executedFightPhases = [weekly, interrupted]
+        #expect(event.handledFightLines == [rows[0]])
+        #expect(event.exceptionLine.title.contains("未确认"))
+        #expect(event.exceptionLine.drops == "已识别掉落：龙门币 × 12")
+        let account = try #require(event.accountID)
+        let otherAccount = UUID()
+        let award = LogEntry(level: .success, message: "领取奖励已完成", accountID: account, task: .award)
+        let other = LogEntry(level: .success, message: "基建已完成", accountID: otherAccount, task: .infrast)
+        let summary = ActivityResultSummary(session: session([award, other, event, event]))
+        #expect(summary.exceptions.map(\.id) == [event.id])
+        #expect(summary.accounts.compactMap(\.fight).flatMap(\.handledFightLines) == [rows[0]])
+        #expect(summary.accounts.map { $0.completedTasks.map(\.id) } == [[award.id], [other.id]])
+    }
+
+    @Test("skipped and manually handled tasks have no inherited harvest, and old combined records keep their wording")
+    func historicalFightEvidence() throws {
+        let prior = FightResult(status: .manuallyHandled, stage: "1-7", times: 9, totalDrops: "旧掉落")
+        let weekly = FightResult(status: .completed, stage: "Annihilation", times: 1, kind: .annihilation)
+        var event = LogEntry(level: .info, message: "已人工处理", accountID: UUID(), task: .fight,
+                             fightResult: prior, executedFightPhases: [weekly])
+        #expect(event.handledFightLines.map(\.title) == ["剿灭 × 1 次", "常规作战已人工处理"])
+        #expect(event.handledFightLines.compactMap(\.drops).isEmpty)
+        #expect(event.recordedDropsSummary == nil)
+        event.fightResult = weekly
+        event.executedFightPhases = []
+        #expect(event.handledFightLines.map(\.title) == ["本轮作战已处理，本次未执行"])
+        event.carriedForwardFight = true
+        #expect(event.handledFightLines.isEmpty)
+        #expect(event.exceptionLine == .init(title: "上次作战待核实，本次跳过"))
+
+        event.carriedForwardFight = nil
+        event.executedFightPhases = nil
+        event.message = "理智作战：剿灭已完成（地图 × 1）；常规无需作战 · 理智不足"
+        let restored = try JSONDecoder().decode(LogEntry.self, from: JSONEncoder().encode(event))
+        #expect(restored.executedFightPhases == nil)
+        #expect(restored.handledFightLines.map(\.title) == [event.message])
+    }
+
+    @Test("a settled phase remains visible when cancellation precedes the final report and is shown only once")
+    func interruptedBetweenPhases() {
+        let account = UUID()
+        let settled = FightResult(status: .completed, stage: "Annihilation", times: 1, totalDrops: "合成玉 × 370")
+        let phase = LogEntry(level: .info, message: "剿灭已完成", phase: .runningTask, accountID: account, task: .fight,
+                             executedFightPhases: [settled])
+        let stopped = LogEntry(level: .info, message: "已停止", phase: .cancelled)
+        let interrupted = ActivityResultSummary(session: session([phase, phase, stopped]))
+        #expect(interrupted.exceptions.isEmpty)
+        #expect(interrupted.accounts.flatMap(\.fightLines) == [ActivityResultLine(settled)])
+
+        let final = LogEntry(level: .success, message: "理智作战已完成", phase: .runningTask, accountID: account, task: .fight,
+                             fightResult: settled, executedFightPhases: [settled])
+        let completed = ActivityResultSummary(session: session([phase, final]))
+        #expect(completed.accounts.flatMap(\.fightLines) == [ActivityResultLine(settled)])
+        #expect(completed.accounts.allSatisfy { $0.unreportedFightPhases.isEmpty })
     }
 
     private func session(_ entries: [LogEntry]) -> ActivitySession {

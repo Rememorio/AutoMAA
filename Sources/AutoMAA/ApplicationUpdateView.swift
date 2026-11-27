@@ -34,7 +34,7 @@ struct ApplicationUpdateView: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    if case let .failed(message) = model.applicationUpdateState {
+                    if case let .failed(message, _) = model.applicationUpdateState {
                         Label(message, systemImage: "exclamationmark.circle")
                             .font(.callout).foregroundStyle(.red).textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
@@ -51,9 +51,6 @@ struct ApplicationUpdateView: View {
             Divider()
             VStack(alignment: .leading, spacing: 10) {
                 operation
-                if model.isWorkflowRunning {
-                    Text("当前任务结束后可下载或安装更新。").font(.caption).foregroundStyle(.secondary)
-                }
             }
             .frame(maxWidth: .infinity, minHeight: 76, alignment: .leading)
             .padding(16)
@@ -104,12 +101,12 @@ struct ApplicationUpdateView: View {
             UpdateProgressRow(
                 message: model.applicationUpdateState.isRestoring ? "正在校验已下载的更新…" : "正在检查新版本…",
                 startedAt: model.applicationUpdateStartedAt,
-                limit: "上限 \(UpdatePolicy.durationDescription(UpdatePolicy.checkTimeout))，含重试",
                 cancel: { model.cancelApplicationUpdate() }
             )
         case let .available(release):
             HStack {
-                Text("下载后将校验更新，安装前仍需确认重启。").font(.caption).foregroundStyle(.secondary)
+                Text(model.isWorkflowRunning ? "当前任务结束后可下载更新。" : "下载完成后，可选择何时重启安装。")
+                    .font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("稍后") { dismissWindow() }.keyboardShortcut(.cancelAction)
                 Button("下载更新") { model.downloadApplicationUpdate(release) }
@@ -121,15 +118,15 @@ struct ApplicationUpdateView: View {
                 message: model.applicationUpdateProgress?.message ?? "正在准备下载 v\(release.version)…",
                 progress: model.applicationUpdateProgress?.download,
                 startedAt: model.applicationUpdateStartedAt,
-                limit: "上限 \(UpdatePolicy.durationDescription(UpdatePolicy.packageTimeout))，含重试与校验",
                 cancel: { model.cancelApplicationUpdate() }
             )
         case .cancelling:
-            UpdateProgressRow(message: "", startedAt: model.applicationUpdateStartedAt,
-                              limit: "清理完成后即可重新操作", isCancelling: true, cancel: {})
+            UpdateProgressRow(message: "", startedAt: nil, isCancelling: true, cancel: {})
         case let .ready(prepared):
             HStack {
-                Text("更新已校验，保存配置后重启安装。").font(.caption).foregroundStyle(.secondary)
+                if model.isWorkflowRunning {
+                    Text("当前任务结束后可重启安装。").font(.caption).foregroundStyle(.secondary)
+                }
                 Spacer()
                 Button("稍后") { dismissWindow() }.keyboardShortcut(.cancelAction)
                 Button("重启并安装") { model.restartAndInstallApplicationUpdate(prepared) }
@@ -141,12 +138,16 @@ struct ApplicationUpdateView: View {
                 ProgressView().controlSize(.small)
                 Text("正在退出并安装更新…").font(.callout)
             }
-        case .failed:
+        case let .failed(_, retry):
             HStack {
-                Text("当前版本仍可使用。").font(.caption).foregroundStyle(.secondary)
+                if retry.requiresIdleWorkflow && model.isWorkflowRunning {
+                    Text("当前任务结束后可重新下载。").font(.caption).foregroundStyle(.secondary)
+                }
                 Spacer()
                 Button("关闭") { dismissWindow() }.keyboardShortcut(.cancelAction)
-                Button("重新检查") { model.checkForApplicationUpdate() }.keyboardShortcut(.defaultAction)
+                Button(retry.title) { model.retryApplicationUpdate() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(model.isWorkflowRunning && retry.requiresIdleWorkflow)
             }
         }
     }

@@ -62,7 +62,7 @@ struct ActivityHistoryRefreshTests {
         weekly = try store.load()
         model.reloadActivityHistory()
         #expect(model.activityEntries.isEmpty)
-        #expect(model.runTitle(for: plan.id) == "运行一轮")
+        #expect(model.runTitle(for: plan.id) == "运行新一轮")
         #expect(model.continuation(for: plan.id).newRoundTasks == 1)
         let reviewedItem = try #require(model.continuation(for: plan.id).fightRecoveryItems.first)
         #expect(reviewedItem.canConfirmWeeklyCompletion)
@@ -71,11 +71,11 @@ struct ActivityHistoryRefreshTests {
         model.reloadActivityHistory()
         #expect(model.isWorkflowRunning)
         #expect(model.continuation(for: plan.id).fightRecoveryItems.map(\.step) == [step])
-        model.confirmWeeklyAnnihilation(step)
+        model.confirmWeeklyAnnihilation(reviewedItem)
         #expect(try store.load() == weekly)
         lock = nil
         model.reloadActivityHistory()
-        model.confirmWeeklyAnnihilation(step)
+        model.confirmWeeklyAnnihilation(reviewedItem)
         #expect(!model.isWorkflowRunning)
         #expect(model.activeRunID == nil)
         #expect(model.continuation(for: plan.id).fightRecoveryItems.isEmpty)
@@ -219,7 +219,7 @@ struct ActivityHistoryRefreshTests {
         plan.stepOrder = [.fight]
         model.configuration = AppConfiguration(cliPath: "/usr/bin/true", clients: [client], plans: [plan])
         let step = WorkflowStep(planID: plan.id, clientID: client.id, accountID: account.id, task: .fight)
-        #expect(model.runTitle(for: plan.id) == "运行一轮")
+        #expect(model.runTitle(for: plan.id) == "运行新一轮")
         let first = LogEntry(level: .info, message: "正在执行理智作战", phase: .runningTask,
                              planID: plan.id, clientID: client.id, accountID: account.id, task: .fight)
         HistoryStore(directories: directories).append(first)
@@ -240,12 +240,12 @@ struct ActivityHistoryRefreshTests {
         state.record(FightResult(status: .failed), for: step.key)
         try ExecutionStateStore(directories: directories).save(state)
         model.reloadActivityHistory()
-        #expect(model.runTitle(for: plan.id, request: .resume(roundID: round.id)) == "继续未完成")
+        #expect(model.runTitle(for: plan.id, request: .resume(roundID: round.id)) == "继续本轮")
         state.record(FightResult(status: .completed, times: 1), for: step.key)
         try ExecutionStateStore(directories: directories).save(state)
         model.reloadActivityHistory()
         #expect(model.runTitle(for: plan.id, request: .resume(roundID: round.id)) == "本轮已完成")
-        #expect(model.runTitle(for: plan.id) == "运行一轮")
+        #expect(model.runTitle(for: plan.id) == "运行新一轮")
         #expect(model.continuation(for: plan.id).fightRecoveryItems.isEmpty)
     }
 

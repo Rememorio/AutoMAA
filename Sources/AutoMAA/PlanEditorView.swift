@@ -22,44 +22,31 @@ struct PlanEditorView: View {
         } detail: {
             switch detailSection {
             case .settings:
-                VStack(spacing: 0) {
-                    if let notice = model.continuation(for: plan.id).taskSettingsNotice(isRunning: isCurrentPlanRunning) {
-                        HStack(spacing: 12) {
-                            Label(notice, systemImage: "exclamationmark.circle")
-                                .font(.callout)
-                                .foregroundStyle(ActivityOutcome.awaitingReview.color)
-                            Spacer(minLength: 8)
-                            PendingWorkLinkButton { model.showPlanActivity(plan.id) }
-                        }
-                        .padding(.horizontal, 16).padding(.vertical, 4)
-                        Divider()
-                    }
-                    if let selectedTask {
-                        PlanTaskInspector(plan: $plan, task: selectedTask)
-                    } else {
-                        ContentUnavailableView("选择任务", systemImage: "slider.horizontal.3",
-                                               description: Text("在执行顺序中选择要设置的任务。"))
-                    }
+                if let selectedTask {
+                    PlanTaskInspector(plan: $plan, task: selectedTask)
+                } else {
+                    ContentUnavailableView("选择任务", systemImage: "slider.horizontal.3")
                 }
             case .activity:
                 PlanActivityView(planID: plan.id)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .workspaceToolbar(title: plan.displayName, actions: toolbarActions,
+        .workspaceToolbar(for: .plan(plan.id), title: plan.displayName, actions: toolbarActions,
             modes: WorkspaceToolbarModes(options: [
                 .init(title: "任务设置", symbol: "slider.horizontal.3", help: "任务设置 · 调整所选任务的参数"),
-                .init(title: "运行概况", symbol: "checklist", help: "运行概况 · 查看本方案当前轮待办、进度与最近结果")
+                .init(title: "运行概况", symbol: "checklist", help: "运行概况 · 查看本轮进度，继续未完成任务或处理作战结果")
             ], selectedIndex: detailSection == .settings ? 0 : 1) { index in
                 detailSection = index == 0 ? .settings : .activity
             })
         .onAppear { selectInitialTask() }
-        .onChange(of: model.fightSettingsPlanID) { _, _ in applyFightSettingsRequest() }
         .onChange(of: plan.id) { _, _ in
             showsRename = false
             confirmsDelete = false
             selectInitialTask()
         }
+        .onChange(of: model.planActivityRequest) { _, _ in applyDetailRequest() }
+        .onChange(of: model.fightSettingsPlanID) { _, _ in applyDetailRequest() }
         .onChange(of: isCurrentPlanRunning) { _, running in
             if running { detailSection = .activity }
         }
@@ -98,13 +85,26 @@ struct PlanEditorView: View {
 
     private var taskList: some View {
         let statuses = taskStatuses
+        let progress = model.continuation(for: plan.id)
         return VStack(spacing: 0) {
-            Text("\(accountSummary) · \(scheduleSummary)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 16).padding(.vertical, 10)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text([accountSummary, scheduleSummary].compactMap { $0 }.joined(separator: " · "))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                if model.planRunState(planID: plan.id) == .configurationIncomplete,
+                   detailSection == .settings || progress.resumableRoundID == nil {
+                    Button("检查配置") { model.readinessRequest = PlanReadinessRequest(id: plan.id) }
+                        .buttonStyle(.link).fixedSize()
+                } else if detailSection == .settings, !model.isFightRecoveryBusy,
+                          let action = progress.blockingFightAction {
+                    Button(action) { model.reviewFight(in: plan.id) }
+                        .buttonStyle(.link).fixedSize()
+                }
+            }
+            .font(.caption)
+            .padding(.horizontal, 14).padding(.vertical, 9)
             Divider()
 
             List(selection: taskSelection) {
@@ -128,7 +128,9 @@ struct PlanEditorView: View {
     }
 
     private func taskRow(_ task: TaskKind, status: PlanTaskStatus) -> some View {
-        HStack(spacing: 8) {
+        let summary = taskSummary(task)
+        let fightBudget = task == .fight ? plan.fight.regularFightBudgetSummary : nil
+        return HStack(spacing: 8) {
             Toggle("启用\(task.title)", isOn: enabledBinding(for: task))
                 .labelsHidden()
                 .toggleStyle(.checkbox)
@@ -136,11 +138,16 @@ struct PlanEditorView: View {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(task.title).font(.body.weight(.medium))
-                    Text(taskSummary(task))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .help(taskSummary(task))
+                    if let fightBudget {
+                        Text(fightBudget)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if !summary.isEmpty {
+                        Text(summary).font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(1).help(summary)
+                    }
                 }
                 Spacer(minLength: 0)
                 PlanTaskFeedback(status: status)
@@ -151,7 +158,7 @@ struct PlanEditorView: View {
             .accessibilityElement(children: .ignore)
             .accessibilityAddTraits(.isButton)
             .accessibilityLabel("\(model.isWorkflowRunning ? "查看" : "编辑")\(task.title)参数")
-            .accessibilityValue([taskSummary(task), status.description].filter { !$0.isEmpty }.joined(separator: "，"))
+            .accessibilityValue([fightBudget, summary, status.description].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "，"))
             .accessibilityAction { selectTask(task) }
         }
         .padding(.vertical, 2)
@@ -180,17 +187,18 @@ struct PlanEditorView: View {
     }
 
     private var accountSummary: String {
-        targetAccountCount == 0 ? "尚未选择账号" : "执行 \(targetAccountCount) 个账号"
+        targetAccountCount == 0 ? "尚未选择账号" : "\(targetAccountCount) 个账号"
     }
 
-    private var scheduleSummary: String {
+    private var scheduleSummary: String? {
         if model.isPlanScheduleCurrent(plan) {
+            if plan.schedule.rules.count > 1 { return "定时 \(plan.schedule.rules.count) 个时段" }
             return "定时：\(PlanScheduleFormatter.summary(plan.schedule))"
         }
         if plan.schedule.enabled || model.installedPlanIDs.contains(plan.id) {
             return model.isSynchronizingSchedules ? "定时同步中" : "定时需检查"
         }
-        return "未设定时"
+        return nil
     }
 
     private var isCurrentPlanRunning: Bool {
@@ -216,13 +224,17 @@ struct PlanEditorView: View {
     private func selectInitialTask() {
         selectedTask = plan.stepOrder.first
         detailSection = isCurrentPlanRunning ? .activity : .settings
-        applyFightSettingsRequest()
+        applyDetailRequest()
     }
 
-    private func applyFightSettingsRequest() {
-        guard model.fightSettingsPlanID == plan.id else { return }
-        model.fightSettingsPlanID = nil
-        selectTask(.fight)
+    private func applyDetailRequest() {
+        if model.fightSettingsPlanID == plan.id {
+            model.fightSettingsPlanID = nil
+            selectTask(.fight)
+        } else if model.planActivityRequest == plan.id {
+            model.planActivityRequest = nil
+            detailSection = .activity
+        }
     }
 
     private func selectTask(_ task: TaskKind) {
@@ -255,24 +267,26 @@ struct PlanEditorView: View {
     }
 
     private func taskSummary(_ task: TaskKind) -> String {
+        guard plan.isEnabled(task) else { return "" }
         switch task {
         case .fight:
-            var parts = [plan.fight.usesCustomSettings ? (plan.fight.stageStrategy == .fixed ? plan.fight.stage : plan.fight.stageStrategy.title) : "MAA 推荐参数"]
-            if plan.fight.usesCustomSettings, let times = plan.fight.times { parts.append("最多 \(times) 次") }
+            var parts: [String] = []
+            if plan.fight.usesCustomSettings {
+                parts.append(plan.fight.stageStrategy == .fixed ? plan.fight.stage : plan.fight.stageStrategy.title)
+            }
             if plan.fight.weeklyAnnihilation.enabled { parts.append("每周剿灭") }
             return parts.joined(separator: " · ")
         case .recruit:
-            return plan.recruit.usesCustomSettings
-                ? "\(plan.recruit.times) 次招募 · \(plan.recruit.expedite ? "使用加急许可" : "不使用加急许可")"
-                : "MAA 推荐参数"
+            guard plan.recruit.usesCustomSettings else { return "" }
+            return "\(plan.recruit.times) 次" + (plan.recruit.expedite ? " · 使用加急许可" : "")
         case .infrast:
-            return plan.infrast.usesCustomSettings ? plan.infrast.mode.title : "完整换班 · 心情 30%"
+            return plan.infrast.usesCustomSettings ? plan.infrast.mode.title : ""
         case .mall:
-            guard plan.mall.usesCustomSettings else { return "MAA 推荐参数" }
+            guard plan.mall.usesCustomSettings else { return "" }
             return [plan.mall.visitFriends ? "访友信用" : nil, plan.mall.shopping ? "商店购物" : nil, plan.mall.creditFight ? "信用作战" : nil]
                 .compactMap { $0 }.joined(separator: " · ")
         case .award:
-            guard plan.award.usesCustomSettings else { return "日常与周常奖励" }
+            guard plan.award.usesCustomSettings else { return "" }
             let count = [plan.award.dailyWeekly, plan.award.mail, plan.award.freeRecruit, plan.award.orundum, plan.award.mining, plan.award.specialAccess].filter { $0 }.count
             return "\(count) 项奖励"
         }

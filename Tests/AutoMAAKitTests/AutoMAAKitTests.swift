@@ -731,6 +731,10 @@ final class AutoMAAKitTests: XCTestCase {
                 && $0.id.contains(config.clients[1].accounts[0].id.uuidString)
                 && $0.message.contains("常规关卡记录")
         })
+
+        config.plans[0].fight.fallbackStage = "1-7"
+        let withFallback = ConfigurationValidator.readinessProblems(in: config, planID: plan.id, fightStageMemory: memory)
+        XCTAssertFalse(withFallback.contains { $0.id.contains("fight-memory") })
     }
 
     func testFightStageMemoryStoresOnlySuccessfulRegularStages() {
@@ -2679,7 +2683,7 @@ final class AutoMAAKitTests: XCTestCase {
 
         let failed = WorkflowNotificationComposer.notification(for: WorkflowReport(failedSteps: 2))
         XCTAssertEqual(failed?.title, "自动化流程有步骤失败")
-        XCTAssertEqual(failed?.body, "有 2 个步骤未完成，请打开 AutoMAA 查看活动记录。")
+        XCTAssertEqual(failed?.body, "有 2 个步骤未完成，可在运行记录查看原因。")
     }
 
     func testImportantNotificationComposerDoesNotRepeatDeliveredRecruitNotice() {
@@ -3298,6 +3302,32 @@ final class AutoMAAKitTests: XCTestCase {
         )
         XCTAssertFalse(restoredMemory.requiresRecovery(clientID: client.id, accountID: account.id))
         XCTAssertEqual(restoredMemory.stage(clientID: client.id, accountID: account.id), "AT-4")
+    }
+
+    func testRecommendedTaskTimeoutsIgnoreRetainedCustomParameters() {
+        let policy = MAACommandTimeoutPolicy.standard
+        var plan = AutomationPlan.lightRoutine
+        plan.recruit.usesCustomSettings = false
+        plan.infrast.usesCustomSettings = false
+        for retainedTimes in [Int.min, 0, 12, Int.max] {
+            plan.recruit.times = retainedTimes
+            XCTAssertEqual(policy.taskTimeout(for: .recruit, plan: plan), 420)
+        }
+        for retainedMode in [InfrastMode.collectOnly, .customSchedule] {
+            plan.infrast.mode = retainedMode
+            XCTAssertEqual(policy.taskTimeout(for: .infrast, plan: plan), 1_800)
+        }
+    }
+
+    func testStepRetryLimitIsValidatedBeforeRunningThePlan() {
+        var config = AppConfiguration(cliPath: "/usr/bin/true", clients: [])
+        let planID = config.plans[0].id
+        for retries in [Int.min, -1, 0, 1, 3, 4, Int.max] {
+            config.plans[0].policy.maxRetries = retries
+            let problem = ConfigurationValidator.readinessProblems(in: config, planID: planID)
+                .first { $0.id == "plan-\(planID.uuidString.lowercased())-max-retries" }
+            XCTAssertEqual(problem?.severity, (0...3).contains(retries) ? nil : .error)
+        }
     }
 
     func testWorkflowTimeoutPolicyMatchesTaskWorkload() {

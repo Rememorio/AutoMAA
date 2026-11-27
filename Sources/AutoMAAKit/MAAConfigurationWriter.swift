@@ -143,7 +143,7 @@ public struct MAAConfigurationWriter: Sendable {
                     "confirm": confirm,
                     "first_tags": plan.recruit.firstTags,
                     "extra_tags_mode": plan.recruit.extraTagsMode.rawValue,
-                    "times": plan.recruit.times,
+                    "times": plan.recruit.effectiveTimes,
                     "set_time": true,
                     "expedite": plan.recruit.expedite,
                     "preserve_tags": plan.recruit.preserveTags,
@@ -157,7 +157,7 @@ public struct MAAConfigurationWriter: Sendable {
                     "confirm": [3, 4, 5],
                     "first_tags": [],
                     "extra_tags_mode": 0,
-                    "times": 4,
+                    "times": plan.recruit.effectiveTimes,
                     "set_time": true,
                     "expedite": false,
                     "preserve_tags": ["支援机械"],
@@ -172,7 +172,7 @@ public struct MAAConfigurationWriter: Sendable {
         case .infrast:
             if plan.infrast.usesCustomSettings {
                 parameters = [
-                    "mode": plan.infrast.mode.rawValue,
+                    "mode": plan.infrast.effectiveMode.rawValue,
                     "facility": plan.infrast.facilities.map(\.rawValue),
                     "drones": plan.infrast.drones.rawValue,
                     "threshold": plan.infrast.threshold,
@@ -192,7 +192,7 @@ public struct MAAConfigurationWriter: Sendable {
                 ]
             } else {
                 parameters = [
-                    "mode": 0,
+                    "mode": plan.infrast.effectiveMode.rawValue,
                     "facility": [
                         "Mfg", "Trade", "Control", "Power", "Reception",
                         "Office", "Dorm", "Processing", "Training",

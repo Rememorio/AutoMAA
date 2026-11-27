@@ -199,9 +199,11 @@ public struct FightStageMemory: Codable, Equatable, Sendable {
 public enum FightStagePolicy {
     public static let regularStageHint = "请输入常规关卡编号，例如 1-7、CE-6 或 PR-A-1"
 
-    public static func requiresExplicitRegularStage(in configuration: FightConfiguration) -> Bool {
-        configuration.weeklyAnnihilation.enabled
+    public static func requiresExplicitRegularStage(in configuration: FightConfiguration, progress: FightProgress? = nil) -> Bool {
+        guard progress?.isRegularManuallyHandled != true else { return false }
+        return configuration.weeklyAnnihilation.enabled
             || (configuration.usesCustomSettings && configuration.stageStrategy == .rememberedRegular)
+            || (progress?.annihilation != nil && progress?.regular?.isResolved != true)
     }
 
     public static func fallback(in configuration: FightConfiguration, after result: FightResult, primaryStage: String) -> String? {
@@ -219,12 +221,13 @@ public enum FightStagePolicy {
         _ configuration: FightConfiguration,
         memory: FightStageMemory,
         clientID: UUID,
-        accountID: UUID
+        accountID: UUID,
+        progress: FightProgress? = nil
     ) -> FightStageResolution {
         if configuration.usesCustomSettings, configuration.stageStrategy == .fixed {
             return .value(configuration.stage.trimmingCharacters(in: .whitespacesAndNewlines))
         }
-        if requiresExplicitRegularStage(in: configuration) {
+        if requiresExplicitRegularStage(in: configuration, progress: progress) {
             return memory.stage(clientID: clientID, accountID: accountID).map(FightStageResolution.value) ?? .unavailable
         }
         return configuration.usesCustomSettings ? .value("") : .omitted
@@ -238,6 +241,21 @@ public enum FightStagePolicy {
               value.contains(where: { $0.isNumber })
         else { return nil }
         return value
+    }
+
+    static func canResumeWithoutSettingRegularTarget(
+        in configuration: FightConfiguration,
+        memory: FightStageMemory,
+        clientID: UUID,
+        accountID: UUID,
+        progress: FightProgress? = nil
+    ) -> Bool {
+        guard requiresExplicitRegularStage(in: configuration, progress: progress) else { return true }
+        let stage = resolve(configuration, memory: memory, clientID: clientID, accountID: accountID, progress: progress)
+        if case let .value(value) = stage, regularStage(from: value, times: 1) != nil {
+            return true
+        }
+        return configuration.usesCustomSettings && regularStage(from: configuration.fallbackStage, times: 1) != nil
     }
 
     public static func isAnnihilation(_ stage: String) -> Bool {

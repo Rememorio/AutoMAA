@@ -1,4 +1,4 @@
-import AutoMAAKit
+@testable import AutoMAAKit
 import Foundation
 import Testing
 @testable import AutoMAA
@@ -40,21 +40,98 @@ struct DashboardPresentationTests {
             .init(id: "warning", severity: .warning, message: "提醒"),
         ]
         let value = snapshot([summary(first, issues: issues), summary(second, issues: issues)], current: first.id)
-        #expect(value.attention.count == 2)
-        #expect(value.attention[0].detail == "运行前检查")
-        #expect(value.attention[1].detail == "方案乙")
-        #expect(value.attention[1].destination == .readiness(second.id))
+        #expect(value.focusedBlocker == "环境缺失")
+        #expect(value.attention.count == 1)
+        #expect(value.attention.first?.detail == "方案乙")
+        #expect(value.attention.first?.destination == .readiness(second.id))
+
+        let running = snapshot([summary(first, issues: issues), summary(second, issues: issues)],
+                               current: first.id, active: first.id, running: true)
+        #expect(running.focusedBlocker == nil)
+        #expect(running.attention.count == 2)
+    }
+
+    @Test("the focus names an external blocking plan and keeps unrelated issues available")
+    func externalBlockerInFocus() {
+        let first = AutomationPlan(name: "方案甲")
+        let other = AutomationPlan(name: "方案乙")
+        let issues: [ReadinessIssue] = [
+            .init(id: "invalid", severity: .error, message: "关卡无效", scope: .plan(other.id)),
+            .init(id: "missing", severity: .error, message: "缺少配置", scope: .plan(other.id)),
+        ]
+        let plans = [summary(first, issues: issues), summary(other, issues: issues)]
+        let value = snapshot(plans, current: first.id)
+        #expect(value.focusedBlocker == "「方案乙」：关卡无效")
+        #expect(value.attention.map(\.title) == ["缺少配置"])
+        let onboarding = snapshot(plans, current: first.id, hasClients: false)
+        #expect(onboarding.focusedBlocker == nil)
+        #expect(onboarding.attention.isEmpty)
     }
 
     @Test("unconfirmed checkpoint remains actionable with no history")
     func checkpointOutlivesHistory() {
         let plan = AutomationPlan(name: "方案")
         var progress = emptyProgress()
-        progress.unconfirmed = 2
+        progress.unconfirmed = 1
+        progress.fightRecoveryItems = [
+            recovery(for: plan, result: .init(status: .unconfirmed)),
+            recovery(for: plan, result: .init(status: .failed, reason: .missingRegularTarget)),
+        ]
+        progress.newRoundTasks = 1
         let value = snapshot([summary(plan, progress: progress)], current: plan.id)
         #expect(value.recentRuns.isEmpty)
-        #expect(value.attention.map(\.title) == ["2 项结果待确认"])
-        #expect(value.attention.first?.destination == .activity(plan.id))
+        #expect(value.attention.map(\.title) == ["2 项作战待处理"])
+        #expect(value.attention.first?.destination == .reviewFight(plan.id))
+        #expect(value.attention.first?.accountStep == nil)
+
+        progress.newRoundTasks = 0
+        progress.fightRecoveryItems.removeLast()
+        let focused = snapshot([summary(plan, progress: progress)], current: plan.id)
+        #expect(focused.focusedPlan?.progress.blockingFightAction == "核实作战")
+        #expect(focused.attention.isEmpty)
+        let other = summary(.init(name: "其他方案"))
+        let unfocused = snapshot([summary(plan, progress: progress), other], current: other.id)
+        #expect(unfocused.attention.map(\.destination) == [.reviewFight(plan.id)])
+    }
+
+    @Test("a single account recovery names its next action", arguments: [
+        (FightResult(status: .unconfirmed, kind: .regular), "核实作战结果"),
+        (FightResult(status: .unnecessary, reason: .navigationUnavailable, kind: .annihilation), "核实本周剿灭"),
+        (FightResult(status: .failed, reason: .missingRegularTarget), "设置常规目标"),
+    ])
+    func singleRecoveryAction(result: FightResult, title: String) {
+        let plan = AutomationPlan(name: "方案")
+        let item = recovery(for: plan, result: result)
+        var progress = emptyProgress()
+        progress.newRoundTasks = 1
+        progress.fightRecoveryItems = [item]
+        progress.unconfirmed = result.status == .unconfirmed ? 1 : 0
+        let value = snapshot([summary(plan, progress: progress)], current: plan.id)
+        #expect(value.attention.map(\.title) == [title])
+        #expect(value.attention.first?.accountStep == item.step)
+    }
+
+    @Test("only an idle current round with remaining work appears once as resumable")
+    func resumableRound() {
+        let plan = AutomationPlan(name: "方案")
+        var progress = emptyProgress()
+        progress.pending = 2
+        progress.hasStarted = true
+        progress.newRoundTasks = 3
+        func items(running: Bool = false) -> [DashboardAttentionItem] {
+            snapshot([summary(plan, progress: progress)], current: plan.id, running: running).attention
+        }
+        #expect(items().isEmpty)
+        progress.roundID = UUID()
+        #expect(items().map(\.destination) == [.resumePlan(plan.id)])
+        #expect(items(running: true).isEmpty)
+        progress.unconfirmed = 1
+        progress.fightRecoveryItems = [recovery(for: plan, result: .init(status: .unconfirmed))]
+        #expect(items().map(\.destination) == [.reviewFight(plan.id)])
+        progress.unconfirmed = 0
+        progress.fightRecoveryItems.removeAll()
+        progress.hasStarted = false
+        #expect(items().isEmpty)
     }
 
     @Test("account scope includes only selected enabled accounts on enabled clients")
@@ -106,6 +183,12 @@ struct DashboardPresentationTests {
         .init(configuration: .init(clients: []), planID: UUID(), state: .init(dateKey: ""), history: [])
     }
 
+    private func recovery(for plan: AutomationPlan, result: FightResult) -> FightRecoveryItem {
+        .init(step: .init(planID: plan.id, clientID: UUID(), accountID: UUID(), task: .fight), result: result,
+              roundID: UUID(), clientKind: .yoStarJP, gameDayStart: Date(), weeklyAttempt: nil,
+              canConfirmWeeklyCompletion: result.reason == .navigationUnavailable, retryStage: "", canHandleRegularWithoutRetry: false)
+    }
+
     @Test("warnings remain available on a plan outside the current focus")
     func unfocusedPlanWarnings() {
         let first = AutomationPlan(name: "方案甲")
@@ -144,13 +227,16 @@ struct DashboardPresentationTests {
     private func summary(_ plan: AutomationPlan, configuration: AppConfiguration = .init(clients: []),
                          issues: [ReadinessIssue] = [], progress: PlanContinuation? = nil,
                          schedule: DashboardScheduleState = .unscheduled) -> DashboardPlanSummary {
-        .init(plan: plan, configuration: configuration, progress: progress ?? emptyProgress(),
-              readiness: .init(planID: plan.id, issues: issues), runState: .ready, schedule: schedule)
+        let readiness = PlanReadiness(planID: plan.id, issues: issues)
+        return .init(plan: plan, configuration: configuration, progress: progress ?? emptyProgress(),
+                     readiness: readiness, runState: readiness.hasBlockingErrors ? .configurationIncomplete : .ready,
+                     schedule: schedule)
     }
 
     private func snapshot(_ plans: [DashboardPlanSummary], current: UUID?, active: UUID? = nil,
-                          activeRun: UUID? = nil, running: Bool = false, entries: [LogEntry] = []) -> DashboardSnapshot {
+                          activeRun: UUID? = nil, running: Bool = false, hasClients: Bool = true,
+                          entries: [LogEntry] = []) -> DashboardSnapshot {
         .init(plans: plans, currentPlanID: current, activePlanID: active, activeRunID: activeRun,
-              isRunning: running, entries: entries)
+              isRunning: running, hasClients: hasClients, entries: entries)
     }
 }

@@ -115,13 +115,30 @@ public struct WeeklyAnnihilationStore: Sendable {
 
     /// A confirmation updates only the weekly record; it never dispatches a workflow.
     @discardableResult
+    public func confirmComplete(_ item: FightRecoveryItem, client: ClientConfiguration, at date: Date = Date()) throws -> WeeklyAnnihilationState {
+        try confirmComplete(client: client, accountID: item.step.accountID, at: date, review: item)
+    }
+
+    @discardableResult
     public func confirmComplete(client: ClientConfiguration, accountID: UUID, at date: Date = Date()) throws -> WeeklyAnnihilationState {
+        try confirmComplete(client: client, accountID: accountID, at: date, review: nil)
+    }
+
+    private func confirmComplete(client: ClientConfiguration, accountID: UUID, at date: Date,
+                                 review: FightRecoveryItem?) throws -> WeeklyAnnihilationState {
         try directories.prepare()
         let lock = try ProcessLock(url: directories.lock)
         return try withExtendedLifetime(lock) {
             var state = try load()
             guard state.canConfirmComplete(client: client, accountID: accountID, at: date) else {
                 throw WeeklyAnnihilationConfirmationError.noCurrentAttempt
+            }
+            if let review {
+                let execution = try ExecutionStateStore(directories: directories).loadForExecution()
+                guard review.canConfirmWeeklyCompletion, review.matches(execution, client: client, at: date),
+                      review.weeklyAttempt == state.entry(clientID: client.id, accountID: accountID) else {
+                    throw WeeklyAnnihilationConfirmationError.noCurrentAttempt
+                }
             }
             state.record(.init(status: .unnecessary, stage: "Annihilation", reason: .confirmedWeeklyLimit),
                          client: client, accountID: accountID, weekStart: GameWeek(client: client.kind, at: date).start, at: date)

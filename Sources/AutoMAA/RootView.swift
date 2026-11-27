@@ -22,6 +22,15 @@ struct RootView: View {
         .sheet(item: $model.entityEditor) { request in
             EntityEditorSheet(request: request).environmentObject(model)
         }
+        .sheet(item: $model.fightRecoveryDestination) { destination in
+            switch destination {
+            case let .review(item):
+                FightRecoveryReview(item: item).environmentObject(model)
+                    .focusedSceneValue(\.workspaceActive, false)
+            case let .stage(context):
+                FightStageEditorSheet(context: context).environmentObject(model)
+            }
+        }
         .sheet(item: $model.arrangementRequest) { request in
             if let plan = model.configuration.plans.first(where: { $0.id == request.id }) {
                 PlanExecutionArrangement(plan: plan, opensAtSchedule: request.opensAtSchedule)
@@ -73,7 +82,7 @@ struct RootView: View {
                 PlanEditorView(plan: binding)
             } else {
                 ContentUnavailableView("方案不存在", systemImage: "clock.badge.exclamationmark")
-                    .workspaceToolbar(title: "自动化方案")
+                    .workspaceToolbar(for: .plan(id), title: "自动化方案")
             }
         case .client, .account, .clients:
             ClientsView().onChange(of: model.selection, initial: true) { _, selection in

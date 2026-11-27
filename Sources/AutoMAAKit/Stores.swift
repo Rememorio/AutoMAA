@@ -212,7 +212,8 @@ public struct HistoryStore: Sendable {
             let removed = ActivityHistory.sessions(from: logs).filter {
                 $0.isStandaloneMaintenance == (scope == .maintenance)
             }
-            let ids = Set(removed.flatMap { $0.entries.map(\.id) })
+            var ids = Set(removed.flatMap { $0.entries.map(\.id) })
+            if scope == .runs { ids.formUnion(logs.lazy.filter(\.isManualFightDecision).map(\.id)) }
             let kept = logs.filter { !ids.contains($0.id) }
             if !ids.isEmpty { try Self.encoder.encode(kept).write(to: directories.history, options: .atomic) }
             return kept

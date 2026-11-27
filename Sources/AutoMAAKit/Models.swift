@@ -281,10 +281,12 @@ public struct FightConfiguration: Codable, Equatable, Sendable {
 }
 
 public struct RecruitConfiguration: Codable, Equatable, Sendable {
+    private static let recommendedTimes = 4
+
     public var enabled = true
     public var settingsMode = TaskSettingsMode.custom
     public var refresh = true
-    public var times = 4
+    public var times = RecruitConfiguration.recommendedTimes
     public var expedite = false
     public var autoConfirm3 = true
     public var autoConfirm4 = true
@@ -293,6 +295,8 @@ public struct RecruitConfiguration: Codable, Equatable, Sendable {
     public var firstTags: [String] = []
     public var extraTagsMode = RecruitExtraTagsMode.standard
     public var preserveTags = ["支援机械"]
+
+    var effectiveTimes: Int { usesCustomSettings ? times : Self.recommendedTimes }
 
     public init() {}
 
@@ -321,6 +325,8 @@ public struct InfrastConfiguration: Codable, Equatable, Sendable {
     public var continueTraining = true
     public var customSchedulePath = ""
     public var customSchedulePlanIndex = 0
+
+    var effectiveMode: InfrastMode { usesCustomSettings ? mode : .fullShift }
 
     public init() {}
 
@@ -439,6 +445,8 @@ public struct ClientConfiguration: Codable, Identifiable, Equatable, Sendable {
 }
 
 public struct ExecutionPolicy: Codable, Equatable, Sendable {
+    public static let retryRange = 0...3
+
     public var hotUpdateBeforeRun = true
     public var maxRetries = 1
     public var continueAfterStepFailure = true
@@ -717,6 +725,8 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
     public var runID: UUID?
     public var phase: RunnerPhase?
     public var startBlocker: WorkflowStartBlocker?
+    public var carriedForwardFight: Bool?
+    public var manualFightDecision: Bool?
     public var progress: Double?
     public var planID: UUID?
     public var clientID: UUID?
@@ -725,7 +735,18 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
     public var runSummary: WorkflowRunSummary?
     public var updateInformation: MAAUpdateInformation?
     public var fightResult: FightResult?
+    /// Outcomes of phases actually attempted during this run, before they are combined for the checkpoint.
+    public var executedFightPhases: [FightResult]?
     public var roundID: UUID?
+
+    public var isManualFightDecision: Bool {
+        if let manualFightDecision { return manualFightDecision }
+        // Older versions wrote the review as its own one-step completed run.
+        return level == .info && phase == .completed && task == .fight
+            && runID != nil && planID != nil && clientID != nil && accountID != nil
+            && runSummary?.totalSteps == 1 && runSummary?.manuallyHandledSteps == 1
+            && message == "已人工处理：今天不再重试本方案的常规作战；原始结果仍未确认"
+    }
 
     public init(
         id: UUID = UUID(),
@@ -736,6 +757,8 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
         runID: UUID? = nil,
         phase: RunnerPhase? = nil,
         startBlocker: WorkflowStartBlocker? = nil,
+        carriedForwardFight: Bool? = nil,
+        manualFightDecision: Bool? = nil,
         progress: Double? = nil,
         planID: UUID? = nil,
         clientID: UUID? = nil,
@@ -744,6 +767,7 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
         runSummary: WorkflowRunSummary? = nil,
         updateInformation: MAAUpdateInformation? = nil,
         fightResult: FightResult? = nil,
+        executedFightPhases: [FightResult]? = nil,
         roundID: UUID? = nil
     ) {
         self.id = id
@@ -754,6 +778,8 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
         self.runID = runID
         self.phase = phase
         self.startBlocker = startBlocker
+        self.carriedForwardFight = carriedForwardFight
+        self.manualFightDecision = manualFightDecision
         self.progress = progress
         self.planID = planID
         self.clientID = clientID
@@ -762,6 +788,7 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
         self.runSummary = runSummary
         self.updateInformation = updateInformation
         self.fightResult = fightResult
+        self.executedFightPhases = executedFightPhases
         self.roundID = roundID
     }
 }
@@ -831,7 +858,7 @@ public enum ActivityHistory {
     ) -> [ActivitySession] {
         var grouped: [String: (UUID?, [LogEntry])] = [:]
 
-        for entry in entries {
+        for entry in entries where !entry.isManualFightDecision {
             let key: String
             if let runID = entry.runID {
                 key = "run-\(runID.uuidString.lowercased())"

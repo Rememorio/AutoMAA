@@ -9,6 +9,8 @@ struct PlanTaskInspector: View {
     let task: TaskKind
     @State private var useCustomFightStage: Bool?
     @State private var fightStageEditor: FightStageEditorContext?
+    @State private var showsMoreFightSettings = false
+    @ScaledMetric(relativeTo: .body) private var fieldLabelWidth: CGFloat = 70
 
     var body: some View {
         VStack(spacing: 0) {
@@ -16,7 +18,7 @@ struct PlanTaskInspector: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(task.title).font(.headline).accessibilityAddTraits(.isHeader)
                     if !plan.isEnabled(task) {
-                        Text("已停用，参数仍保留").font(.caption).foregroundStyle(.secondary)
+                        Text("已停用").font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 Spacer(minLength: 8)
@@ -36,25 +38,26 @@ struct PlanTaskInspector: View {
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .toggleStyle(.checkbox)
-                .disabled(model.isWorkflowRunning)
             }
             .id("\(plan.id.uuidString)-\(task.rawValue)")
         }
-        .onChange(of: plan.id) { _, _ in useCustomFightStage = nil }
+        .onChange(of: plan.id) { _, _ in
+            useCustomFightStage = nil
+            showsMoreFightSettings = false
+        }
         .sheet(item: $fightStageEditor) { context in
             FightStageEditorSheet(context: context)
         }
     }
 
     private var parameterMode: some View {
-        Picker("参数模式", selection: usesCustomSettings) {
+        Picker("\(task.title)参数模式", selection: usesCustomSettings) {
             Text("MAA 推荐参数").tag(false)
             Text("自定义参数").tag(true)
         }
         .pickerStyle(.menu)
         .labelsHidden()
         .fixedSize(horizontal: true, vertical: false)
-        .accessibilityLabel("\(task.title)参数模式")
         .help("切回推荐参数仍保留自定义值")
     }
 
@@ -63,10 +66,10 @@ struct PlanTaskInspector: View {
         if usesCustomSettings.wrappedValue {
             switch task {
             case .fight: fightParameters
-            case .recruit: recruitParameters
-            case .infrast: infrastParameters
-            case .mall: mallParameters
-            case .award: awardParameters
+            case .recruit: recruitParameters.disabled(model.isWorkflowRunning)
+            case .infrast: infrastParameters.disabled(model.isWorkflowRunning)
+            case .mall: mallParameters.disabled(model.isWorkflowRunning)
+            case .award: awardParameters.disabled(model.isWorkflowRunning)
             }
         } else {
             Text(recommendedSummary)
@@ -75,7 +78,7 @@ struct PlanTaskInspector: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         if task == .fight {
-            weeklyAnnihilation
+            weeklyAnnihilation.disabled(model.isWorkflowRunning)
             fightAccountDetails
         }
     }
@@ -83,26 +86,23 @@ struct PlanTaskInspector: View {
     private var fightParameters: some View {
         VStack(alignment: .leading, spacing: 20) {
             PlanFormSection("常规作战") {
-                Picker("关卡策略", selection: fightStageStrategy) {
+                menuField("关卡策略", selection: fightStageStrategy) {
                     ForEach(FightStageStrategy.allCases) { strategy in
                         Text(strategy.title).tag(strategy)
                     }
                 }
-                .pickerStyle(.menu)
-                .fixedSize(horizontal: true, vertical: false)
                 .help(plan.fight.stageStrategy.detail)
                 if let stageStrategyHint { parameterHint(stageStrategyHint) }
                 if plan.fight.stageStrategy == .fixed {
                     if customFightStage.wrappedValue {
-                        HStack(spacing: 8) {
-                            Text("关卡")
+                        fieldRow("关卡") {
                             TextField("如 1-7 或活动关卡", text: $plan.fight.stage)
                                 .textFieldStyle(.roundedBorder)
                                 .frame(width: FormWidth.stage)
                                 .accessibilityLabel("固定关卡")
                         }
                     } else {
-                        Picker("关卡", selection: $plan.fight.stage) {
+                        menuField("关卡", selection: $plan.fight.stage) {
                             if FightStagePreset(rawValue: plan.fight.stage) == nil {
                                 Text("自定义：\(plan.fight.stage)").tag(plan.fight.stage)
                             }
@@ -110,35 +110,14 @@ struct PlanTaskInspector: View {
                                 Text(preset.title).tag(preset.rawValue)
                             }
                         }
-                        .pickerStyle(.menu)
-                        .fixedSize(horizontal: true, vertical: false)
                     }
                     Toggle("手动输入关卡名", isOn: customFightStage)
                     if plan.fight.stage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         parameterHint("填写要执行的固定关卡。", warning: true)
                     }
                 }
-                HStack(spacing: 8) {
-                    Text("兜底关卡")
-                    TextField("可选，留空关闭", text: $plan.fight.fallbackStage)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: FormWidth.stage)
-                        .accessibilityLabel("兜底关卡，留空关闭")
-                        .help(fallbackExplanation)
-                }
-                if !plan.fight.fallbackStage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    parameterHint(fallbackExplanation)
-                }
-            }
-            PlanFormSection("理智与次数") {
-                optionalStepper("临期理智药", field: .medicineExpireDays, value: $plan.fight.medicineExpireDays, defaultValue: 2, range: 1...365, unit: "天内")
-                if let days = plan.fight.medicineExpireDays {
-                    parameterHint("使用 \(days) 天\(days == 2 ? "（48 小时）" : "")内过期的理智药，独立于普通药额度。")
-                }
-                optionalStepper("普通理智药额度", field: .medicine, value: $plan.fight.medicine, defaultValue: 999, range: 0...999, unit: "瓶")
-                optionalStepper("源石额度", field: .stone, value: $plan.fight.stone, defaultValue: 0, range: 0...99, unit: "颗")
                 optionalStepper("限制作战次数", field: .times, value: $plan.fight.times, defaultValue: 5, range: 1...9_999, unit: "次")
-                Picker("连战次数", selection: $plan.fight.series) {
+                menuField("连战次数", selection: $plan.fight.series) {
                     Text("MAA 默认（1 次）").tag(Int?.none)
                     Text("保持游戏连战次数").tag(Int?.some(-1))
                     Text("AUTO").tag(Int?.some(0))
@@ -146,10 +125,40 @@ struct PlanTaskInspector: View {
                         Text("\(value) 次").tag(Int?.some(value))
                     }
                 }
-                .pickerStyle(.menu)
-                .fixedSize(horizontal: true, vertical: false)
-                Toggle("博朗台碎石模式", isOn: $plan.fight.drGrandet)
-                parameterHint("额度对各账号分别计算；关闭可选项沿用 MAA 默认。")
+            }
+            .disabled(model.isWorkflowRunning)
+
+            DisclosureGroup(isExpanded: $showsMoreFightSettings) {
+                VStack(alignment: .leading, spacing: 10) {
+                    fieldRow("兜底关卡") {
+                        TextField("可选，留空关闭", text: $plan.fight.fallbackStage)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: FormWidth.stage)
+                            .accessibilityLabel("兜底关卡，留空关闭")
+                            .help(fallbackExplanation)
+                    }
+                    if !plan.fight.fallbackStage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        parameterHint(fallbackExplanation)
+                    }
+                    optionalStepper("临期理智药", field: .medicineExpireDays, value: $plan.fight.medicineExpireDays, defaultValue: 2, range: 1...365, unit: "天内")
+                    if plan.fight.medicineExpireDays != nil {
+                        parameterHint("临期药单独计数，可超出普通药额度。")
+                    }
+                    optionalStepper("普通理智药额度", field: .medicine, value: $plan.fight.medicine, defaultValue: 999, range: 0...999, unit: "瓶")
+                    optionalStepper("源石额度", field: .stone, value: $plan.fight.stone, defaultValue: 0, range: 0...99, unit: "颗")
+                    Toggle("博朗台碎石模式", isOn: $plan.fight.drGrandet)
+                    parameterHint("理智药和源石额度按账号计算。")
+                }
+                .padding(.top, 8)
+                .disabled(model.isWorkflowRunning)
+            } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("更多作战设置")
+                    if !showsMoreFightSettings, let summary = plan.fight.advancedOptionsSummary {
+                        Text(summary).font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             }
         }
     }
@@ -158,11 +167,9 @@ struct PlanTaskInspector: View {
         PlanFormSection("每周剿灭") {
             Toggle("每周优先剿灭", isOn: $plan.fight.weeklyAnnihilation.enabled)
             if plan.fight.weeklyAnnihilation.enabled {
-                Picker("本周开始日", selection: $plan.fight.weeklyAnnihilation.startDay) {
+                menuField("本周开始日", selection: $plan.fight.weeklyAnnihilation.startDay) {
                     ForEach(ScheduleWeekday.allCases) { day in Text(day.title).tag(day) }
                 }
-                .pickerStyle(.menu)
-                .fixedSize(horizontal: true, vertical: false)
                 parameterHint("仅用自然理智；按各服游戏周计算，账号进度跨方案共享。")
             }
         }
@@ -186,11 +193,9 @@ struct PlanTaskInspector: View {
                 .toggleStyle(.checkbox)
             }
             PlanFormSection("标签策略") {
-                Picker("额外标签", selection: $plan.recruit.extraTagsMode) {
+                menuField("额外标签", selection: $plan.recruit.extraTagsMode) {
                     ForEach(RecruitExtraTagsMode.allCases) { mode in Text(mode.title).tag(mode) }
                 }
-                .pickerStyle(.menu)
-                .fixedSize(horizontal: true, vertical: false)
                 listField("三星首选标签", prompt: "可留空", values: $plan.recruit.firstTags)
                 listField("保留并跳过", prompt: "例如 支援机械", values: $plan.recruit.preserveTags)
             }
@@ -200,11 +205,9 @@ struct PlanTaskInspector: View {
     private var infrastParameters: some View {
         VStack(alignment: .leading, spacing: 20) {
             PlanFormSection("基建安排") {
-                Picker("基建模式", selection: $plan.infrast.mode) {
+                menuField("基建模式", selection: $plan.infrast.mode) {
                     ForEach(InfrastMode.allCases) { mode in Text(mode.title).tag(mode) }
                 }
-                .pickerStyle(.menu)
-                .fixedSize(horizontal: true, vertical: false)
                 .help(plan.infrast.mode.detail)
                 if plan.infrast.mode == .collectOnly {
                     parameterHint("收取产物，并处理无人机与会客室。")
@@ -224,11 +227,9 @@ struct PlanTaskInspector: View {
                     Stepper("方案序号：\(plan.infrast.customSchedulePlanIndex)", value: $plan.infrast.customSchedulePlanIndex, in: 0...99)
                         .fixedSize(horizontal: true, vertical: false)
                 } else {
-                    Picker("无人机用途", selection: $plan.infrast.drones) {
+                    menuField("无人机用途", selection: $plan.infrast.drones) {
                         ForEach(DroneUsage.allCases) { usage in Text(usage.title).tag(usage) }
                     }
-                    .pickerStyle(.menu)
-                    .fixedSize(horizontal: true, vertical: false)
                 }
             }
             if plan.infrast.mode != .customSchedule {
@@ -252,7 +253,7 @@ struct PlanTaskInspector: View {
                         .frame(maxWidth: FormWidth.quantityRow)
                         .accessibilityLabel("上岗最低心情")
                         .accessibilityValue("\(Int(plan.infrast.threshold * 100))%")
-                    parameterHint("仅筛选本次换班的候选干员。每天完整换班一次建议 90%。")
+                        .help("仅筛选本次换班的候选干员。")
                     Toggle("宿舍空位补信赖未满干员", isOn: $plan.infrast.dormTrust)
                     Toggle("已进驻干员不放入宿舍", isOn: $plan.infrast.dormNotStationed)
                     Toggle("源石碎片自动补货", isOn: $plan.infrast.replenish)
@@ -283,12 +284,10 @@ struct PlanTaskInspector: View {
             PlanFormSection("信用作战") {
                 Toggle("借助战通关 OF-1", isOn: $plan.mall.creditFight)
                 if plan.mall.creditFight {
-                    Picker("使用编队", selection: $plan.mall.formationIndex) {
+                    menuField("使用编队", selection: $plan.mall.formationIndex) {
                         Text("当前编队").tag(0)
                         ForEach(1...4, id: \.self) { Text("编队 \($0)").tag($0) }
                     }
-                    .pickerStyle(.menu)
-                    .fixedSize(horizontal: true, vertical: false)
                     parameterHint("赚取次日信用，需要可用的助战与理智。")
                 }
             }
@@ -326,11 +325,11 @@ struct PlanTaskInspector: View {
                                     fightStageEditor = .init(clientID: row.clientID, accountID: row.accountID,
                                                              label: row.label, stage: row.stage)
                                 }
+                                .disabled(model.isWorkflowRunning)
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    if showsRecoveryStage { parameterHint("游戏中的新常规关卡优先。") }
                 }
                 .padding(.top, 10)
             }
@@ -371,7 +370,7 @@ struct PlanTaskInspector: View {
     }
 
     private var fallbackExplanation: String {
-        "没有可用的常规目标，或选关失败且尚未开战时尝试兜底；沿用剩余额度，保留原目标。"
+        "无常规目标或开战前选关失败时使用，沿用剩余额度。"
     }
 
     private var usesCustomSettings: Binding<Bool> {
@@ -489,6 +488,30 @@ struct PlanTaskInspector: View {
         }
     }
 
+    private func fieldRow(_ title: String, @ViewBuilder control: () -> some View) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: fieldLabelWidth, alignment: .leading)
+                .accessibilityHidden(true)
+            control()
+        }
+    }
+
+    private func menuField<Value: Hashable>(
+        _ title: String, selection: Binding<Value>, @ViewBuilder options: () -> some View
+    ) -> some View {
+        let picker = Picker(title, selection: selection, content: options)
+            .pickerStyle(.menu)
+            .labelsHidden()
+        return fieldRow(title) {
+            ViewThatFits(in: .horizontal) {
+                picker.fixedSize()
+                picker
+            }
+        }
+    }
+
     private func parameterHint(_ text: String, warning: Bool = false) -> some View {
         Text(text)
             .font(.caption)
@@ -504,6 +527,39 @@ struct PlanTaskInspector: View {
         case .mall: "访问好友并购物；优先招聘许可、龙门币，避开加急许可、家具零件。信用溢出时继续购物。"
         case .award: "领取已完成的日常与周常任务奖励。"
         }
+    }
+}
+
+extension FightConfiguration {
+    var regularFightBudgetSummary: String? {
+        guard enabled else { return nil }
+        var values = usesCustomSettings ? resourceLimits(includingZero: false) : []
+        if values.isEmpty {
+            values.append("自然理智")
+            if usesCustomSettings, let times { values.append("每账号最多 \(times) 次") }
+        } else if let times {
+            values.append("最多 \(times) 次")
+        }
+        if weeklyAnnihilation.enabled { values.insert("常规", at: 0) }
+        return values.joined(separator: " · ")
+    }
+
+    var advancedOptionsSummary: String? {
+        guard usesCustomSettings else { return nil }
+        var values = resourceLimits(includingZero: true)
+        if drGrandet { values.append("博朗台碎石") }
+        let fallback = fallbackStage.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !fallback.isEmpty { values.append("兜底 \(fallback)") }
+        return values.isEmpty ? nil : values.joined(separator: " · ")
+    }
+
+    private func resourceLimits(includingZero: Bool) -> [String] {
+        var values: [String] = []
+        if let stone, stone != 0 || includingZero { values.append("源石最多 \(stone) 颗") }
+        if let medicine, medicine != 0 || includingZero { values.append("理智药最多 \(medicine) 瓶") }
+        if let medicineExpireDays { values.append("使用 \(medicineExpireDays) 天内到期药") }
+        if !values.isEmpty { values[0] = "每账号" + values[0] }
+        return values
     }
 }
 
@@ -597,7 +653,7 @@ struct FightStageEditorSheet: View {
                             .accessibilityLabel("常规目标关卡")
                             .disabled(model.isWorkflowRunning)
                     }
-                    Text("恢复剿灭或临时兜底之前的目标。请选择 MAA 可导航的已解锁关卡；游戏内的新常规关卡优先。")
+                    Text("选择 MAA 可进入的已解锁常规关卡。游戏内的新常规目标优先。")
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     if !stage.isEmpty, normalizedStage == nil {

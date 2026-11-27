@@ -18,10 +18,7 @@ struct MAAMaintenanceTests {
         try await waitUntil { FileManager.default.fileExists(atPath: fixture.arguments.path) }
         #expect(fixture.model.canCancelRun)
         #expect(fixture.model.maaUpdateActivity?.automatic == automatic)
-        #expect(fixture.model.maaUpdateActivity?.timeout == (automatic ? 1_800 : 7_200))
-        #expect(fixture.model.activityEntries.contains {
-            $0.details?.contains("本次更新上限：\(automatic ? 30 : 120) 分钟") == true
-        })
+        #expect(fixture.model.activityEntries.contains { $0.phase == .updating })
 
         fixture.model.cancelRun()
         #expect(!fixture.model.canCancelRun)
