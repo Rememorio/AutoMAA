@@ -156,6 +156,7 @@ public final class WorkflowRunner {
     private let directories: AppDirectories
     private let commandRunner: any CommandRunning
     private let resourceProbeExecutable: URL
+    private let resourceProbeTimeout: TimeInterval
     private let coreReleaseManifestFetcher: any MAACoreReleaseManifestFetching
     private let portProbe: any PortProbing
     private let gameController: any GameProcessControlling
@@ -226,6 +227,7 @@ public final class WorkflowRunner {
         maintenanceRetryDelay: Duration = UpdatePolicy.retryDelay,
         maintenanceDownloadStallTimeout: TimeInterval = UpdatePolicy.downloadStallTimeout,
         resourceProbeExecutable: URL? = nil,
+        resourceProbeTimeout: TimeInterval = 30,
         coreReleaseManifestFetcher: any MAACoreReleaseManifestFetching = MAACoreReleaseManifestClient(),
         now: @escaping @MainActor @Sendable () -> Date = { Date() },
         noticeSink: NoticeSink? = nil,
@@ -241,6 +243,7 @@ public final class WorkflowRunner {
         self.maintenanceRetryDelay = maintenanceRetryDelay
         self.maintenanceDownloadStallTimeout = maintenanceDownloadStallTimeout
         self.resourceProbeExecutable = resourceProbeExecutable ?? Self.defaultResourceProbeExecutable()
+        self.resourceProbeTimeout = resourceProbeTimeout
         self.coreReleaseManifestFetcher = coreReleaseManifestFetcher
         historyStore = HistoryStore(directories: directories)
         diagnosticLogStore = DiagnosticLogStore(directories: directories)
@@ -956,8 +959,7 @@ public final class WorkflowRunner {
             emit(.failed, "暂时无法更新识别数据：\(error.localizedDescription)", 1, .error)
             return false
         }
-        _ = lock
-        _ = lease
+        defer { withExtendedLifetime((lock, lease)) {} }
         emit(.updating, "正在更新识别数据", 0, .info)
         let outcome = await performStagedMAAUpdate(
             cliPath: cliPath,
@@ -1009,8 +1011,7 @@ public final class WorkflowRunner {
             emit(.failed, "暂时无法更新 MAA：\(error.localizedDescription)", 1, .error)
             return false
         }
-        _ = lock
-        _ = lease
+        defer { withExtendedLifetime((lock, lease)) {} }
         let component = MAAComponentUpdate.core(channel)
         let deadline = UpdateDeadline(timeout: context.timeout(for: component))
         let operation = "更新 \(component.title)"
@@ -1135,7 +1136,7 @@ public final class WorkflowRunner {
                 .info,
                 details: error.localizedDescription
             )
-            try await Task.sleep(for: maintenanceRetryDelay)
+            try await Task.sleep(for: min(maintenanceRetryDelay, .seconds(deadline.remaining)))
             guard !Task.isCancelled else { throw CancellationError() }
             return (try await deadline.perform(operation: "检查 MAA 稳定版") {
                 try await fetcher.version(at: url)
@@ -1175,12 +1176,12 @@ public final class WorkflowRunner {
         deadline: UpdateDeadline? = nil
     ) async -> StagedMAAUpdateResult {
         let deadline = deadline ?? UpdateDeadline(timeout: MAAUpdateContext.manual.timeout(for: component))
-        let timeoutMessage = UpdateTimeoutError(operation: operation, timeout: deadline.timeout).localizedDescription
-            + "；当前安装未更改"
+        let timeoutMessage = "\(operation)超过 \(UpdatePolicy.durationDescription(deadline.timeout))上限（含重试）；当前安装未更改，可重新运行维护"
         guard !Task.isCancelled else { return .cancelled }
         emit(.updating, "正在准备\(component.title)更新", 0, .info)
-        guard let paths = await maaInstallationPaths(cliPath: cliPath) else {
+        guard let paths = await maaInstallationPaths(cliPath: cliPath, deadline: deadline) else {
             if Task.isCancelled { return .cancelled }
+            if deadline.remaining == 0 { return .failed(timeoutMessage) }
             return .failed("无法定位 MaaCore、基础资源或热更新目录；当前安装没有更改")
         }
         guard !Task.isCancelled else { return .cancelled }
@@ -1192,37 +1193,49 @@ public final class WorkflowRunner {
         } catch {
             return .failed("另一个 AutoMAA 实例正在维护同一套 MAA 组件；当前安装没有更改")
         }
-        _ = installationLock
+        defer { withExtendedLifetime(installationLock) {} }
 
-        var downloadCache: MAADownloadCache?
-        var reusedDownload: MAACoreDownloadIdentity?
-        defer {
-            if let downloadCache {
-                do {
-                    try downloadCache.finish()
-                    maaDownloadRecoveryMessage = downloadCache.retainedMessage()
-                        ?? "未保留可复用的引擎包，下次更新将重新下载"
-                } catch {
-                    maaDownloadRecoveryMessage = "无法整理下载缓存，下次更新将重新检查：\(error.localizedDescription)"
-                }
-            }
-        }
+        var prepared: (cache: MAADownloadCache, identity: MAACoreDownloadIdentity?)?
         if case let .core(channel) = component {
             do {
                 let url = try await coreManifestURL(cliPath: cliPath, channel: channel,
                                                     timeout: min(UpdatePolicy.checkTimeout, deadline.remaining))
-                let cache = try MAADownloadCache(paths: paths, manifestURL: url, channel: channel)
-                downloadCache = cache
                 let fetcher = coreReleaseManifestFetcher
-                reusedDownload = try await UpdateDeadline(timeout: min(UpdatePolicy.checkTimeout, deadline.remaining))
-                    .perform(operation: "检查 MAA 下载缓存") { try await cache.prepare(fetcher: fetcher) }
-                if let message = cache.retainedMessage() { emit(.updating, message, 0, .info) }
+                prepared = try await deadline.perform(operation: "准备 MAA 下载缓存") {
+                    let cache = try MAADownloadCache(paths: paths, manifestURL: url, channel: channel)
+                    do {
+                        return (cache, try await cache.prepare(fetcher: fetcher))
+                    } catch {
+                        // Keep the previous attempt and its original integrity record.
+                        try? FileManager.default.removeItem(at: cache.directory)
+                        throw error
+                    }
+                }
+                if let message = prepared?.cache.retainedMessage() { emit(.updating, message, 0, .info) }
             } catch {
                 if Task.isCancelled { return .cancelled }
                 return .failed("无法准备 MAA 下载缓存；当前安装未更改：\(error.localizedDescription)")
             }
         }
 
+        let result = await validateAndActivateMAACandidate(cliPath: cliPath, component: component, operation: operation,
+            paths: paths, deadline: deadline, timeoutMessage: timeoutMessage,
+            downloadCache: prepared?.cache, reusedDownload: prepared?.identity)
+        if let cache = prepared?.cache {
+            do {
+                try await cache.finish()
+                maaDownloadRecoveryMessage = cache.retainedMessage() ?? "未保留可复用的引擎包，下次更新将重新下载"
+            } catch {
+                maaDownloadRecoveryMessage = "无法整理下载缓存，下次更新将重新检查：\(error.localizedDescription)"
+            }
+        }
+        return result
+    }
+
+    private func validateAndActivateMAACandidate(
+        cliPath: String, component: MAAComponentUpdate, operation: String, paths: MAAInstallationPaths,
+        deadline: UpdateDeadline, timeoutMessage: String, downloadCache: MAADownloadCache?, reusedDownload: MAACoreDownloadIdentity?
+    ) async -> StagedMAAUpdateResult {
         let staging: MAAUpdateStaging
         let installedCoreChecksum: String?
         do {
@@ -1278,7 +1291,7 @@ public final class WorkflowRunner {
         if result.timedOut || deadline.remaining == 0 {
             return .failed(timeoutMessage + "\n" + shortOutput(result))
         }
-        guard result.exitCode == 0, !result.timedOut else {
+        guard result.exitCode == 0, !result.timedOut, !result.downloadStalled else {
             if !MAAMaintenanceFailureClassifier.isTransientNetworkFailure(result),
                !result.combinedOutput.localizedCaseInsensitiveContains("failed to update resource repository"),
                downloadCache?.cachedDownload()?.file.pathExtension == "zip" {
@@ -1314,6 +1327,7 @@ public final class WorkflowRunner {
         guard !Task.isCancelled else { return .cancelled }
         guard deadline.remaining > 0 else { return .failed(timeoutMessage) }
         if let issue {
+            if issue.timedOut { return .failed(issue.guidance + "\n" + issue.details) }
             try? downloadCache?.discard()
             return .incompatible(issue)
         }
@@ -1370,12 +1384,12 @@ public final class WorkflowRunner {
                      recognitionData: MAAResourceVersion.read(at: recognition, repository: true))
     }
 
-    private func maaInstallationPaths(cliPath: String) async -> MAAInstallationPaths? {
-        async let data = maaDirectory(cliPath: cliPath, name: "data")
-        async let cache = maaDirectory(cliPath: cliPath, name: "cache")
-        async let library = maaDirectory(cliPath: cliPath, name: "library")
-        async let resource = maaDirectory(cliPath: cliPath, name: "resource")
-        async let hotUpdate = maaDirectory(cliPath: cliPath, name: "hot-update")
+    private func maaInstallationPaths(cliPath: String, deadline: UpdateDeadline? = nil) async -> MAAInstallationPaths? {
+        async let data = maaDirectory(cliPath: cliPath, name: "data", deadline: deadline)
+        async let cache = maaDirectory(cliPath: cliPath, name: "cache", deadline: deadline)
+        async let library = maaDirectory(cliPath: cliPath, name: "library", deadline: deadline)
+        async let resource = maaDirectory(cliPath: cliPath, name: "resource", deadline: deadline)
+        async let hotUpdate = maaDirectory(cliPath: cliPath, name: "hot-update", deadline: deadline)
         guard let data = await data,
               let cache = await cache,
               let library = await library,
@@ -1391,11 +1405,11 @@ public final class WorkflowRunner {
         )
     }
 
-    private func maaDirectory(cliPath: String, name: String) async -> URL? {
+    private func maaDirectory(cliPath: String, name: String, deadline: UpdateDeadline? = nil) async -> URL? {
         let result = await runCommand(
             executable: cliPath,
             arguments: ["dir", name, "--batch"],
-            timeout: 20
+            timeout: min(20, deadline?.remaining ?? 20)
         )
         guard result.exitCode == 0, !result.timedOut, !result.cancelled,
               let path = result.standardOutput
@@ -1546,7 +1560,7 @@ public final class WorkflowRunner {
             details: shortOutput(first)
         )
         do {
-            try await Task.sleep(for: maintenanceRetryDelay)
+            try await Task.sleep(for: min(maintenanceRetryDelay, .seconds(deadline.remaining)))
         } catch {
             return .init(result: first, recoveredAfterRetry: false)
         }
@@ -1561,17 +1575,18 @@ public final class WorkflowRunner {
             arguments: arguments,
             timeout: deadline.remaining,
             environment: environment,
-            progressReader: progressReader
+            progressReader: progressReader,
+            retryingStalledTransfer: first.downloadStalled
         )
         return .init(
             result: retried,
-            recoveredAfterRetry: retried.exitCode == 0 && !retried.timedOut
+            recoveredAfterRetry: retried.exitCode == 0 && !retried.timedOut && !retried.downloadStalled
         )
     }
 
     private func runMaintenanceAttempt(
         executable: String, arguments: [String], timeout: TimeInterval,
-        environment: [String: String], progressReader: MAAUpdateProgressReader?
+        environment: [String: String], progressReader: MAAUpdateProgressReader?, retryingStalledTransfer: Bool = false
     ) async -> CommandResult {
         let initial = progressReader?.read()
         let command = Task {
@@ -1582,7 +1597,7 @@ public final class WorkflowRunner {
             let updateProgressSink = updateProgressSink
             let stallTimeout = maintenanceDownloadStallTimeout
             observer = Task.detached(priority: .utility) {
-                var tracker = MAADownloadTracker(initial: initial)
+                var tracker = MAADownloadTracker(initial: initial, retryingStalledTransfer: retryingStalledTransfer)
                 var previous: UpdateProgress?
                 while !Task.isCancelled {
                     let update = tracker.observe(progressReader.read())
@@ -1859,6 +1874,7 @@ public final class WorkflowRunner {
         }
 
         let globalResources: [String?] = [nil, "txwy", "YoStarEN", "YoStarJP", "YoStarKR"]
+        var validatedRoots: Set<[URL]> = []
         for globalResource in globalResources {
             guard !Task.isCancelled else { return nil }
             var roots = baseRoots
@@ -1872,11 +1888,10 @@ public final class WorkflowRunner {
                 in: baseRoots,
                 relativePath: "resource/platform_diff/iOS/resource"
             )
-            if let details = await resourceProbeFailure(library: library, resourceRoots: roots, deadline: deadline) {
-                return .init(
-                    details: details,
-                    candidateWasNotActivated: candidateWasNotActivated
-                )
+            guard validatedRoots.insert(roots).inserted else { continue }
+            if let issue = await resourceProbeFailure(library: library, resourceRoots: roots,
+                candidateWasNotActivated: candidateWasNotActivated, deadline: deadline) {
+                return issue
             }
         }
         return nil
@@ -1890,8 +1905,12 @@ public final class WorkflowRunner {
         }
     }
 
-    private func resourceProbeFailure(library: URL, resourceRoots: [URL], deadline: UpdateDeadline? = nil) async -> String? {
-        if let deadline, deadline.remaining == 0 { return "更新校验超时" }
+    private func resourceProbeFailure(library: URL, resourceRoots: [URL], candidateWasNotActivated: Bool,
+                                      deadline: UpdateDeadline?) async -> MAAResourceCompatibilityIssue? {
+        let timeout = min(resourceProbeTimeout, deadline?.remaining ?? resourceProbeTimeout)
+        guard timeout > 0 else {
+            return .init(details: "更新总时限已到", candidateWasNotActivated: candidateWasNotActivated, timedOut: true)
+        }
         let userDirectory = directories.root.appending(
             path: ".maa-resource-probe-\(UUID().uuidString)",
             directoryHint: .isDirectory
@@ -1906,16 +1925,17 @@ public final class WorkflowRunner {
         let result = await runCommand(
             executable: resourceProbeExecutable.path,
             arguments: [library.path, userDirectory.path] + resourceRoots.map(\.path),
-            timeout: min(30, deadline?.remaining ?? 30),
+            timeout: timeout,
             environment: environment
         )
         guard result.exitCode == 0, !result.timedOut, !result.cancelled else {
             let diagnostics = MAACommandDiagnostics.read(from: userDirectory, sensitiveValues: currentSensitiveValues)
-            return [
+            let details = [
                 shortOutput(result),
                 diagnostics.firstIssue,
                 diagnostics.lastError == diagnostics.firstIssue ? nil : diagnostics.lastError,
             ].compactMap { $0 }.joined(separator: "\n")
+            return .init(details: details, candidateWasNotActivated: candidateWasNotActivated, timedOut: result.timedOut)
         }
         return nil
     }

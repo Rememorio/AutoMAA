@@ -38,7 +38,7 @@ struct UpdateTimeoutError: LocalizedError {
     let timeout: TimeInterval
 
     var errorDescription: String? {
-        "\(operation)超过 \(UpdatePolicy.durationDescription(timeout))上限（含重试）；请检查网络后重试"
+        "\(operation)超时（\(UpdatePolicy.durationDescription(timeout))），请重试"
     }
 }
 

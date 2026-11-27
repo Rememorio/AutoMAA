@@ -92,12 +92,13 @@ struct MAADownloadCache: Sendable {
             .sorted(by: { Self.modificationDate($0) > Self.modificationDate($1) }) {
             guard let cached = Self.cachedDownload(in: previous, channel: channel) else { continue }
             let manager = FileManager.default
-            try manager.copyItem(at: previous.appending(path: manifestFile.lastPathComponent), to: manifestFile)
             try manager.copyItem(at: cached.file, to: directory.appending(path: cached.file.lastPathComponent))
             let integrity = previous.appending(path: "integrity.json")
             if let size = Self.regularFileSize(integrity), size <= 4_096 {
                 try manager.copyItem(at: integrity, to: integrityFile)
             }
+            // Publishing the manifest last keeps interrupted copies out of cache discovery.
+            try manager.copyItem(at: previous.appending(path: manifestFile.lastPathComponent), to: manifestFile)
             break
         }
     }
@@ -130,13 +131,15 @@ struct MAADownloadCache: Sendable {
            let data = try? Data(contentsOf: integrityFile),
            let integrity = try? JSONDecoder().decode(Integrity.self, from: data),
            integrity.name == cached.file.lastPathComponent {
-            let checksum = try SoftwareUpdateVerifier.sha256(of: cached.file)
+            let checksum = try SoftwareUpdateVerifier.sha256(of: cached.file, observeCancellation: true)
             if integrity.size != cached.size || integrity.sha256 != checksum {
                 try clear(except: [])
                 return nil
             }
         }
-        let current = try await fetcher.manifest(at: manifestURL).downloadIdentity
+        let current = try await UpdateDeadline(timeout: UpdatePolicy.checkTimeout).perform(operation: "核对 MAA 下载清单") {
+            try await fetcher.manifest(at: manifestURL).downloadIdentity
+        }
         guard current == cached.identity else {
             try clear(except: [])
             return nil
@@ -160,7 +163,7 @@ struct MAADownloadCache: Sendable {
             : "已保留完整引擎包，下次更新可复用"
     }
 
-    func finish() throws {
+    @concurrent func finish() async throws {
         if let cached = cachedDownload() {
             let checksum = try SoftwareUpdateVerifier.sha256(of: cached.file)
             let integrity = Integrity(name: cached.file.lastPathComponent, size: cached.size, sha256: checksum)

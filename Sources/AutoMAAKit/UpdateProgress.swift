@@ -32,10 +32,11 @@ struct MAADownloadTracker {
     private var totalBytes: Int64?
     private var lastGrowth: ContinuousClock.Instant?
 
-    init(initial: UpdateProgress? = nil, at now: ContinuousClock.Instant = .now) {
+    init(initial: UpdateProgress? = nil, retryingStalledTransfer: Bool = false, at now: ContinuousClock.Instant = .now) {
         if let download = initial?.download {
             samples = [.init(time: now, bytes: download.receivedBytes)]
             totalBytes = download.totalBytes
+            if retryingStalledTransfer { lastGrowth = now }
         }
     }
 
@@ -49,7 +50,7 @@ struct MAADownloadTracker {
             self = .init(initial: update, at: now)
             return update
         }
-        if download.receivedBytes > (samples.last?.bytes ?? 0) { lastGrowth = now }
+        if samples.last?.bytes != download.receivedBytes { lastGrowth = now }
         totalBytes = download.totalBytes
         samples.append(.init(time: now, bytes: download.receivedBytes))
         while samples.count > 2, seconds(from: samples[1].time, to: now) >= 15 { samples.removeFirst() }

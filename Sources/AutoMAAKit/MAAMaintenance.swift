@@ -127,12 +127,14 @@ public enum MAACoreReleaseManifestEndpoint {
 struct MAAResourceCompatibilityIssue: Equatable {
     let details: String
     let candidateWasNotActivated: Bool
+    var timedOut = false
 
     var guidance: String {
         let state = candidateWasNotActivated
             ? "下载的候选组件没有启用，当前安装保持不变"
             : "AutoMAA 未启动游戏"
-        return "MaaCore 无法完整加载 MAA 资源。请先在“全局设置 → MAA 更新”选择“更新 MAA”；若稳定版尚未包含修复，可手动确认更新 Beta，或等待修复进入稳定通道。\(state)"
+        if timedOut { return "MAA 资源校验超时，请稍后重试。\(state)" }
+        return "MaaCore 无法完整加载 MAA 资源。请先在“设置 → MAA 环境”选择“更新 MAA”；若稳定版尚未包含修复，可手动确认更新 Beta，或等待修复进入稳定通道。\(state)"
     }
 }
 

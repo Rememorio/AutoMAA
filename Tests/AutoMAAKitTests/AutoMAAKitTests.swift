@@ -1788,6 +1788,113 @@ final class AutoMAAKitTests: XCTestCase {
         }
     }
 
+    private struct WaitingManifestFetcher: MAACoreReleaseManifestFetching {
+        let marker: URL
+
+        func manifest(at url: URL) async throws -> MAACoreReleaseManifest {
+            try Data().write(to: marker)
+            try await Task.sleep(for: .seconds(30))
+            throw URLError(.timedOut)
+        }
+    }
+
+    @MainActor
+    func testCancelledCacheRevalidationNeverFinalizesTheUnverifiedCopy() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        try directories.prepare()
+        let installation = try makeFakeMAAInstallation(at: root)
+        let paths = MAAInstallationPaths(data: installation.data, cache: installation.cache, library: installation.library,
+                                         resource: installation.resource, hotUpdate: installation.hotUpdate)
+        let source = try MAACoreReleaseManifestEndpoint.url(channel: .stable, configurationData: nil)
+        let archive = "MAA-v1.2.3-macos-runtime-universal.zip"
+        let original: URL
+        do {
+            let cache = try MAADownloadCache(paths: paths, manifestURL: source, channel: .stable)
+            original = cache.directory
+            try Data("""
+            {"version":"v1.2.3","details":{"assets":[{"name":"\(archive)","size":100,"browser_download_url":"https://download.invalid/core.zip"}]}}
+            """.utf8).write(to: cache.manifestFile)
+            try Data(repeating: 1, count: 100).write(to: original.appending(path: archive))
+            try await cache.finish()
+        }
+        let originalDigest = try Data(contentsOf: original.appending(path: "integrity.json"))
+        let cli = root.appending(path: "maa-cli")
+        try writeFakeMAACLI(at: cli, installation: installation, body: "exit 1")
+        let runtime = StubClientRuntime(closesOnForce: true)
+        let marker = root.appending(path: "checking-source")
+        let task = Task {
+            await WorkflowRunner(directories: directories, portProbe: runtime, gameController: runtime,
+                                 shutdownPolicy: .immediate, resourceProbeExecutable: installation.probe,
+                                 coreReleaseManifestFetcher: WaitingManifestFetcher(marker: marker)).updateCore(cliPath: cli.path)
+        }
+        defer { task.cancel() }
+        let limit = ContinuousClock.now + .seconds(5)
+        while !FileManager.default.fileExists(atPath: marker.path), ContinuousClock.now < limit {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path))
+        let attempts = try FileManager.default.contentsOfDirectory(at: original.deletingLastPathComponent(),
+                                                                  includingPropertiesForKeys: nil)
+        let unverified = try XCTUnwrap(attempts.first { $0.lastPathComponent != original.lastPathComponent
+            && FileManager.default.fileExists(atPath: $0.appending(path: archive).path) })
+        try Data(repeating: 2, count: 100).write(to: unverified.appending(path: archive))
+        task.cancel()
+        let succeeded = await task.value
+        XCTAssertFalse(succeeded)
+        XCTAssertEqual(HistoryStore(directories: directories).load().last?.phase, .cancelled)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: unverified.path))
+        XCTAssertEqual(try Data(contentsOf: original.appending(path: "integrity.json")), originalDigest)
+        XCTAssertEqual(try Data(contentsOf: original.appending(path: archive)), Data(repeating: 1, count: 100))
+        XCTAssertFalse(ProcessLock.isHeld(at: directories.lock))
+    }
+
+    @MainActor
+    func testCoreProbeTimeoutKeepsDownloadForValidationOnRetry() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directories = AppDirectories(root: root)
+        try directories.prepare()
+        let installation = try makeFakeMAAInstallation(at: root)
+        try FileManager.default.createDirectory(at: installation.resource.appending(path: "global/YoStarJP/resource"),
+                                                withIntermediateDirectories: true)
+        let cli = root.appending(path: "maa-cli")
+        try writeFakeMAACLI(at: cli, installation: installation, body: """
+        if [ "$1" = "update" ]; then
+          archive="$MAA_CACHE_DIR/MAA-v1.2.3-macos-runtime-universal.zip"
+          if [ ! -f "$archive" ]; then
+            printf '%s' '{"version":"v1.2.3","details":{"assets":[{"name":"MAA-v1.2.3-macos-runtime-universal.zip","size":100,"browser_download_url":"https://download.invalid/core.zip"}]}}' > "$MAA_CACHE_DIR/core-manifest-stable.json"
+            /bin/dd if=/dev/zero of="$archive" bs=100 count=1 2>/dev/null
+            echo download >> "$MAA_CONFIG_DIR/downloads"
+          fi
+          printf '%s' 'candidate' > "$MAA_DATA_DIR/lib/libMaaCore.dylib"
+        fi
+        """)
+        let runtime = StubClientRuntime(closesOnForce: true)
+        func runner(timeout: TimeInterval) -> WorkflowRunner {
+            WorkflowRunner(directories: directories, portProbe: runtime, gameController: runtime, shutdownPolicy: .immediate,
+                           resourceProbeExecutable: installation.probe, resourceProbeTimeout: timeout,
+                           coreReleaseManifestFetcher: DownloadManifestFetcher())
+        }
+        try Data("#!/bin/sh\nexec /bin/sleep 30\n".utf8).write(to: installation.probe)
+        let first = await runner(timeout: 0.1).updateCore(cliPath: cli.path)
+        XCTAssertFalse(first)
+        let entry = HistoryStore(directories: directories).load().last
+        XCTAssertTrue(entry?.details?.contains("资源校验超时") == true)
+        XCTAssertTrue(entry?.details?.contains("已保留完整引擎包") == true)
+        XCTAssertEqual(try String(contentsOf: installation.library.appending(path: "libMaaCore.dylib"), encoding: .utf8), "fake MaaCore")
+
+        let probes = root.appending(path: "probes")
+        try Data("#!/bin/sh\nshift 2\necho \"$*\" >> '\(probes.path)'\n".utf8).write(to: installation.probe)
+        let second = await runner(timeout: 30).updateCore(cliPath: cli.path)
+        XCTAssertTrue(second)
+        XCTAssertEqual(try String(contentsOf: directories.maaConfig.appending(path: "downloads"), encoding: .utf8), "download\n")
+        let combinations = try String(contentsOf: probes, encoding: .utf8).split(separator: "\n")
+        XCTAssertEqual(combinations.count, 2)
+        XCTAssertEqual(combinations.filter { $0.contains("global/YoStarJP") }.count, 1)
+    }
+
     @MainActor
     func testStalledCoreDownloadRetriesOnceWithoutAProgressConsumer() async throws {
         let root = temporaryRoot()
@@ -1799,7 +1906,8 @@ final class AutoMAAKitTests: XCTestCase {
         try writeFakeMAACLI(at: cli, installation: installation, body: """
         if [ "$1" = "update" ]; then
           printf '%s' '{"version":"v1.2.3","details":{"assets":[{"name":"MAA-v1.2.3-macos-runtime-universal.zip","size":100,"browser_download_url":"https://download.invalid/core.zip"}]}}' > "$MAA_CACHE_DIR/core-manifest-stable.json"
-          /bin/dd if=/dev/zero bs=25 count=1 2>/dev/null >> "$MAA_CACHE_DIR/MAA-v1.2.3-macos-runtime-universal.zip.partial"
+          archive="$MAA_CACHE_DIR/MAA-v1.2.3-macos-runtime-universal.zip.partial"
+          if [ ! -f "$archive" ]; then /bin/dd if=/dev/zero bs=25 count=1 of="$archive" 2>/dev/null; fi
           printf '%s\\n' 'attempt' >> "$MAA_CONFIG_DIR/download-attempts"
           /bin/sleep 30
         fi

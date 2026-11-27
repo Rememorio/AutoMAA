@@ -21,7 +21,7 @@ struct MAADownloadCacheTests {
         var cache: MAADownloadCache? = try fixture.cache()
         let file = try fixture.writeDownload(in: cache!, complete: complete)
         try Data("unverified resource".utf8).write(to: cache!.directory.appending(path: "StageActivityV2.json"))
-        try cache!.finish()
+        try await cache!.finish()
         cache = nil
         let next = try fixture.cache()
         let identity = try await next.prepare(fetcher: CacheManifestFetcher(value: fixture.manifest()))
@@ -56,7 +56,7 @@ struct MAADownloadCacheTests {
         let cache = try fixture.cache()
         let partial = try fixture.writeDownload(in: cache, complete: false)
         try Data(repeating: 1, count: 100).write(to: partial)
-        try cache.finish()
+        try await cache.finish()
         #expect(try await cache.prepare(fetcher: CacheManifestFetcher(value: fixture.manifest())) != nil)
         let reused = try #require(cache.cachedDownload())
         #expect(reused.file.pathExtension == "zip")
@@ -96,7 +96,7 @@ struct MAADownloadCacheTests {
         defer { fixture.remove() }
         let cache = try fixture.cache()
         let file = try fixture.writeDownload(in: cache, complete: complete)
-        try cache.finish()
+        try await cache.finish()
         try Data(repeating: 99, count: complete ? 100 : 25).write(to: file)
         #expect(try await cache.prepare(fetcher: CacheManifestFetcher(value: fixture.manifest())) == nil)
         #expect(!FileManager.default.fileExists(atPath: file.path))

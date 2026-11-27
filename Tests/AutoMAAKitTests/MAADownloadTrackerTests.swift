@@ -24,6 +24,19 @@ struct MAADownloadTrackerTests {
         }
     }
 
+    @Test("creation of a new empty partial arms the stall timer before the first byte")
+    func waitingForFirstByte() {
+        let start = ContinuousClock.now
+        var tracker = MAADownloadTracker()
+        _ = tracker.observe(nil, at: start)
+        #expect(!tracker.isStalled(at: start + .seconds(600), timeout: 300))
+        _ = tracker.observe(sample(0), at: start + .seconds(600))
+        _ = tracker.observe(sample(0), at: start + .seconds(890))
+        #expect(tracker.isStalled(at: start + .seconds(900), timeout: 300))
+        _ = tracker.observe(sample(10), at: start + .seconds(901))
+        #expect(!tracker.isStalled(at: start + .seconds(902), timeout: 300))
+    }
+
     @Test("stalls require observed download growth and never apply to extraction or Git")
     func stages() {
         let start = ContinuousClock.now
