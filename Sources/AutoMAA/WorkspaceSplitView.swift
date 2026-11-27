@@ -5,7 +5,8 @@ enum WorkspaceLayout {
     static let defaultSize = CGSize(width: 960, height: 600)
     static let minimumSize = CGSize(width: 900, height: 520)
     static let sidebarWidth: CGFloat = 176
-    static let middleWidths: ClosedRange<CGFloat> = 224...320
+    // With the sidebar collapsed, this column also contains the window controls and sidebar toggle.
+    static let middleWidths: ClosedRange<CGFloat> = 240...320
     static let initialMiddleWidth: CGFloat = 248
     static let minimumDetailWidth: CGFloat = 420
     static let minimumContentWidth = middleWidths.lowerBound + 1 + minimumDetailWidth
