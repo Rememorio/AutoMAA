@@ -451,7 +451,8 @@ public final class WorkflowRunner {
                 emit(.cancelled, "流程已取消，未启动游戏", 1, .warning, runSummary: report.runSummary)
             } else {
                 report.fatalError = error.localizedDescription
-                emit(.failed, "运行前检查未通过，未接管或关闭游戏：\(error.localizedDescription)", 0, .error)
+                emit(.failed, "运行前检查未通过，未接管或关闭游戏：\(error.localizedDescription)", 0, .error,
+                     startBlocker: WorkflowStartBlocker(error: error))
             }
             return report
         }
@@ -2862,6 +2863,7 @@ public final class WorkflowRunner {
         _ message: String,
         _ proposedProgress: Double,
         _ level: LogLevel,
+        startBlocker: WorkflowStartBlocker? = nil,
         client: ClientConfiguration? = nil,
         account: AccountConfiguration? = nil,
         task: TaskKind? = nil,
@@ -2887,6 +2889,7 @@ public final class WorkflowRunner {
             details: details,
             runID: currentRunID,
             phase: phase,
+            startBlocker: startBlocker,
             progress: normalizedProgress,
             planID: currentPlanID,
             clientID: client?.id,

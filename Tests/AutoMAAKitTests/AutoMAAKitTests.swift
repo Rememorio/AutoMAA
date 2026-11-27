@@ -509,6 +509,7 @@ final class AutoMAAKitTests: XCTestCase {
         XCTAssertTrue(runtime.terminationRequests.isEmpty)
         XCTAssertTrue(runtime.events.contains {
             $0.phase == .failed && $0.message.contains(message) && $0.log.level == .error
+                && $0.log.startBlocker == .clientUsingPort
         })
     }
 

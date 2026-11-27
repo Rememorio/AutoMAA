@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 public enum ConfigurationStoreError: LocalizedError, Equatable {
@@ -183,19 +184,52 @@ public struct HistoryStore: Sendable {
     }
 
     public func append(_ entry: LogEntry) {
-        var logs = load()
-        logs.append(entry)
-        if logs.count > 1_000 {
-            logs.removeFirst(logs.count - 1_000)
+        try? withHistoryLock {
+            var logs = load()
+            logs.append(entry)
+            if logs.count > 1_000 { logs.removeFirst(logs.count - 1_000) }
+            try Self.encoder.encode(logs).write(to: directories.history, options: .atomic)
         }
-        guard let data = try? Self.encoder.encode(logs) else { return }
-        try? directories.prepare()
-        try? data.write(to: directories.history, options: .atomic)
     }
 
     public func clear() throws {
+        try withHistoryLock {
+            try Data("[]".utf8).write(to: directories.history, options: .atomic)
+        }
+    }
+
+    public enum Scope: Sendable {
+        case runs, maintenance
+    }
+
+    @discardableResult
+    public func clear(_ scope: Scope) throws -> [LogEntry] {
+        try withHistoryLock {
+            guard !ProcessLock.isHeld(at: directories.lock) else { throw RuntimeError.alreadyRunning }
+            guard FileManager.default.fileExists(atPath: directories.history.path) else { return [] }
+            let data = try Data(contentsOf: directories.history)
+            let logs = try Self.decoder.decode([LogEntry].self, from: data)
+            let removed = ActivityHistory.sessions(from: logs).filter {
+                $0.isStandaloneMaintenance == (scope == .maintenance)
+            }
+            let ids = Set(removed.flatMap { $0.entries.map(\.id) })
+            let kept = logs.filter { !ids.contains($0.id) }
+            if !ids.isEmpty { try Self.encoder.encode(kept).write(to: directories.history, options: .atomic) }
+            return kept
+        }
+    }
+
+    // Both the GUI and the scheduled runner append to the same atomic file.
+    private func withHistoryLock<T>(_ body: () throws -> T) throws -> T {
         try directories.prepare()
-        try Data("[]".utf8).write(to: directories.history, options: .atomic)
+        let url = directories.root.appending(path: "history.lock")
+        let fd = Darwin.open(url.path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
+        guard fd >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+        defer { Darwin.close(fd) }
+        while flock(fd, LOCK_EX) != 0 {
+            if errno != EINTR { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+        }
+        return try body()
     }
 
     private static let encoder: JSONEncoder = {

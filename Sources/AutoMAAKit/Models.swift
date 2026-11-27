@@ -670,6 +670,44 @@ public struct WorkflowRunSummary: Codable, Sendable, Equatable {
     }
 }
 
+public enum WorkflowStartBlocker: String, Codable, Sendable {
+    case clientUsingPort, unknownPortOwner, clientAlreadyOpen
+
+    public var title: String {
+        switch self {
+        case .clientUsingPort: "客户端占用端口"
+        case .unknownPortOwner: "端口被未知程序占用"
+        case .clientAlreadyOpen: "客户端已打开"
+        }
+    }
+
+    public init?(error: Error) {
+        switch error as? RuntimeError {
+        case .portOccupiedByClient: self = .clientUsingPort
+        case .portOccupied: self = .unknownPortOwner
+        case .clientAlreadyRunning: self = .clientAlreadyOpen
+        default: return nil
+        }
+    }
+
+    // Older records contain the localized diagnostic emitted by requireAvailable.
+    init?(legacyMessage message: String) {
+        let prefix = "运行前检查未通过，未接管或关闭游戏："
+        guard message.hasPrefix(prefix) else { return nil }
+        let reason = message.dropFirst(prefix.count)
+        if reason.hasPrefix("客户端「"), reason.contains("」仍在运行并占用 MaaTools 端口 "),
+           reason.hasSuffix("。为避免连接错误客户端，请关闭该客户端及其他 MAA 后重新运行") {
+            self = .clientUsingPort
+        } else if reason.hasPrefix("MaaTools 端口 "),
+                  reason.hasSuffix(" 已被未知程序占用。为避免连接错误客户端，请关闭相关游戏和 MAA 后重新运行") {
+            self = .unknownPortOwner
+        } else if reason.hasPrefix("客户端「"),
+                  reason.hasSuffix("」已在本轮运行前打开，AutoMAA 不会接管或关闭它。请先结束其他 MAA 任务并手动关闭该客户端，再运行方案") {
+            self = .clientAlreadyOpen
+        } else { return nil }
+    }
+}
+
 public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
     public var id: UUID
     public var timestamp: Date
@@ -678,6 +716,7 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
     public var details: String?
     public var runID: UUID?
     public var phase: RunnerPhase?
+    public var startBlocker: WorkflowStartBlocker?
     public var progress: Double?
     public var planID: UUID?
     public var clientID: UUID?
@@ -696,6 +735,7 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
         details: String? = nil,
         runID: UUID? = nil,
         phase: RunnerPhase? = nil,
+        startBlocker: WorkflowStartBlocker? = nil,
         progress: Double? = nil,
         planID: UUID? = nil,
         clientID: UUID? = nil,
@@ -713,6 +753,7 @@ public struct LogEntry: Codable, Identifiable, Sendable, Equatable {
         self.details = details
         self.runID = runID
         self.phase = phase
+        self.startBlocker = startBlocker
         self.progress = progress
         self.planID = planID
         self.clientID = clientID
@@ -743,6 +784,23 @@ public struct ActivitySession: Identifiable, Sendable, Equatable {
     public let id: String
     public let runID: UUID?
     public let entries: [LogEntry]
+
+    public var isStandaloneMaintenance: Bool {
+        guard planID == nil, entries.allSatisfy({ $0.task == nil && $0.accountID == nil && $0.clientID == nil }) else { return false }
+        return entries.contains {
+            $0.phase == .updating || $0.updateInformation != nil
+                || $0.message.hasPrefix("暂时无法更新识别数据：") || $0.message.hasPrefix("暂时无法更新 MAA：")
+        }
+    }
+
+    public var startBlocker: WorkflowStartBlocker? {
+        guard runID != nil, planID != nil, let last = entries.last, last.level == .error, last.phase == .failed,
+              entries.allSatisfy({ $0.clientID == nil && $0.accountID == nil && $0.task == nil && $0.runSummary == nil }),
+              entries.dropLast().allSatisfy({ $0.phase == .preparing }) else { return nil }
+        if let blocker = last.startBlocker { return blocker }
+        guard entries.first?.phase == .preparing else { return nil }
+        return WorkflowStartBlocker(legacyMessage: last.message)
+    }
 
     public var startedAt: Date { entries.first?.timestamp ?? .distantPast }
     public var endedAt: Date { entries.last?.timestamp ?? startedAt }
